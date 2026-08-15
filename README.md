@@ -30,11 +30,9 @@ src/
     navigation/
     primitives/
     theme/
-public/
-  triunfante-hq-v2/
-  triunfante-hq-v4/
-  triunfante-fallback/
 docs/
 ```
+
+A mídia da animação está temporariamente referenciada por URLs imutáveis, fixadas no último checkpoint visual validado do projeto anterior. Isso reaproveita apenas os arquivos de mídia aprovados; nenhum código de dados ou regra de negócio é importado.
 
 Não existe `App`, dashboard, página de demonstração ou camada de dados nesta etapa. Os componentes visuais são apenas primitives reutilizáveis para as próximas implementações.
