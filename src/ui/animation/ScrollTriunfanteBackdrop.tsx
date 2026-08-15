@@ -7,12 +7,17 @@ const SCROLL_STOP_DELAY = 520
 const ROTATION_PER_PIXEL = 0.58
 const MOTION_EASING = 0.22
 
+// Visual media is pinned to the last validated visual checkpoint of the old project.
+// No business code or runtime logic is imported from that repository.
+const VALIDATED_VISUAL_ASSET_BASE =
+  'https://raw.githubusercontent.com/luisfernandotriunfante-bit/painel/c55b4953b1958f69ac22e4be9f809605de4ee1ed/'
+
 const HQ_CANDIDATES = [
-  ['triunfante-hq-v2/part00.txt', 'triunfante-hq-v2/part01.txt'],
-  ['triunfante-hq-v4/part00.txt', 'triunfante-hq-v4/part01.txt'],
+  ['public/triunfante-hq-v2/part00.txt', 'public/triunfante-hq-v2/part01.txt'],
+  ['public/triunfante-hq-v4/part00.txt', 'public/triunfante-hq-v4/part01.txt'],
 ]
 
-const FALLBACK_PART = 'triunfante-fallback/sprite6-full.txt'
+const FALLBACK_PART = 'src/triunfante-user/sprite6-full.txt'
 
 type VideoCandidate = {
   url: string
@@ -24,8 +29,7 @@ type VideoCandidate = {
 }
 
 function assetUrl(path: string) {
-  const base = document.baseURI.endsWith('/') ? document.baseURI : `${document.baseURI}/`
-  return new URL(path, base).toString()
+  return new URL(path, VALIDATED_VISUAL_ASSET_BASE).toString()
 }
 
 function base64ToObjectUrl(base64: string, type: string) {
