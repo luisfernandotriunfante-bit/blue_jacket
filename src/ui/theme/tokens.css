@@ -1,0 +1,33 @@
+:root {
+  --bj-bg-top: #0b1624;
+  --bj-bg-mid: #040910;
+  --bj-bg-bottom: #000205;
+
+  --bj-navy: #173a63;
+  --bj-navy-soft: #285786;
+  --bj-blood: #8f1029;
+  --bj-blood-soft: #b51d3a;
+
+  --bj-text: #f5f8fc;
+  --bj-muted: #98a9bd;
+
+  --bj-border: rgba(191, 211, 234, 0.22);
+  --bj-border-soft: rgba(191, 211, 234, 0.12);
+  --bj-glass: rgba(20, 31, 45, 0.28);
+  --bj-glass-soft: rgba(13, 24, 38, 0.23);
+  --bj-glass-highlight: rgba(255, 255, 255, 0.045);
+  --bj-blur: 18px;
+
+  --bj-shadow: 0 20px 48px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --bj-shadow-nav: 0 16px 38px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+
+  --bj-radius-lg: 22px;
+  --bj-radius-md: 18px;
+  --bj-radius-sm: 12px;
+
+  --bj-layer-background: 0;
+  --bj-layer-animation: 1;
+  --bj-layer-content: 2;
+  --bj-layer-tabs: 30;
+  --bj-layer-sidebar: 1000;
+}
