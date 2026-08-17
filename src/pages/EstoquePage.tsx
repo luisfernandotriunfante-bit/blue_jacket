@@ -11,37 +11,101 @@ function formatCurrency(val: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 }
 
-type SortKey = keyof ProdutoEstoque | 'totalCusto' | 'totalVenda';
+const digits = (value: string | undefined) => String(value || '').replace(/\D/g, '');
+
+type CatalogItem = ProdutoEstoque & {
+  soldUnits: number;
+  averageDailyUnits: number;
+  coverageDays: number | null;
+  requiredRemainingUnits: number;
+  isRisk: boolean;
+  isRupture: boolean;
+  isNoWinthor: boolean;
+};
+
+type SortKey = keyof ProdutoEstoque | 'totalCusto' | 'totalVenda' | 'soldUnits' | 'coverageDays';
+type CatalogFilter = 'todos' | 'lancamento' | 'risco' | 'ruptura' | 'sem-winthor';
 
 export function EstoquePage() {
-  const { isLoaded, produtos, metricas } = useData();
+  const { isLoaded, produtos, metricas, canonical } = useData();
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: 'asc' | 'desc' } | null>(null);
-  const [activeFilter, setActiveFilter] = useState<'todos' | 'ruptura' | 'novo' | 'sem-winthor'>('todos');
+  const [activeFilter, setActiveFilter] = useState<CatalogFilter>('todos');
+
+  const catalog = useMemo<CatalogItem[]>(() => {
+    const soldByInternal = new Map<string, number>();
+    const soldByFactory = new Map<string, number>();
+    const soldByEan = new Map<string, number>();
+
+    (canonical?.transactions || []).forEach(tx => {
+      if (tx.status !== 'FATURADO') return;
+      const units = Math.max(Number(tx.units) || 0, 0);
+      if (units <= 0) return;
+
+      if (tx.internalProductCode) soldByInternal.set(tx.internalProductCode, (soldByInternal.get(tx.internalProductCode) || 0) + units);
+      if (tx.manufacturerCode) soldByFactory.set(tx.manufacturerCode, (soldByFactory.get(tx.manufacturerCode) || 0) + units);
+      const ean = digits(tx.ean);
+      if (ean) soldByEan.set(ean, (soldByEan.get(ean) || 0) + units);
+    });
+
+    const elapsed = canonical?.sellOut.businessDaysElapsed || 0;
+    const remaining = canonical?.sellOut.businessDaysRemaining || 0;
+
+    return produtos.map(product => {
+      const soldUnits = soldByInternal.get(product.codigo)
+        ?? (product.factoryCode ? soldByFactory.get(product.factoryCode) : undefined)
+        ?? (product.ean ? soldByEan.get(digits(product.ean)) : undefined)
+        ?? 0;
+      const averageDailyUnits = elapsed > 0 ? soldUnits / elapsed : 0;
+      const coverageDays = averageDailyUnits > 0 ? product.quantidade / averageDailyUnits : null;
+      const requiredRemainingUnits = averageDailyUnits * remaining;
+      const isNoWinthor = product.hasWinthor === false;
+      const isRupture = !isNoWinthor && product.quantidade <= 0;
+      const isRisk = !isNoWinthor && product.quantidade > 0 && soldUnits > 0 && remaining > 0 && product.quantidade < requiredRemainingUnits;
+
+      return {
+        ...product,
+        soldUnits,
+        averageDailyUnits,
+        coverageDays,
+        requiredRemainingUnits,
+        isRisk,
+        isRupture,
+        isNoWinthor,
+      };
+    });
+  }, [produtos, canonical]);
+
+  const counts = useMemo(() => ({
+    todos: catalog.length,
+    lancamento: catalog.filter(p => p.isLancamento).length,
+    risco: catalog.filter(p => p.isRisk).length,
+    ruptura: catalog.filter(p => p.isRupture).length,
+    semWinthor: catalog.filter(p => p.isNoWinthor).length,
+  }), [catalog]);
 
   const sortedProdutos = useMemo(() => {
-    let sortableItems = [...produtos];
+    let sortableItems = [...catalog];
+    const search = searchTerm.trim().toLowerCase();
 
-    if (searchTerm) {
+    if (search) {
       sortableItems = sortableItems.filter(p =>
-        p.codigo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        p.descricao.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        p.ean.includes(searchTerm)
+        p.codigo.toLowerCase().includes(search) ||
+        p.descricao.toLowerCase().includes(search) ||
+        p.ean.includes(search) ||
+        (p.factoryCode || '').toLowerCase().includes(search)
       );
     }
 
-    if (activeFilter === 'ruptura') {
-      sortableItems = sortableItems.filter(p => p.quantidade === 0 && (p.custoUnitario > 0 || (p.custoUnitario === 0 && p.saldoPedido === 0)) && !p.isLancamento);
-    } else if (activeFilter === 'novo') {
-      sortableItems = sortableItems.filter(p => p.quantidade === 0 && p.custoUnitario === 0 && p.saldoPedido > 0 && !p.isLancamento);
-    } else if (activeFilter === 'sem-winthor') {
-      sortableItems = sortableItems.filter(p => p.hasWinthor === false);
-    }
+    if (activeFilter === 'lancamento') sortableItems = sortableItems.filter(p => p.isLancamento);
+    else if (activeFilter === 'risco') sortableItems = sortableItems.filter(p => p.isRisk);
+    else if (activeFilter === 'ruptura') sortableItems = sortableItems.filter(p => p.isRupture);
+    else if (activeFilter === 'sem-winthor') sortableItems = sortableItems.filter(p => p.isNoWinthor);
 
     if (sortConfig !== null) {
       sortableItems.sort((a, b) => {
-        let valA: any = a[sortConfig.key as keyof ProdutoEstoque];
-        let valB: any = b[sortConfig.key as keyof ProdutoEstoque];
+        let valA: any = a[sortConfig.key as keyof CatalogItem];
+        let valB: any = b[sortConfig.key as keyof CatalogItem];
 
         if (sortConfig.key === 'totalCusto') {
           valA = a.quantidade * a.custoUnitario;
@@ -49,6 +113,9 @@ export function EstoquePage() {
         } else if (sortConfig.key === 'totalVenda') {
           valA = a.quantidade * a.vendaUnitario;
           valB = b.quantidade * b.vendaUnitario;
+        } else if (sortConfig.key === 'coverageDays') {
+          valA = a.coverageDays ?? Number.POSITIVE_INFINITY;
+          valB = b.coverageDays ?? Number.POSITIVE_INFINITY;
         }
 
         if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
@@ -58,13 +125,11 @@ export function EstoquePage() {
     }
 
     return sortableItems;
-  }, [produtos, searchTerm, sortConfig, activeFilter]);
+  }, [catalog, searchTerm, sortConfig, activeFilter]);
 
   const requestSort = (key: SortKey) => {
     let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc';
-    }
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
     setSortConfig({ key, direction });
   };
 
@@ -170,16 +235,17 @@ export function EstoquePage() {
         <PanelCard>
           <PanelSectionHeader
             eyebrow="CATÁLOGO"
-            title={`Produtos em Estoque (${sortedProdutos.length})`}
-            description="Consulta, filtros e ordenação da posição atual."
+            title={`Produtos (${sortedProdutos.length})`}
+            description="Lançamento vem da lista oficial; risco de ruptura usa estoque real × ritmo faturado no 8022 até o fim do mês; Sem Winthor identifica itens conhecidos pelas bases/carteira que ainda não aparecem na posição 105. Sem preço registrado, o painel mostra ausência de informação e não estima valor."
           />
 
           <div className="panel-toolbar" style={{ marginBottom: '18px' }}>
             <div className="panel-chips">
-              <button className={`panel-chip${activeFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setActiveFilter('todos')}>Todos</button>
-              <button className={`panel-chip is-danger${activeFilter === 'ruptura' ? ' is-active' : ''}`} onClick={() => setActiveFilter('ruptura')}>Rupturas</button>
-              <button className={`panel-chip is-success${activeFilter === 'novo' ? ' is-active' : ''}`} onClick={() => setActiveFilter('novo')}>Novos</button>
-              <button className={`panel-chip is-warning${activeFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setActiveFilter('sem-winthor')}>Sem Winthor</button>
+              <button className={`panel-chip${activeFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setActiveFilter('todos')}>Todos · {counts.todos}</button>
+              <button className={`panel-chip${activeFilter === 'lancamento' ? ' is-active' : ''}`} onClick={() => setActiveFilter('lancamento')}>Lançamentos · {counts.lancamento}</button>
+              <button className={`panel-chip is-danger${activeFilter === 'risco' ? ' is-active' : ''}`} onClick={() => setActiveFilter('risco')}>Risco de ruptura · {counts.risco}</button>
+              <button className={`panel-chip is-danger${activeFilter === 'ruptura' ? ' is-active' : ''}`} onClick={() => setActiveFilter('ruptura')}>Rupturas · {counts.ruptura}</button>
+              <button className={`panel-chip is-warning${activeFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setActiveFilter('sem-winthor')}>Sem Winthor · {counts.semWinthor}</button>
             </div>
             <input
               id="searchInput"
@@ -196,9 +262,11 @@ export function EstoquePage() {
                 <tr>
                   <th className="is-sortable" onClick={() => requestSort('codigo')}>Código{getSortIcon('codigo')}</th>
                   <th className="is-sortable" onClick={() => requestSort('ean')}>EAN{getSortIcon('ean')}</th>
-                  <th className="is-sortable" onClick={() => requestSort('descricao')}>Descrição{getSortIcon('descricao')}</th>
+                  <th className="is-sortable" onClick={() => requestSort('descricao')}>Produto / Status{getSortIcon('descricao')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('quantidade')}>Estoque (Un){getSortIcon('quantidade')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedido')}>Pedido (Un){getSortIcon('saldoPedido')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('soldUnits')}>Venda mês (Un){getSortIcon('soldUnits')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('coverageDays')}>Cobertura ritmo{getSortIcon('coverageDays')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedido')}>Carteira (Un){getSortIcon('saldoPedido')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('custoUnitario')}>Custo Un.{getSortIcon('custoUnitario')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('vendaUnitario')}>Venda Un.{getSortIcon('vendaUnitario')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('totalCusto')}>Total Custo{getSortIcon('totalCusto')}</th>
@@ -206,51 +274,35 @@ export function EstoquePage() {
                 </tr>
               </thead>
               <tbody>
-                {sortedProdutos.map((p) => {
-                  const saidas = (p as any).saidas as number | undefined;
-                  const barColor = p.quantidade < ((saidas || 0) / 30) * 15 ? '#ef4444' : p.quantidade > (saidas || 0) * 3 ? '#eab308' : '#10b981';
-                  const barWidth = saidas && saidas > 0 ? Math.min(100, (p.quantidade / Math.max(1, saidas)) * 100) : 0;
-
-                  return (
-                    <tr key={p.codigo}>
-                      <td className="is-strong">{p.codigo}</td>
-                      <td className="is-muted">{p.ean}</td>
-                      <td>
-                        <div className="panel-badges">
-                          <span className="is-strong">{p.descricao}</span>
-                          {p.isLancamento && <span className="panel-badge panel-badge-purple">LANÇAMENTO</span>}
-                          {p.quantidade === 0 && p.custoUnitario === 0 && p.saldoPedido > 0 && !p.isLancamento && <span className="panel-badge panel-badge-green">NOVO</span>}
-                          {p.quantidade === 0 && (p.custoUnitario > 0 || (p.custoUnitario === 0 && p.saldoPedido === 0)) && !p.isLancamento && <span className="panel-badge panel-badge-red">RUPTURA</span>}
-                          {p.hasWinthor === false && <span className="panel-badge panel-badge-amber">SEM CADASTRO WINTHOR</span>}
-                        </div>
-                      </td>
-                      <td className="is-right is-strong">
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '5px' }}>
-                          <span>{p.quantidade.toLocaleString('pt-BR')}</span>
-                          {saidas && saidas > 0 ? (
-                            <div style={{ width: '58px', height: '3px', background: 'rgba(255,255,255,0.09)', borderRadius: '2px', overflow: 'hidden' }}>
-                              <div style={{ width: `${barWidth}%`, height: '100%', background: barColor }} />
-                            </div>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td className="is-right is-amber">{p.saldoPedido.toLocaleString('pt-BR')}</td>
-                      <td className="is-right is-muted">{formatCurrency(p.custoUnitario)}</td>
-                      <td className="is-right">
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                          <span className="is-strong">{formatCurrency(p.vendaUnitario)}</span>
-                          {p.vendaUnitario > 0 && p.custoUnitario > 0 && (
-                            <span className="is-green" style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                              {(((p.vendaUnitario - p.custoUnitario) / p.vendaUnitario) * 100).toFixed(1)}% M
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="is-right is-green" style={{ fontWeight: 700 }}>{formatCurrency(p.quantidade * p.custoUnitario)}</td>
-                      <td className="is-right is-blue" style={{ fontWeight: 700 }}>{formatCurrency(p.quantidade * p.vendaUnitario)}</td>
-                    </tr>
-                  );
-                })}
+                {sortedProdutos.map((p) => (
+                  <tr key={p.codigo}>
+                    <td className="is-strong">{p.codigo}</td>
+                    <td className="is-muted">{p.ean || '—'}</td>
+                    <td>
+                      <div className="panel-badges">
+                        <span className="is-strong">{p.descricao}</span>
+                        {p.isLancamento && <span className="panel-badge panel-badge-red">LANÇAMENTO</span>}
+                        {p.isRisk && <span className="panel-badge panel-badge-red">RISCO DE RUPTURA</span>}
+                        {p.isRupture && <span className="panel-badge panel-badge-red">RUPTURA</span>}
+                        {p.isNoWinthor && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}
+                      </div>
+                    </td>
+                    <td className="is-right is-strong">{p.quantidade.toLocaleString('pt-BR')}</td>
+                    <td className="is-right">{Math.round(p.soldUnits).toLocaleString('pt-BR')}</td>
+                    <td className="is-right">
+                      {p.coverageDays === null ? '—' : (
+                        <span style={{ color: p.isRisk || p.isRupture ? 'var(--panel-red)' : 'var(--panel-text-dim)', fontWeight: p.isRisk ? 800 : 500 }}>
+                          {p.coverageDays.toFixed(1)} dias
+                        </span>
+                      )}
+                    </td>
+                    <td className="is-right">{p.saldoPedido.toLocaleString('pt-BR')}</td>
+                    <td className="is-right is-muted">{p.custoUnitario > 0 ? formatCurrency(p.custoUnitario) : '—'}</td>
+                    <td className="is-right">{p.vendaUnitario > 0 ? <span className="is-strong">{formatCurrency(p.vendaUnitario)}</span> : '—'}</td>
+                    <td className="is-right" style={{ fontWeight: 700 }}>{p.custoUnitario > 0 ? formatCurrency(p.quantidade * p.custoUnitario) : '—'}</td>
+                    <td className="is-right" style={{ fontWeight: 700 }}>{p.vendaUnitario > 0 ? formatCurrency(p.quantidade * p.vendaUnitario) : '—'}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
