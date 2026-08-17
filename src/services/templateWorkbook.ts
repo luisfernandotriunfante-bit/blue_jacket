@@ -73,28 +73,13 @@ function setCellValue(document: XMLDocument, cell: Element, value: TemplateCellV
   cell.appendChild(inline);
 }
 
-function findRow(sheetData: Element, targetRow: number): Element | undefined {
-  return childElements(sheetData, 'row').find(row => rowNumber(row) === targetRow);
-}
-
-function insertRow(sheetData: Element, row: Element, targetRow: number) {
-  const next = childElements(sheetData, 'row').find(candidate => rowNumber(candidate) > targetRow);
-  if (next) sheetData.insertBefore(row, next);
-  else sheetData.appendChild(row);
-}
-
-function ensureRow(document: XMLDocument, sheetData: Element, targetRow: number, styleRow?: number): Element {
-  const existing = findRow(sheetData, targetRow);
-  if (existing) return existing;
-
-  const source = styleRow ? findRow(sheetData, styleRow) : undefined;
-  const row = source ? source.cloneNode(true) as Element : document.createElementNS(MAIN_NS, 'row');
+function createRow(document: XMLDocument, targetRow: number, styleSource?: Element): Element {
+  const row = styleSource ? styleSource.cloneNode(true) as Element : document.createElementNS(MAIN_NS, 'row');
   row.setAttribute('r', String(targetRow));
   childElements(row, 'c').forEach(cell => {
     cell.setAttribute('r', `${cellColumn(cell.getAttribute('r') || 'A')}${targetRow}`);
     clearCell(cell);
   });
-  insertRow(sheetData, row, targetRow);
   return row;
 }
 
@@ -175,12 +160,42 @@ export class TemplateWorkbook {
     const { document } = this.getSheet(sheetName);
     const sheetData = document.getElementsByTagNameNS(MAIN_NS, 'sheetData')[0];
     if (!sheetData) throw new Error(`A aba “${sheetName}” não possui área de dados.`);
-    const styleSource = styleRow ? findRow(sheetData, styleRow) : undefined;
 
-    for (const [reference, value] of Object.entries(values)) {
-      const targetRow = Number(reference.match(/\d+$/)?.[0] || 0);
-      if (!targetRow) continue;
-      const row = ensureRow(document, sheetData, targetRow, styleRow);
+    const entries = Object.entries(values)
+      .map(([reference, value]) => ({ reference, value, targetRow: Number(reference.match(/\d+$/)?.[0] || 0) }))
+      .filter(entry => entry.targetRow > 0);
+    if (entries.length === 0) return;
+
+    // O TOP REDES pode preencher dezenas de milhares de células na aba oculta
+    // de clientes. Indexar as linhas uma única vez evita varrer a planilha
+    // inteira para cada célula, que fazia o navegador aparentar travamento.
+    const existingRows = childElements(sheetData, 'row');
+    const rowsByNumber = new Map<number, Element>();
+    for (const row of existingRows) rowsByNumber.set(rowNumber(row), row);
+    const styleSource = styleRow ? rowsByNumber.get(styleRow) : undefined;
+
+    const missingRows = Array.from(new Set(entries.map(entry => entry.targetRow)))
+      .filter(targetRow => !rowsByNumber.has(targetRow))
+      .sort((left, right) => left - right);
+    const orderedExistingRows = existingRows
+      .map(row => ({ number: rowNumber(row), row }))
+      .sort((left, right) => left.number - right.number);
+    let nextExistingIndex = 0;
+
+    for (const targetRow of missingRows) {
+      while (nextExistingIndex < orderedExistingRows.length && orderedExistingRows[nextExistingIndex].number < targetRow) {
+        nextExistingIndex += 1;
+      }
+      const row = createRow(document, targetRow, styleSource);
+      const nextRow = orderedExistingRows[nextExistingIndex]?.row;
+      if (nextRow) sheetData.insertBefore(row, nextRow);
+      else sheetData.appendChild(row);
+      rowsByNumber.set(targetRow, row);
+    }
+
+    for (const { reference, value, targetRow } of entries) {
+      const row = rowsByNumber.get(targetRow);
+      if (!row) continue;
       const cell = ensureCell(document, row, reference, styleSource);
       setCellValue(document, cell, value);
     }
