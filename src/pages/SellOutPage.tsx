@@ -6,10 +6,22 @@ import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtInt = (value: number) => Math.round(value || 0).toLocaleString('pt-BR');
 const fmtPct = (value: number) => `${((value || 0) * 100).toFixed(1)}%`;
+const fmtPct2 = (value: number) => `${((value || 0) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 const fmtDate = (value: string) => value ? new Date(`${value}T12:00:00`).toLocaleDateString('pt-BR') : '—';
 
-type TabId = 'resumo' | 'gerencial';
+type TabId = 'resumo' | 'redes' | 'gerencial';
 type MetricRow = { label: string; value: string; detail?: string; accent?: boolean; };
+type NetworkPanelRow = {
+  key: string;
+  name: string;
+  target: number;
+  invoiced: number;
+  toInvoice: number;
+  total: number;
+  invoicedTrend: number;
+  totalTrend: number;
+  clients: number;
+};
 
 function QuickMetric({ label, value, detail, accent = false }: { label: string; value: string; detail?: string; accent?: boolean }) {
   return <div style={{ minWidth: 0, padding: '3px 16px 4px', borderLeft: '2px solid rgba(239,51,64,0.52)' }}><div style={{ color: 'var(--panel-muted)', fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: '6px' }}>{label}</div><div style={{ color: accent ? 'var(--panel-red)' : 'var(--panel-text)', fontSize: 'clamp(0.98rem, 1.6vw, 1.28rem)', fontWeight: 820, lineHeight: 1.1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>{detail ? <div style={{ color: 'var(--panel-muted)', fontSize: '0.66rem', marginTop: '5px', lineHeight: 1.25 }}>{detail}</div> : null}</div>;
@@ -19,12 +31,44 @@ function MetricColumn({ title, rows }: { title: string; rows: MetricRow[] }) {
   return <section style={{ minWidth: 0, padding: '2px 22px 2px 18px', borderLeft: '2px solid rgba(239,51,64,0.46)' }}><div style={{ color: 'var(--panel-red)', fontSize: '0.66rem', fontWeight: 850, letterSpacing: '0.095em', textTransform: 'uppercase', marginBottom: '8px' }}>{title}</div><div>{rows.map((row, index) => <div key={`${title}-${row.label}-${index}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '16px', alignItems: 'center', padding: '9px 0', borderTop: index === 0 ? '1px solid rgba(255,255,255,0.085)' : '1px solid rgba(255,255,255,0.055)' }}><div style={{ minWidth: 0 }}><div style={{ color: 'var(--panel-text-dim)', fontSize: '0.69rem', fontWeight: 720 }}>{row.label}</div>{row.detail ? <div style={{ color: 'var(--panel-muted)', fontSize: '0.64rem', marginTop: '2px', lineHeight: 1.25 }}>{row.detail}</div> : null}</div><div style={{ color: row.accent ? 'var(--panel-red)' : 'var(--panel-text)', fontSize: '0.85rem', fontWeight: 800, textAlign: 'right', whiteSpace: 'nowrap' }}>{row.value}</div></div>)}</div></section>;
 }
 
+function NetworkCard({ network, featured = false }: { network: NetworkPanelRow; featured?: boolean }) {
+  const coverage = (value: number) => network.target > 0 ? value / network.target : 0;
+  const rows = [
+    { label: 'Meta Mês', value: network.target, pct: null as number | null },
+    { label: 'Acum. Mês Faturado', value: network.invoiced, pct: coverage(network.invoiced) },
+    { label: 'Tendência Faturado', value: network.invoicedTrend, pct: coverage(network.invoicedTrend) },
+    { label: 'Acum. Mês Venda', value: network.total, pct: coverage(network.total) },
+    { label: 'Tendência Venda', value: network.totalTrend, pct: coverage(network.totalTrend) },
+  ];
+  return <PanelCard style={{ padding: 0, overflow: 'hidden', border: featured ? '1px solid rgba(239,51,64,0.34)' : undefined }}>
+    <div style={{ padding: '14px 18px', background: featured ? 'rgba(239,51,64,0.12)' : 'rgba(255,255,255,0.035)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'center' }}>
+        <strong style={{ color: 'white', fontSize: featured ? '0.9rem' : '0.82rem', letterSpacing: '0.035em', textTransform: 'uppercase' }}>{network.name}</strong>
+        <span style={{ color: 'var(--panel-muted)', fontSize: '0.67rem', whiteSpace: 'nowrap' }}>{network.clients ? `${fmtInt(network.clients)} clientes` : 'Consolidado'}</span>
+      </div>
+    </div>
+    <div style={{ padding: '6px 18px 12px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(145px, 1fr) minmax(120px, auto) 92px', gap: '12px', padding: '7px 0', color: 'var(--panel-muted)', fontSize: '0.61rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.055em' }}>
+        <span>Indicador</span><span style={{ textAlign: 'right' }}>Valor</span><span style={{ textAlign: 'right' }}>% Cob. Meta</span>
+      </div>
+      {rows.map((row, index) => {
+        const below = row.pct !== null && row.pct < 1;
+        return <div key={row.label} style={{ display: 'grid', gridTemplateColumns: 'minmax(145px, 1fr) minmax(120px, auto) 92px', gap: '12px', alignItems: 'center', padding: '8px 0', borderTop: '1px solid rgba(255,255,255,0.055)' }}>
+          <span style={{ color: index === 0 ? 'white' : 'var(--panel-text-dim)', fontSize: '0.7rem', fontWeight: index === 0 ? 780 : 650 }}>{row.label}</span>
+          <span style={{ color: index === 0 ? '#fde047' : 'white', textAlign: 'right', fontSize: '0.78rem', fontWeight: index === 0 ? 850 : 760, whiteSpace: 'nowrap' }}>{fmtBRL(row.value)}</span>
+          <span style={{ color: row.pct === null ? 'var(--panel-muted)' : below ? '#fca5a5' : '#86efac', textAlign: 'right', fontSize: '0.72rem', fontWeight: 800, whiteSpace: 'nowrap' }}>{row.pct === null ? '—' : fmtPct2(row.pct)}</span>
+        </div>;
+      })}
+    </div>
+  </PanelCard>;
+}
+
 export function SellOutPage() {
   const { canonical, sellOut } = useData(); const [activeTab, setActiveTab] = useState<TabId>('resumo');
   if (!canonical && !sellOut) return <PanelPage title="Sell Out"><PanelEmptyState icon="▥" title="Nenhum relatório de vendas carregado" description="Vá em Configurações e processe o vendas-8022 para iniciar a visão gerencial." /></PanelPage>;
   const total = canonical?.sellOut.total ?? sellOut?.vendaTotal ?? 0;
-  const tabs: { id: TabId; label: string }[] = [{ id: 'resumo', label: 'Resumo' }, { id: 'gerencial', label: 'Gerencial' }];
-  return <PanelPage title="Sell Out" metricLabel="Total do período" metricValue={fmtBRL(total)}><div style={{ display: 'flex', gap: '6px', borderBottom: '1px solid rgba(255,255,255,0.08)', marginBottom: '22px' }}>{tabs.map(tab => <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ background: 'none', border: 'none', borderBottom: activeTab === tab.id ? '3px solid var(--panel-accent, #e31b2d)' : '3px solid transparent', color: activeTab === tab.id ? '#ef3340' : 'var(--panel-muted)', padding: '12px 16px', fontWeight: 750, cursor: 'pointer' }}>{tab.label}</button>)}</div>{activeTab === 'resumo' ? <Resumo /> : <Gerencial />}</PanelPage>;
+  const tabs: { id: TabId; label: string }[] = [{ id: 'resumo', label: 'Resumo' }, { id: 'redes', label: 'Redes' }, { id: 'gerencial', label: 'Gerencial' }];
+  return <PanelPage title="Sell Out" metricLabel="Total do período" metricValue={fmtBRL(total)}><div style={{ display: 'flex', gap: '6px', borderBottom: '1px solid rgba(255,255,255,0.08)', marginBottom: '22px' }}>{tabs.map(tab => <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ background: 'none', border: 'none', borderBottom: activeTab === tab.id ? '3px solid var(--panel-accent, #e31b2d)' : '3px solid transparent', color: activeTab === tab.id ? '#ef3340' : 'var(--panel-muted)', padding: '12px 16px', fontWeight: 750, cursor: 'pointer' }}>{tab.label}</button>)}</div>{activeTab === 'resumo' ? <Resumo /> : activeTab === 'redes' ? <Redes /> : <Gerencial />}</PanelPage>;
 }
 
 function Resumo() {
@@ -33,6 +77,55 @@ function Resumo() {
   const daily = canonical?.daily ?? (sellOut?.diasDeVenda || []).map(day => ({ date: day.data, invoiced: day.faturado, toInvoice: Math.max(day.venda - day.faturado, 0), total: day.venda, invoicedPositivation: day.positivacao, totalPositivation: day.positivacao }));
   const latest = [...daily].sort((a, b) => a.date.localeCompare(b.date)).at(-1);
   return <div style={{ display: 'grid', gap: '22px' }}><PanelCard style={{ paddingTop: '18px', paddingBottom: '18px' }}><PanelSectionHeader eyebrow="LEITURA RÁPIDA" title="Dia e acumulado" description="Somente os números essenciais antes da movimentação." action={latest ? <span className="panel-badge">ATUALIZADO · {fmtDate(latest.date)}</span> : undefined}/><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', rowGap: '18px', marginTop: '14px' }}><QuickMetric label="Sell Out hoje" value={fmtBRL(latest?.total || 0)} /><QuickMetric label="Faturado hoje" value={fmtBRL(latest?.invoiced || 0)} /><QuickMetric label="A faturar hoje" value={fmtBRL(latest?.toInvoice || 0)} /><QuickMetric label="Positivação hoje" value={fmtInt(latest?.totalPositivation || 0)} /><QuickMetric label="Sell Out mês" value={fmtBRL(total)} accent /><QuickMetric label="Faturado mês" value={fmtBRL(faturado)} /><QuickMetric label="A faturar mês" value={fmtBRL(aFaturar)} /><QuickMetric label="Positivação mês" value={fmtInt(positivacao)} /></div></PanelCard><PanelCard><PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Gráficos e planilha usam a mesma janela móvel e o mesmo controle de datas." /><DailyMovementWindow data={daily} /></PanelCard>{canonical ? <LineSummary /> : null}</div>;
+}
+
+function Redes() {
+  const { canonical } = useData();
+  if (!canonical) return <PanelEmptyState icon="▦" title="Redes indisponíveis" description="Carregue a base canônica com Premissas, TOP REDES e Vendas 8022 para consolidar o resultado por rede." />;
+
+  const s = canonical.sellOut;
+  const elapsed = s.businessDaysElapsed;
+  const totalDays = s.businessDaysTotal;
+  const trend = (value: number) => elapsed > 0 ? (value / elapsed) * totalDays : 0;
+  const topNetworks = [...canonical.networks]
+    .filter(network => network.networkTarget > 0)
+    .sort((a, b) => b.networkTarget - a.networkTarget || b.total - a.total)
+    .slice(0, 5)
+    .map(network => ({
+      key: network.key,
+      name: network.name,
+      target: network.networkTarget,
+      invoiced: network.invoiced,
+      toInvoice: network.toInvoice,
+      total: network.total,
+      invoicedTrend: trend(network.invoiced),
+      totalTrend: trend(network.total),
+      clients: network.clients,
+    }));
+
+  if (!topNetworks.length) return <PanelEmptyState icon="▦" title="Metas de redes não encontradas" description="As redes existem na base, mas ainda não há metas operacionais configuradas para montar o Top 5." />;
+
+  const topFive: NetworkPanelRow = topNetworks.reduce<NetworkPanelRow>((acc, network) => ({
+    ...acc,
+    target: acc.target + network.target,
+    invoiced: acc.invoiced + network.invoiced,
+    toInvoice: acc.toInvoice + network.toInvoice,
+    total: acc.total + network.total,
+    invoicedTrend: acc.invoicedTrend + network.invoicedTrend,
+    totalTrend: acc.totalTrend + network.totalTrend,
+    clients: acc.clients + network.clients,
+  }), { key: 'TOP-5', name: 'TOP 5 REDES', target: 0, invoiced: 0, toInvoice: 0, total: 0, invoicedTrend: 0, totalTrend: 0, clients: 0 });
+
+  return <div style={{ display: 'grid', gap: '22px' }}>
+    <PanelCard>
+      <PanelSectionHeader eyebrow="REDES" title="Acompanhamento das Top 5 Redes" description="Meta operacional atual, acumulado e tendência calculados com os mesmos dias úteis do Sell Out. Venda = Faturado + A Faturar." action={<span className="panel-badge">DIAS ÚTEIS · {s.businessDaysElapsed}/{s.businessDaysTotal}</span>} />
+      <div style={{ marginTop: '16px' }}><NetworkCard network={topFive} featured /></div>
+    </PanelCard>
+
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(390px, 1fr))', gap: '14px' }}>
+      {topNetworks.map(network => <NetworkCard key={network.key} network={network} />)}
+    </div>
+  </div>;
 }
 
 function ManagerialSummary() {
