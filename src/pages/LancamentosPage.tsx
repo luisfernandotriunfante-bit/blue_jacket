@@ -19,13 +19,16 @@ export function LancamentosPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: 'asc' | 'desc' } | null>(null);
 
+  const todosLancamentos = useMemo(() => [...produtos].filter(p => p.isLancamento), [produtos]);
+
   const sortedProdutos = useMemo(() => {
-    let sortableItems = [...produtos].filter(p => p.isLancamento);
+    let sortableItems = [...todosLancamentos];
 
     if (searchTerm) {
+      const term = searchTerm.toLowerCase();
       sortableItems = sortableItems.filter(p =>
-        p.codigo.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        p.descricao.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        p.codigo.toLowerCase().includes(term) ||
+        p.descricao.toLowerCase().includes(term) ||
         p.ean.includes(searchTerm)
       );
     }
@@ -50,12 +53,11 @@ export function LancamentosPage() {
     }
 
     return sortableItems;
-  }, [produtos, searchTerm, sortConfig]);
+  }, [todosLancamentos, searchTerm, sortConfig]);
 
   const totais = useMemo(() => {
     let custo = 0;
     let venda = 0;
-    const todosLancamentos = produtos.filter(p => p.isLancamento);
 
     for (const p of todosLancamentos) {
       custo += (p.quantidade * p.custoUnitario) + (p.saldoPedidoValorCusto || 0);
@@ -63,13 +65,16 @@ export function LancamentosPage() {
     }
 
     return { custo, venda };
-  }, [produtos]);
+  }, [todosLancamentos]);
+
+  const pendingCount = useMemo(
+    () => todosLancamentos.filter(p => p.hasWinthor === false && p.custoUnitario === 0 && p.vendaUnitario === 0 && p.quantidade === 0 && p.saldoPedido === 0).length,
+    [todosLancamentos],
+  );
 
   const requestSort = (key: SortKey) => {
     let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc';
-    }
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
     setSortConfig({ key, direction });
   };
 
@@ -89,11 +94,7 @@ export function LancamentosPage() {
   }
 
   return (
-    <PanelPage
-      title="Lançamentos"
-      metricLabel="Valor potencial de venda"
-      metricValue={formatCurrency(totais.venda)}
-    >
+    <PanelPage title="Lançamentos" metricLabel="Valor potencial de venda" metricValue={formatCurrency(totais.venda)}>
       <div className="panel-stack">
         <div className="panel-grid panel-grid-2">
           <PanelKpi label="VLR VENDA LANÇAMENTOS" value={formatCurrency(totais.venda)} tone="red" />
@@ -103,8 +104,10 @@ export function LancamentosPage() {
         <PanelCard>
           <PanelSectionHeader
             eyebrow="PORTFÓLIO"
-            title={`Catálogo de Lançamentos (${sortedProdutos.length})`}
-            description="Monitoramento exclusivo dos itens marcados como lançamento."
+            title={`Catálogo de Lançamentos (${todosLancamentos.length})`}
+            description={pendingCount > 0
+              ? `${pendingCount} EAN(s) da lista oficial ainda não possuem conciliação completa no Winthor/estoque. Eles permanecem no catálogo e não entram nos valores enquanto não houver dado real.`
+              : 'Monitoramento dos EANs presentes na lista oficial de lançamentos.'}
             action={(
               <input
                 className="panel-input"
@@ -130,46 +133,42 @@ export function LancamentosPage() {
               </thead>
               <tbody>
                 {sortedProdutos.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} style={{ textAlign: 'center', padding: '32px' }} className="is-muted">
-                      Nenhum item marcado como lançamento encontrado.
-                    </td>
-                  </tr>
+                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: '32px' }} className="is-muted">Nenhum lançamento encontrado para o filtro informado.</td></tr>
                 ) : (
-                  sortedProdutos.map((p) => (
-                    <tr key={p.codigo}>
-                      <td className="is-strong">{p.codigo}</td>
-                      <td className="is-muted">{p.ean}</td>
-                      <td>
-                        <div className="panel-badges">
-                          <span className="is-strong">{p.descricao}</span>
-                          <span className="panel-badge panel-badge-purple">LANÇAMENTO</span>
-                          {p.quantidade === 0 && p.custoUnitario === 0 && p.saldoPedido > 0 && (
-                            <span className="panel-badge panel-badge-green">NOVO</span>
-                          )}
-                          {p.quantidade === 0 && (p.custoUnitario > 0 || (p.custoUnitario === 0 && p.saldoPedido === 0)) && (
-                            <span className="panel-badge panel-badge-red">RUPTURA</span>
-                          )}
-                          {p.hasWinthor === false && (
-                            <span className="panel-badge panel-badge-amber">SEM CADASTRO WINTHOR</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="is-right is-strong">{p.quantidade.toLocaleString('pt-BR')}</td>
-                      <td className="is-right is-amber">{p.saldoPedido.toLocaleString('pt-BR')}</td>
-                      <td className="is-right is-muted">{formatCurrency(p.custoUnitario)}</td>
-                      <td className="is-right">
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                          <span className="is-strong">{formatCurrency(p.vendaUnitario)}</span>
-                          {p.vendaUnitario > 0 && p.custoUnitario > 0 && (
-                            <span className="is-green" style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                              {(((p.vendaUnitario - p.custoUnitario) / p.vendaUnitario) * 100).toFixed(1)}% M
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  sortedProdutos.map((p) => {
+                    const unresolved = p.hasWinthor === false && p.custoUnitario === 0 && p.vendaUnitario === 0 && p.quantidade === 0 && p.saldoPedido === 0;
+                    const isRupture = p.hasWinthor !== false && p.quantidade === 0;
+                    const isNew = p.hasWinthor === false && p.saldoPedido > 0;
+                    return (
+                      <tr key={`${p.ean}-${p.codigo}`}>
+                        <td className="is-strong">{p.codigo.startsWith('EAN-') ? '—' : p.codigo}</td>
+                        <td className="is-muted">{p.ean || '—'}</td>
+                        <td>
+                          <div className="panel-badges">
+                            <span className="is-strong">{p.descricao}</span>
+                            <span className="panel-badge panel-badge-purple">LANÇAMENTO</span>
+                            {isNew && <span className="panel-badge panel-badge-green">NOVO</span>}
+                            {isRupture && <span className="panel-badge panel-badge-red">RUPTURA</span>}
+                            {p.hasWinthor === false && <span className="panel-badge panel-badge-amber">SEM CADASTRO WINTHOR</span>}
+                            {unresolved && <span className="panel-badge">PENDENTE DE CONCILIAÇÃO</span>}
+                          </div>
+                        </td>
+                        <td className="is-right is-strong">{p.quantidade.toLocaleString('pt-BR')}</td>
+                        <td className="is-right is-amber">{p.saldoPedido.toLocaleString('pt-BR')}</td>
+                        <td className="is-right is-muted">{p.custoUnitario > 0 ? formatCurrency(p.custoUnitario) : '—'}</td>
+                        <td className="is-right">
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                            <span className="is-strong">{p.vendaUnitario > 0 ? formatCurrency(p.vendaUnitario) : '—'}</span>
+                            {p.vendaUnitario > 0 && p.custoUnitario > 0 && (
+                              <span className="is-green" style={{ fontSize: '0.7rem', fontWeight: 800 }}>
+                                {(((p.vendaUnitario - p.custoUnitario) / p.vendaUnitario) * 100).toFixed(1)}% M
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
