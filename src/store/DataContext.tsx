@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useMemo, useState, ReactNode } from 'react';
-import { applyManualConfiguration, CanonicalState, DEFAULT_MANUAL_CONFIGURATION, ManualConfiguration } from '../domain/canonical';
+import { applyManualConfiguration, CanonicalState, CanonicalVendorResult, DEFAULT_MANUAL_CONFIGURATION, ManualConfiguration } from '../domain/canonical';
 
 export interface ProdutoEstoque { codigo:string; descricao:string; ean:string; quantidade:number; saldoMinimo:number; custoUnitario:number; vendaUnitario:number; entradas:number; saidas:number; saldoPedido:number; saldoPedidoValorCusto?:number; saldoPedidoValorVenda?:number; isLancamento?:boolean; hasWinthor?:boolean; }
 export interface VendedorSellOut { codVendedor:string; nomeVendedor:string; codCoord:string; nomeCoord:string; faturado:number; aFaturar:number; positivacao:number; }
@@ -22,6 +22,33 @@ const defaultMetricas:MetricasEstoque={valorEstoqueCompra:0,valorEstoqueVenda:0,
 const DataContext=createContext<DataContextType>({produtos:[],setProdutos:()=>{},metricas:defaultMetricas,setMetricas:()=>{},sellOut:null,setSellOut:()=>{},canonical:null,setCanonical:()=>{},manualConfig:DEFAULT_MANUAL_CONFIGURATION,setManualConfig:()=>{},isLoaded:false});
 
 function readStored<T>(key:string,fallback:T):T{try{const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback}catch{return fallback}}
+function normalizePerson(value:string){return (value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase()}
+function canonicalCoordinatorName(value:string){const normalized=normalizePerson(value);if(normalized.includes('CLAUDIO FERREIRA DA SILVA')||normalized==='CLAUDIO')return 'FLAVIO';if(normalized.includes('THIAGO DA SILVA CONEGUNDES')||normalized==='THIAGO')return 'THIAGO';if(normalized==='FLAVIO')return 'FLAVIO';return value||'SEM COORDENADOR'}
+
+function normalizeCanonicalTeam(state:CanonicalState|null):CanonicalState|null{
+  if(!state)return null;
+  const canonicalCode=new Map<string,string>();
+  state.vendors.forEach(v=>{const canonicalName=canonicalCoordinatorName(v.coordinatorName);const original=normalizePerson(v.coordinatorName);if(canonicalName===original&&v.coordinatorCode&&!canonicalCode.has(canonicalName))canonicalCode.set(canonicalName,v.coordinatorCode)});
+  state.vendors.forEach(v=>{const canonicalName=canonicalCoordinatorName(v.coordinatorName);if(v.coordinatorCode&&!canonicalCode.has(canonicalName))canonicalCode.set(canonicalName,v.coordinatorCode)});
+
+  const vendors:CanonicalVendorResult[]=state.vendors.map(v=>{const coordinatorName=canonicalCoordinatorName(v.coordinatorName);return{...v,coordinatorName,coordinatorCode:canonicalCode.get(coordinatorName)||v.coordinatorCode}});
+  const groups=new Map<string,CanonicalVendorResult[]>();
+  vendors.forEach(v=>{const key=v.coordinatorName||'SEM COORDENADOR';if(!groups.has(key))groups.set(key,[]);groups.get(key)!.push(v)});
+
+  const coordinators=Array.from(groups.entries()).map(([name,members])=>{
+    const salesTarget=members.reduce((s,v)=>s+v.salesTarget,0);
+    const positivityTarget=members.reduce((s,v)=>s+v.positivityTarget,0);
+    const invoiced=members.reduce((s,v)=>s+v.invoiced,0);
+    const toInvoice=members.reduce((s,v)=>s+v.toInvoice,0);
+    const total=invoiced+toInvoice;
+    const invoicedPositivation=members.reduce((s,v)=>s+v.invoicedPositivation,0);
+    const futurePositivation=members.reduce((s,v)=>s+v.futurePositivation,0);
+    const totalPositivation=invoicedPositivation+futurePositivation;
+    return{code:canonicalCode.get(name)||members[0]?.coordinatorCode||name,name,salesTarget,positivityTarget,invoiced,toInvoice,total,attainment:salesTarget>0?total/salesTarget:0,invoicedPositivation,futurePositivation,totalPositivation,positivityAttainment:positivityTarget>0?totalPositivation/positivityTarget:0,vendors:members.sort((a,b)=>b.total-a.total)};
+  }).sort((a,b)=>b.salesTarget-a.salesTarget||b.total-a.total);
+
+  return{...state,vendors,coordinators};
+}
 
 export const DataProvider=({children}:{children:ReactNode})=>{
   const [produtos,setProdutosState]=useState<ProdutoEstoque[]>([]);
@@ -42,7 +69,7 @@ export const DataProvider=({children}:{children:ReactNode})=>{
     setIsLoaded(Boolean(storedCanonical||storedSellOut||storedProdutos.length));
   },[]);
 
-  const canonical=useMemo(()=>applyManualConfiguration(canonicalBase,manualConfig),[canonicalBase,manualConfig]);
+  const canonical=useMemo(()=>normalizeCanonicalTeam(applyManualConfiguration(canonicalBase,manualConfig)),[canonicalBase,manualConfig]);
   const setProdutos=(newProdutos:ProdutoEstoque[])=>{setProdutosState(newProdutos);localStorage.setItem('bj_produtos',JSON.stringify(newProdutos));if(newProdutos.length>0)setIsLoaded(true)};
   const setMetricas=(newMetricas:MetricasEstoque)=>{const normalized={...newMetricas,metaCobertura:manualConfig.coverageTargetDays};setMetricasState(normalized);localStorage.setItem('bj_metricas',JSON.stringify(normalized))};
   const setSellOut=(data:SellOutData|null)=>{setSellOutState(data);if(data){localStorage.setItem('bj_sellout',JSON.stringify(data));setIsLoaded(true)}else localStorage.removeItem('bj_sellout')};
