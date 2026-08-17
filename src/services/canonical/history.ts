@@ -1,6 +1,6 @@
 import type { CanonicalHistoryMonth, CanonicalHistorySummary } from '../../domain/canonical';
 
-const rowPattern = /^(\d{2}\/\d{2}\/\d{4})\s+(\d+)\s+(\S+)\s+(\d{8})\s+([\d.,-]+)\s+([\d.,-]+)\s+([\d.,-]+)\s+(\d+)\s+(\d+)\s+/;
+const rowPattern = /^\s*(\d{2}\/\d{2}\/\d{4})\s+(\d+)\s+(\S+)\s+(\d{8})\s+([\d.,-]+)\s+([\d.,-]+)\s+([\d.,-]+)\s+(\d+)\s+(\d+)\s+/;
 
 function brNumber(value: string): number {
   const parsed = Number(String(value || '').replace(/\./g, '').replace(',', '.').replace(/[^0-9+\-.]/g, ''));
@@ -9,13 +9,25 @@ function brNumber(value: string): number {
 
 export function parse379History(text: string): CanonicalHistoryMonth[] {
   const months = new Map<string, CanonicalHistoryMonth>();
-  for (const line of text.split(/\r?\n/)) {
+
+  for (const line of text.split(/\r\n|\n|\r/)) {
     const match = rowPattern.exec(line);
     if (!match) continue;
-    const [, date,,,, valueRaw,, operation, cfop] = match;
+
+    // Estrutura validada do 379:
+    // 1 data | 2 documento | 3 filial | 4 produto | 5 quantidade |
+    // 6 valor da movimentação | 7 desconto | 8 operação | 9 CFOP.
+    const date = match[1];
+    const valueRaw = match[6];
+    const operation = match[8];
+    const cfop = match[9];
+
     const [day, monthRaw, yearRaw] = date.split('/');
     if (!day || !monthRaw || !yearRaw) continue;
-    const year = Number(yearRaw); const month = Number(monthRaw); const key = `${year}-${String(month).padStart(2, '0')}`;
+
+    const year = Number(yearRaw);
+    const month = Number(monthRaw);
+    const key = `${year}-${String(month).padStart(2, '0')}`;
     const value = brNumber(valueRaw);
     const current = months.get(key) || { key, year, month, value: 0, grossSales: 0, returns: 0 };
 
@@ -29,9 +41,13 @@ export function parse379History(text: string): CanonicalHistoryMonth[] {
       current.returns += value;
       current.value -= value;
     }
+
     months.set(key, current);
   }
-  return Array.from(months.values()).filter(month => month.grossSales > 0 || month.returns > 0).sort((a, b) => a.key.localeCompare(b.key));
+
+  return Array.from(months.values())
+    .filter(month => month.grossSales > 0 || month.returns > 0)
+    .sort((a, b) => a.key.localeCompare(b.key));
 }
 
 export function mergeHistoryMonths(previous: CanonicalHistoryMonth[] = [], incoming: CanonicalHistoryMonth[] = []): CanonicalHistoryMonth[] {
@@ -42,8 +58,10 @@ export function mergeHistoryMonths(previous: CanonicalHistoryMonth[] = [], incom
 
 export function buildHistorySummary(referenceDate: string, months: CanonicalHistoryMonth[]): CanonicalHistorySummary {
   const ref = new Date(`${referenceDate}T12:00:00`);
-  const year = ref.getFullYear(); const month = ref.getMonth() + 1;
+  const year = ref.getFullYear();
+  const month = ref.getMonth() + 1;
   const byKey = new Map(months.map(item => [item.key, item]));
+
   const lastYearKey = `${year - 1}-${String(month).padStart(2, '0')}`;
   const sameMonthLastYear = byKey.get(lastYearKey)?.value ?? null;
 
@@ -52,8 +70,19 @@ export function buildHistorySummary(referenceDate: string, months: CanonicalHist
     const date = new Date(year, month - 1 - offset, 1);
     previousKeys.push(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`);
   }
-  const previousValues = previousKeys.map(key => byKey.get(key)?.value).filter((value): value is number => typeof value === 'number');
-  const average3ClosedMonths = previousValues.length === 3 ? previousValues.reduce((sum, value) => sum + value, 0) / 3 : null;
 
-  return { months, sameMonthLastYear, sameMonthLastYearKey: lastYearKey, average3ClosedMonths, average3MonthKeys: previousKeys };
+  const previousValues = previousKeys
+    .map(key => byKey.get(key)?.value)
+    .filter((value): value is number => typeof value === 'number');
+  const average3ClosedMonths = previousValues.length === 3
+    ? previousValues.reduce((sum, value) => sum + value, 0) / 3
+    : null;
+
+  return {
+    months,
+    sameMonthLastYear,
+    sameMonthLastYearKey: lastYearKey,
+    average3ClosedMonths,
+    average3MonthKeys: previousKeys,
+  };
 }
