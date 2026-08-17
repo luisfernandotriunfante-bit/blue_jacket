@@ -2,202 +2,32 @@ import { useEffect, useMemo, useState } from 'react';
 import { DailyMovementChart } from './DailyMovementChart';
 import { DailyPositivityChart } from './DailyPositivityChart';
 
-type MovementDay = {
-  date: string;
-  invoiced: number;
-  toInvoice: number;
-  total: number;
-  invoicedPositivation: number;
-  totalPositivation: number;
-};
+type MovementDay = { date:string; invoiced:number; toInvoice:number; total:number; invoicedPositivation:number; totalPositivation:number; };
+const WINDOW_DAYS=10;
+const fmtBRL=(value:number)=>value.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const fmtInt=(value:number)=>Math.round(value||0).toLocaleString('pt-BR');
+const fmtDate=(date:string)=>new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR');
+const fmtShortDate=(date:string)=>new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
+function addDays(date:string,amount:number){const value=new Date(`${date}T12:00:00Z`);value.setUTCDate(value.getUTCDate()+amount);return value.toISOString().slice(0,10)}
+function firstDayOfMonth(date:string){return `${date.slice(0,7)}-01`}
+function buildCalendar(data:MovementDay[]){if(!data.length)return [] as MovementDay[];const ordered=[...data].sort((a,b)=>a.date.localeCompare(b.date));const byDate=new Map(ordered.map(item=>[item.date,item]));const monthStart=firstDayOfMonth(ordered[0].date);const latest=ordered[ordered.length-1].date;const minimumWindowStart=addDays(latest,-(WINDOW_DAYS-1));const start=monthStart<minimumWindowStart?monthStart:minimumWindowStart;const days:MovementDay[]=[];for(let cursor=start;cursor<=latest;cursor=addDays(cursor,1)){days.push(byDate.get(cursor)||{date:cursor,invoiced:0,toInvoice:0,total:0,invoicedPositivation:0,totalPositivation:0})}return days}
 
-const WINDOW_DAYS = 10;
-const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-const fmtInt = (value: number) => Math.round(value || 0).toLocaleString('pt-BR');
-const fmtDate = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR');
-const fmtShortDate = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-
-function addDays(date: string, amount: number) {
-  const value = new Date(`${date}T12:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + amount);
-  return value.toISOString().slice(0, 10);
+export function DailyMovementWindow({data}:{data:MovementDay[]}){
+ const calendar=useMemo(()=>buildCalendar(data),[data]);const latestDate=calendar.length?calendar[calendar.length-1].date:'';const maxEnd=Math.max(calendar.length-1,0);const minEnd=Math.min(WINDOW_DAYS-1,maxEnd);const[endIndex,setEndIndex]=useState(maxEnd);
+ useEffect(()=>{setEndIndex(maxEnd)},[latestDate,maxEnd]);if(!calendar.length)return null;
+ const safeEnd=Math.min(Math.max(endIndex,minEnd),maxEnd);const startIndex=Math.max(0,safeEnd-(WINDOW_DAYS-1));const visible=calendar.slice(startIndex,safeEnd+1);const isLatest=safeEnd===maxEnd;const isEarliest=safeEnd===minEnd;const periodStart=visible[0]?.date||'';const periodEnd=visible[visible.length-1]?.date||'';const move=(direction:number)=>setEndIndex(current=>Math.min(maxEnd,Math.max(minEnd,current+direction)));
+ return <div style={{marginTop:'16px'}}>
+  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'18px',padding:'11px 14px',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'13px',background:'rgba(0,0,0,0.14)',marginBottom:'14px'}}><div style={{minWidth:0}}><div style={{color:'var(--panel-muted)',fontSize:'0.62rem',fontWeight:850,letterSpacing:'0.1em',textTransform:'uppercase'}}>Janela sincronizada · {WINDOW_DAYS} dias</div><div style={{color:'white',fontSize:'0.9rem',fontWeight:780,marginTop:'3px'}}>{fmtDate(periodStart)} — {fmtDate(periodEnd)}</div></div><div style={{display:'flex',alignItems:'center',gap:'7px',flexShrink:0}}><button type="button" onClick={()=>move(-1)} disabled={isEarliest} aria-label="Voltar um dia" style={navButtonStyle(isEarliest)}>‹</button><button type="button" onClick={()=>setEndIndex(maxEnd)} disabled={isLatest} style={currentButtonStyle(isLatest)}>Atual</button><button type="button" onClick={()=>move(1)} disabled={isLatest} aria-label="Avançar um dia" style={navButtonStyle(isLatest)}>›</button></div></div>
+  <div style={{display:'grid',gridTemplateColumns:'minmax(0, 1.18fr) minmax(560px, 0.82fr)',gap:'14px',alignItems:'stretch',overflowX:'auto'}}>
+   <div style={{display:'grid',gap:'12px',minWidth:'650px'}}><MovementPanel eyebrow="MOVIMENTO FINANCEIRO" title="Sell Out diário"><DailyMovementChart data={visible}/></MovementPanel><MovementPanel eyebrow="MOVIMENTO DE POSITIVAÇÃO" title="Clientes positivados por dia"><DailyPositivityChart data={visible}/></MovementPanel></div>
+   <div style={{minWidth:'560px',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'14px',background:'rgba(255,255,255,0.025)',overflow:'hidden',display:'flex',flexDirection:'column',height:'100%'}}><div style={{padding:'16px 16px 12px',borderBottom:'1px solid rgba(255,255,255,0.08)'}}><div style={{color:'#ef3340',fontSize:'0.62rem',fontWeight:900,letterSpacing:'0.11em',textTransform:'uppercase'}}>PLANILHA DIÁRIA</div><div style={{color:'white',fontSize:'0.94rem',fontWeight:760,marginTop:'4px'}}>Financeiro + positivação</div><div style={{color:'var(--panel-muted)',fontSize:'0.68rem',marginTop:'3px'}}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div></div>
+    <div style={{overflowX:'auto',flex:1,minHeight:0}}><table style={{width:'100%',height:'100%',borderCollapse:'collapse',fontSize:'0.75rem',tableLayout:'fixed'}}><colgroup><col style={{width:'16%'}}/><col style={{width:'19%'}}/><col style={{width:'18%'}}/><col style={{width:'18%'}}/><col style={{width:'14.5%'}}/><col style={{width:'14.5%'}}/></colgroup><thead><tr>{['Data','Sell Out','Faturado','A Faturar','Pos. Fat.','Pos. Total'].map((heading,index)=><th key={heading} style={{padding:'10px 8px',textAlign:index===0?'left':'right',color:'var(--panel-muted)',fontSize:'0.61rem',textTransform:'uppercase',borderBottom:'1px solid rgba(255,255,255,0.08)',whiteSpace:'nowrap'}}>{heading}</th>)}</tr></thead><tbody>{visible.map((day,index)=><tr key={day.date} style={{borderBottom:index===visible.length-1?'none':'1px solid rgba(255,255,255,0.055)',background:index===visible.length-1?'rgba(239,51,64,0.045)':'transparent'}}><td style={{padding:'9px 8px',color:'white',fontWeight:720}}>{fmtShortDate(day.date)}</td><td style={{padding:'9px 8px',textAlign:'right',fontWeight:800}}>{fmtBRL(day.total)}</td><td style={{padding:'9px 8px',textAlign:'right',color:'#93c5fd'}}>{fmtBRL(day.invoiced)}</td><td style={{padding:'9px 8px',textAlign:'right',color:'#4ade80'}}>{fmtBRL(day.toInvoice)}</td><td style={{padding:'9px 8px',textAlign:'right',color:'#93c5fd'}}>{fmtInt(day.invoicedPositivation)}</td><td style={{padding:'9px 8px',textAlign:'right',color:'#c4b5fd'}}>{fmtInt(day.totalPositivation)}</td></tr>)}</tbody></table></div>
+    <div style={{borderTop:'1px solid rgba(255,255,255,0.08)',background:'rgba(0,0,0,0.12)'}}><WeekTotal label="Sell Out da janela" value={fmtBRL(visible.reduce((sum,day)=>sum+day.total,0))}/></div>
+   </div>
+  </div>
+ </div>;
 }
-
-function firstDayOfMonth(date: string) {
-  return `${date.slice(0, 7)}-01`;
-}
-
-function buildCalendar(data: MovementDay[]) {
-  if (!data.length) return [] as MovementDay[];
-  const ordered = [...data].sort((a, b) => a.date.localeCompare(b.date));
-  const byDate = new Map(ordered.map(item => [item.date, item]));
-  const firstActual = ordered[0].date;
-  const latest = ordered[ordered.length - 1].date;
-
-  // A janela precisa poder navegar antes da primeira venda registrada.
-  // Por isso o calendário começa no primeiro dia do mês da base e
-  // preenche dias sem movimento com zero.
-  const monthStart = firstDayOfMonth(firstActual);
-  const minimumWindowStart = addDays(latest, -(WINDOW_DAYS - 1));
-  const start = monthStart < minimumWindowStart ? monthStart : minimumWindowStart;
-  const days: MovementDay[] = [];
-
-  for (let cursor = start; cursor <= latest; cursor = addDays(cursor, 1)) {
-    days.push(byDate.get(cursor) || {
-      date: cursor,
-      invoiced: 0,
-      toInvoice: 0,
-      total: 0,
-      invoicedPositivation: 0,
-      totalPositivation: 0,
-    });
-  }
-
-  return days;
-}
-
-export function DailyMovementWindow({ data }: { data: MovementDay[] }) {
-  const calendar = useMemo(() => buildCalendar(data), [data]);
-  const latestDate = calendar.length ? calendar[calendar.length - 1].date : '';
-  const maxEnd = Math.max(calendar.length - 1, 0);
-  const minEnd = Math.min(WINDOW_DAYS - 1, maxEnd);
-  const [endIndex, setEndIndex] = useState(maxEnd);
-
-  useEffect(() => {
-    setEndIndex(maxEnd);
-  }, [latestDate, maxEnd]);
-
-  if (!calendar.length) return null;
-
-  const safeEnd = Math.min(Math.max(endIndex, minEnd), maxEnd);
-  const startIndex = Math.max(0, safeEnd - (WINDOW_DAYS - 1));
-  const visible = calendar.slice(startIndex, safeEnd + 1);
-  const isLatest = safeEnd === maxEnd;
-  const isEarliest = safeEnd === minEnd;
-  const periodStart = visible[0]?.date || '';
-  const periodEnd = visible[visible.length - 1]?.date || '';
-
-  const move = (direction: number) => setEndIndex(current => Math.min(maxEnd, Math.max(minEnd, current + direction)));
-
-  return (
-    <div style={{ marginTop: '16px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '18px', padding: '11px 14px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '13px', background: 'rgba(0,0,0,0.14)', marginBottom: '14px' }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ color: 'var(--panel-muted)', fontSize: '0.62rem', fontWeight: 850, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Janela sincronizada · {WINDOW_DAYS} dias</div>
-          <div style={{ color: 'white', fontSize: '0.9rem', fontWeight: 780, marginTop: '3px' }}>{fmtDate(periodStart)} — {fmtDate(periodEnd)}</div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexShrink: 0 }}>
-          <button type="button" onClick={() => move(-1)} disabled={isEarliest} aria-label="Voltar um dia" title="Voltar um dia" style={navButtonStyle(isEarliest)}>‹</button>
-          <button type="button" onClick={() => setEndIndex(maxEnd)} disabled={isLatest} style={currentButtonStyle(isLatest)}>Atual</button>
-          <button type="button" onClick={() => move(1)} disabled={isLatest} aria-label="Avançar um dia" title="Avançar um dia" style={navButtonStyle(isLatest)}>›</button>
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.18fr) minmax(560px, 0.82fr)', gap: '14px', alignItems: 'stretch', overflowX: 'auto' }}>
-        <div style={{ display: 'grid', gap: '12px', minWidth: '650px' }}>
-          <MovementPanel eyebrow="MOVIMENTO FINANCEIRO" title="Sell Out diário">
-            <DailyMovementChart data={visible} />
-          </MovementPanel>
-
-          <MovementPanel eyebrow="MOVIMENTO DE POSITIVAÇÃO" title="Clientes positivados por dia">
-            <DailyPositivityChart data={visible} />
-          </MovementPanel>
-        </div>
-
-        <div style={{ minWidth: '560px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', background: 'rgba(255,255,255,0.025)', overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%' }}>
-          <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
-            <div style={{ color: '#ef3340', fontSize: '0.62rem', fontWeight: 900, letterSpacing: '0.11em', textTransform: 'uppercase' }}>PLANILHA DIÁRIA</div>
-            <div style={{ color: 'white', fontSize: '0.94rem', fontWeight: 760, marginTop: '4px' }}>Financeiro + positivação</div>
-            <div style={{ color: 'var(--panel-muted)', fontSize: '0.68rem', marginTop: '3px' }}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div>
-          </div>
-
-          <div style={{ overflowX: 'auto', flex: 1, minHeight: 0 }}>
-            <table style={{ width: '100%', height: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', tableLayout: 'fixed' }}>
-              <colgroup>
-                <col style={{ width: '16%' }} />
-                <col style={{ width: '19%' }} />
-                <col style={{ width: '18%' }} />
-                <col style={{ width: '18%' }} />
-                <col style={{ width: '14.5%' }} />
-                <col style={{ width: '14.5%' }} />
-              </colgroup>
-              <thead>
-                <tr>{['Data','Sell Out','Faturado','A Faturar','Pos. Fat.','Pos. Total'].map((heading, index) => (
-                  <th key={heading} style={{ padding: '10px 8px', textAlign: index === 0 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.61rem', letterSpacing: '0.05em', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)', whiteSpace: 'nowrap' }}>{heading}</th>
-                ))}</tr>
-              </thead>
-              <tbody>
-                {visible.map((day, index) => (
-                  <tr key={day.date} style={{ borderBottom: index === visible.length - 1 ? 'none' : '1px solid rgba(255,255,255,0.055)', background: index === visible.length - 1 ? 'rgba(239,51,64,0.045)' : 'transparent' }}>
-                    <td style={{ padding: '9px 8px', color: 'white', fontWeight: 720, whiteSpace: 'nowrap' }}>{fmtShortDate(day.date)}</td>
-                    <td style={{ padding: '9px 8px', textAlign: 'right', color: 'white', fontWeight: 800, whiteSpace: 'nowrap' }}>{fmtBRL(day.total)}</td>
-                    <td style={{ padding: '9px 8px', textAlign: 'right', color: '#93c5fd', whiteSpace: 'nowrap' }}>{fmtBRL(day.invoiced)}</td>
-                    <td style={{ padding: '9px 8px', textAlign: 'right', color: '#4ade80', whiteSpace: 'nowrap' }}>{fmtBRL(day.toInvoice)}</td>
-                    <td style={{ padding: '9px 8px', textAlign: 'right', color: '#93c5fd', fontWeight: 720 }}>{fmtInt(day.invoicedPositivation)}</td>
-                    <td style={{ padding: '9px 8px', textAlign: 'right', color: '#c4b5fd', fontWeight: 800 }}>{fmtInt(day.totalPositivation)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderTop: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.12)', flexShrink: 0 }}>
-            <WeekTotal label="Sell Out da janela" value={fmtBRL(visible.reduce((sum, day) => sum + day.total, 0))} />
-            <WeekTotal label="Positivações da janela" value={fmtInt(visible.reduce((sum, day) => sum + day.totalPositivation, 0))} />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MovementPanel({ eyebrow, title, children }: { eyebrow: string; title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', background: 'rgba(255,255,255,0.025)', padding: '14px 14px 8px', overflow: 'hidden' }}>
-      <div style={{ marginBottom: '2px' }}>
-        <div style={{ color: '#ef3340', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '0.1em', textTransform: 'uppercase' }}>{eyebrow}</div>
-        <div style={{ color: 'white', fontSize: '0.88rem', fontWeight: 760, marginTop: '3px' }}>{title}</div>
-      </div>
-      <div style={{ overflowX: 'auto' }}>{children}</div>
-    </div>
-  );
-}
-
-function WeekTotal({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ padding: '12px 14px', minWidth: 0 }}>
-      <div style={{ color: 'var(--panel-muted)', fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 800 }}>{label}</div>
-      <div style={{ color: 'white', fontSize: '0.86rem', fontWeight: 800, marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</div>
-    </div>
-  );
-}
-
-function navButtonStyle(disabled: boolean) {
-  return {
-    width: '34px',
-    height: '34px',
-    borderRadius: '9px',
-    border: '1px solid rgba(255,255,255,0.1)',
-    background: disabled ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.065)',
-    color: disabled ? 'rgba(255,255,255,0.2)' : 'white',
-    cursor: disabled ? 'default' : 'pointer',
-    fontSize: '1.35rem',
-    lineHeight: 1,
-  } as const;
-}
-
-function currentButtonStyle(disabled: boolean) {
-  return {
-    height: '34px',
-    padding: '0 12px',
-    borderRadius: '9px',
-    border: `1px solid ${disabled ? 'rgba(255,255,255,0.08)' : 'rgba(239,51,64,0.35)'}`,
-    background: disabled ? 'rgba(255,255,255,0.025)' : 'rgba(239,51,64,0.08)',
-    color: disabled ? 'var(--panel-muted)' : '#ef3340',
-    cursor: disabled ? 'default' : 'pointer',
-    fontSize: '0.68rem',
-    fontWeight: 850,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.05em',
-  } as const;
-}
+function MovementPanel({eyebrow,title,children}:{eyebrow:string;title:string;children:React.ReactNode}){return <div style={{border:'1px solid rgba(255,255,255,0.08)',borderRadius:'14px',background:'rgba(255,255,255,0.025)',padding:'14px 14px 8px',overflow:'hidden'}}><div style={{marginBottom:'2px'}}><div style={{color:'#ef3340',fontSize:'0.6rem',fontWeight:900,letterSpacing:'0.1em',textTransform:'uppercase'}}>{eyebrow}</div><div style={{color:'white',fontSize:'0.88rem',fontWeight:760,marginTop:'3px'}}>{title}</div></div><div style={{overflowX:'auto'}}>{children}</div></div>}
+function WeekTotal({label,value}:{label:string;value:string}){return <div style={{padding:'12px 14px'}}><div style={{color:'var(--panel-muted)',fontSize:'0.6rem',textTransform:'uppercase',fontWeight:800}}>{label}</div><div style={{color:'white',fontSize:'0.86rem',fontWeight:800,marginTop:'3px'}}>{value}</div></div>}
+function navButtonStyle(disabled:boolean){return{width:'34px',height:'34px',borderRadius:'9px',border:'1px solid rgba(255,255,255,0.1)',background:disabled?'rgba(255,255,255,0.02)':'rgba(255,255,255,0.065)',color:disabled?'rgba(255,255,255,0.2)':'white',cursor:disabled?'default':'pointer',fontSize:'1.35rem',lineHeight:1}as const}
+function currentButtonStyle(disabled:boolean){return{height:'34px',padding:'0 12px',borderRadius:'9px',border:`1px solid ${disabled?'rgba(255,255,255,0.08)':'rgba(239,51,64,0.35)'}`,background:disabled?'rgba(255,255,255,0.025)':'rgba(239,51,64,0.08)',color:disabled?'var(--panel-muted)':'#ef3340',cursor:disabled?'default':'pointer',fontSize:'0.68rem',fontWeight:850,textTransform:'uppercase' as const}as const}
