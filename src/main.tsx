@@ -8,6 +8,7 @@ import { EstoquePage } from './pages/EstoquePage'
 import { LancamentosPage } from './pages/LancamentosPage'
 import { ConfiguracoesPage } from './pages/ConfiguracoesPage'
 import { SellOutPage } from './pages/SellOutPage'
+import { DocumentosPage } from './pages/DocumentosPage'
 import { DataProvider } from './store/DataContext'
 import './ui/theme/foundation.css'
 
@@ -22,7 +23,7 @@ function App() {
     { id: 'sortimento', label: 'Sortimento', active: activeTab === 'sortimento', onSelect: () => setActiveTab('sortimento') },
     { id: 'clientes', label: 'Clientes', active: activeTab === 'clientes', onSelect: () => setActiveTab('clientes') },
     { id: 'atividades', label: 'Atividades', active: activeTab === 'atividades', onSelect: () => setActiveTab('atividades') },
-    { id: 'relatorios', label: 'Relatórios', active: activeTab === 'relatorios', onSelect: () => setActiveTab('relatorios') },
+    { id: 'relatorios', label: 'Documentos', active: activeTab === 'relatorios', onSelect: () => setActiveTab('relatorios') },
     { id: 'configuracoes', label: 'Configurações', active: activeTab === 'configuracoes', onSelect: () => setActiveTab('configuracoes') },
   ]
 
@@ -51,6 +52,8 @@ function App() {
         activeTopTab === 'lancamentos' ? <LancamentosPage /> : <EstoquePage />
       ) : activeTab === 'sellout' ? (
         <SellOutPage />
+      ) : activeTab === 'relatorios' ? (
+        <DocumentosPage />
       ) : activeTab === 'configuracoes' ? (
         <ConfiguracoesPage />
       ) : (

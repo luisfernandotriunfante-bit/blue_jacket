@@ -11,13 +11,14 @@ const FILE_TYPES:FileUiKind[]=[
  {key:'8013',label:'Estoque 8013',color:'#06b6d4',group:'operacao'},
  {key:'cadastro',label:'Cadastro 286',color:'#8b5cf6',group:'cadastro'},
  {key:'lista',label:'Lista de Preço',color:'#10b981',group:'cadastro'},
+ {key:'lancamentos',label:'Lista de Lançamentos',color:'#ec4899',group:'cadastro'},
  {key:'rcas',label:'De-Para RCAs',color:'#a78bfa',group:'cadastro'},
  {key:'bussola',label:'Bússola de Metas',color:'#22c55e',group:'cadastro'},
  {key:'premissas',label:'Base de Premissas',color:'#60a5fa',group:'cadastro'},
  {key:'roteiro',label:'Roteiro Ativo',color:'#fb7185',group:'cadastro'},
  {key:'top-redes',label:'TOP REDES (referência)',color:'#f97316',group:'cadastro'},
 ];
-function identifyFile(name:string):FileUiKind{const lower=name.toLowerCase();if(lower.includes('8022')||lower.includes('vendas'))return FILE_TYPES[0];if(lower.includes('posicao')||lower.includes('posição')||lower.includes('105'))return FILE_TYPES[1];if(lower.includes('carteira'))return FILE_TYPES[2];if(lower.includes('8013'))return FILE_TYPES[3];if(lower.includes('cadastro')||lower.includes('286'))return FILE_TYPES[4];if(lower.includes('lista')&&(lower.includes('preco')||lower.includes('preço')))return FILE_TYPES[5];if(lower.includes('novos rca')||lower.includes('rcas'))return FILE_TYPES[6];if(lower.includes('bussola')||lower.includes('bússola'))return FILE_TYPES[7];if(lower.includes('premissas'))return FILE_TYPES[8];if(lower.includes('roteiro ativo'))return FILE_TYPES[9];if(lower.includes('top redes'))return FILE_TYPES[10];return{key:'desconhecido',label:'Arquivo não identificado',color:'#6b7280',group:'cadastro'}}
+function identifyFile(name:string):FileUiKind{const lower=name.toLowerCase();if(lower.includes('8022')||lower.includes('vendas'))return FILE_TYPES[0];if(lower.includes('posicao')||lower.includes('posição')||lower.includes('105'))return FILE_TYPES[1];if(lower.includes('carteira'))return FILE_TYPES[2];if(lower.includes('8013'))return FILE_TYPES[3];if(lower.includes('cadastro')||lower.includes('286'))return FILE_TYPES[4];if(lower.includes('lista')&&(lower.includes('preco')||lower.includes('preço')))return FILE_TYPES[5];if(lower.includes('lançamento')||lower.includes('lancamento'))return FILE_TYPES[6];if(lower.includes('novos rca')||lower.includes('rcas'))return FILE_TYPES[7];if(lower.includes('bussola')||lower.includes('bússola'))return FILE_TYPES[8];if(lower.includes('premissas'))return FILE_TYPES[9];if(lower.includes('roteiro ativo'))return FILE_TYPES[10];if(lower.includes('top redes'))return FILE_TYPES[11];return{key:'desconhecido',label:'Arquivo não identificado',color:'#6b7280',group:'cadastro'}}
 const fieldStyle:React.CSSProperties={width:'100%',borderRadius:'10px',border:'1px solid rgba(255,255,255,0.12)',background:'rgba(0,0,0,0.22)',color:'white',padding:'11px 12px',outline:'none',font:'inherit'};
 const formatCompactCurrency=(value:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0}).format(value||0);
 
@@ -35,7 +36,7 @@ export function ConfiguracoesPage(){
     <input type="file" multiple accept=".xls,.xlsx,.xlsb" style={{display:'none'}} ref={fileInputRef} onChange={e=>{if(e.target.files?.length)addFiles(Array.from(e.target.files));e.target.value=''}}/>
     <div onDragOver={e=>{e.preventDefault();setIsDragging(true)}} onDragLeave={e=>{e.preventDefault();setIsDragging(false)}} onDrop={e=>{e.preventDefault();setIsDragging(false);if(e.dataTransfer.files?.length)addFiles(Array.from(e.dataTransfer.files))}} onClick={()=>fileInputRef.current?.click()} style={{width:'100%',minHeight:'190px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
      <div className="panel-dropzone-icon">⬆</div><h2>Atualizar base do Blue Jacket</h2><p>Arraste os relatórios novos ou clique para selecionar. Cadastros mensais já carregados são reaproveitados nas próximas cargas.</p>
-     <div className="panel-badges" style={{justifyContent:'center',marginTop:'18px'}}>{FILE_TYPES.slice(0,7).map(ft=><span key={ft.key} className="panel-badge" style={{color:ft.color,borderColor:`${ft.color}44`,background:`${ft.color}12`}}>{ft.label}</span>)}</div>
+     <div className="panel-badges" style={{justifyContent:'center',marginTop:'18px'}}>{FILE_TYPES.slice(0,8).map(ft=><span key={ft.key} className="panel-badge" style={{color:ft.color,borderColor:`${ft.color}44`,background:`${ft.color}12`}}>{ft.label}</span>)}</div>
     </div>
    </PanelCard>
    <PanelCard><PanelSectionHeader eyebrow="IMPORTAÇÃO" title={`Arquivos na fila (${selectedFiles.length})`} description="Relatórios de operação atualizam o dia; cadastros e metas atualizam a base de apoio quando forem enviados."/>

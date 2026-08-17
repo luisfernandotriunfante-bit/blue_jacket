@@ -25,24 +25,57 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
   }
 }
 
+/**
+ * A CARTEIRA já representa o que continua pendente junto à indústria.
+ * Portanto o saldo em trânsito é o valor integral existente no arquivo,
+ * sem subtrair Bill Qty de Order Qty.
+ */
 export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>): { cost: number; sale: number; unresolved: number } {
   let totalCost = 0; let totalSale = 0; let unresolved = 0;
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i]; const rawMaterial = cleanCode(row[4]); if (!rawMaterial) continue;
-    const orderQty = parseNumber(row[6]); const billQty = parseNumber(row[7]); if (orderQty <= 0) continue;
-    const pendingQty = Math.max(orderQty - billQty, 0); if (pendingQty <= 0) continue;
-    const pendingCost = parseNumber(row[8]) * Math.min(Math.max(pendingQty / orderQty, 0), 1);
+    const portfolioQty = Math.max(parseNumber(row[6]), 0);
+    const portfolioCost = Math.max(parseNumber(row[8]), 0);
+    if (portfolioQty <= 0 && portfolioCost <= 0) continue;
+
     const internal = cadastro.factoryToInternal.get(rawMaterial) || rawMaterial;
     const product = products.get(internal);
     const master = priceList.bySku.get(rawMaterial) || (product?.ean ? priceList.byEan.get(cleanDigits(product.ean)) : undefined);
-    let pendingSale = 0;
-    if (product && product.custoUnitario > 0 && product.vendaUnitario > 0) pendingSale = pendingCost * (product.vendaUnitario / product.custoUnitario);
-    else if (master?.boxPrice) pendingSale = master.boxPrice * pendingQty;
+    let portfolioSale = 0;
+    if (product && product.custoUnitario > 0 && product.vendaUnitario > 0 && portfolioCost > 0) portfolioSale = portfolioCost * (product.vendaUnitario / product.custoUnitario);
+    else if (master?.boxPrice && portfolioQty > 0) portfolioSale = master.boxPrice * portfolioQty;
+    else if (master?.unitPrice && portfolioQty > 0) portfolioSale = master.unitPrice * portfolioQty;
     else unresolved += 1;
-    totalCost += pendingCost; totalSale += pendingSale;
-    if (product) { product.saldoPedido += pendingQty; product.saldoPedidoValorCusto = (product.saldoPedidoValorCusto || 0) + pendingCost; product.saldoPedidoValorVenda = (product.saldoPedidoValorVenda || 0) + pendingSale; }
+
+    totalCost += portfolioCost; totalSale += portfolioSale;
+    if (product) {
+      product.saldoPedido += portfolioQty;
+      product.saldoPedidoValorCusto = (product.saldoPedidoValorCusto || 0) + portfolioCost;
+      product.saldoPedidoValorVenda = (product.saldoPedidoValorVenda || 0) + portfolioSale;
+    }
   }
   return { cost: totalCost, sale: totalSale, unresolved };
+}
+
+export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>, priceList: ReturnType<typeof parsePriceList>): { matched: number; unresolved: number } {
+  let matched = 0; let unresolved = 0;
+  const productsByEan = new Map(Array.from(products.values()).filter(p => p.ean).map(p => [cleanDigits(p.ean), p]));
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const status = normalizeText(row[4]);
+    if (status && status !== 'X' && status !== 'SIM' && status !== 'ATIVO') continue;
+    const code = cleanCode(row[0]);
+    const ean = cleanDigits(row[3]);
+    if (!code && !ean) continue;
+
+    const product = (code && products.get(code)) || (ean && productsByEan.get(ean));
+    const master = (ean && priceList.byEan.get(ean)) || (code && priceList.bySku.get(code));
+    let found = false;
+    if (product) { product.isLancamento = true; found = true; }
+    if (master) { master.isLaunch = true; found = true; }
+    if (found) matched += 1; else unresolved += 1;
+  }
+  return { matched, unresolved };
 }
 
 export function parseSales(rows: Row[], priceList: ReturnType<typeof parsePriceList>): SalesTransaction[] {
@@ -75,8 +108,17 @@ export function refreshTransactionLines(transactions: SalesTransaction[], priceL
 
 export function mergePriorPhysical(products: Map<string, StockProduct>, prior: Map<string, StockProduct>) {
   const priorByEan = new Map(Array.from(prior.values()).filter(p => p.ean).map(p => [cleanDigits(p.ean), p]));
-  products.forEach(product => { const old = prior.get(product.codigo) || (product.ean ? priorByEan.get(cleanDigits(product.ean)) : undefined); if (!old) return; product.physicalCases = old.physicalCases; product.physicalUnits = old.physicalUnits; product.grossKg = old.grossKg; });
-  prior.forEach((old, code) => { if (products.has(code)) return; if (!(old.physicalUnits || old.physicalCases || old.grossKg) && old.hasWinthor !== false) return; products.set(code, { ...old, quantidade: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0 }); });
+  products.forEach(product => {
+    const old = prior.get(product.codigo) || (product.ean ? priorByEan.get(cleanDigits(product.ean)) : undefined);
+    if (!old) return;
+    product.physicalCases = old.physicalCases;
+    product.physicalUnits = old.physicalUnits;
+    product.grossKg = old.grossKg;
+    product.isLancamento = Boolean(old.isLancamento) || Boolean(product.isLancamento);
+    if (!product.ean && old.ean) product.ean = old.ean;
+    if (!product.factoryCode && old.factoryCode) product.factoryCode = old.factoryCode;
+  });
+  prior.forEach((old, code) => { if (products.has(code)) return; if (!(old.physicalUnits || old.physicalCases || old.grossKg || old.isLancamento) && old.hasWinthor !== false) return; products.set(code, { ...old, quantidade: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0 }); });
 }
 
 export function clearPortfolio(products: Map<string, StockProduct>) {

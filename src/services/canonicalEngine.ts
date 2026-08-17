@@ -3,9 +3,9 @@ import type { MetricasEstoque, ProdutoEstoque, SellOutData } from '../store/Data
 import type { CanonicalState, CanonicalSupportData, ManualConfiguration, SourceAudit, SourceKind } from '../domain/canonical';
 import { DEFAULT_MANUAL_CONFIGURATION, EMPTY_CANONICAL_SUPPORT } from '../domain/canonical';
 import type { CompassTarget, PremiseClient, ProductMaster, RcaMap, RouteStore, Row, SalesTransaction } from './canonical/runtime';
-import { detectSource, readWorkbook, sheetRows, cleanCode, cleanDigits } from './canonical/utils';
+import { detectSource, readWorkbook, sheetRows, cleanCode, cleanDigits, normalizeText } from './canonical/utils';
 import { parseActiveRoute, parseCadastro286, parseCompassTargets, parseLegacyNetworkTargets, parsePremises, parsePriceList, parseRcaMap } from './canonical/support';
-import { applyPortfolio, canonicalToInventory, clearPortfolio, inventoryToCanonical, mergePriorPhysical, mergeStock8013, parseSales, parseStock105, refreshTransactionLines } from './canonical/operations';
+import { applyLaunchList, applyPortfolio, canonicalToInventory, clearPortfolio, inventoryToCanonical, mergePriorPhysical, mergeStock8013, parseSales, parseStock105, refreshTransactionLines } from './canonical/operations';
 import { buildClients, buildCoordinators, buildDaily, buildLines, buildNetworks, buildVendorResults, businessDayStats, legacySellOut, periodBounds } from './canonical/aggregate';
 
 export interface CanonicalProcessResult { canonical: CanonicalState; sellOut: SellOutData; produtos: ProdutoEstoque[]; metricas: MetricasEstoque; }
@@ -13,10 +13,26 @@ export interface CanonicalProcessResult { canonical: CanonicalState; sellOut: Se
 export async function processCanonicalFiles(files: File[], config: ManualConfiguration = DEFAULT_MANUAL_CONFIGURATION, previousState: CanonicalState | null = null): Promise<CanonicalProcessResult> {
   const warnings: string[] = []; const sources: SourceAudit[] = [];
   const workbooks = new Map<SourceKind, { file: File; workbook: XLSX.WorkBook; rows: Row[] }>();
+  let launchRows: Row[] | null = null;
+
   for (const file of files) {
-    const kind = detectSource(file.name);
-    try { const workbook = await readWorkbook(file, kind); const rows = sheetRows(workbook); sources.push({ kind, fileName: file.name, loaded: true, rows: rows.length }); if (kind !== 'unknown') workbooks.set(kind, { file, workbook, rows }); else sources[sources.length - 1].note = 'Arquivo não utilizado pelo motor canônico.'; }
-    catch (error) { sources.push({ kind, fileName: file.name, loaded: false, rows: 0, note: error instanceof Error ? error.message : 'Falha de leitura' }); }
+    const normalizedName = normalizeText(file.name);
+    const isLaunchFile = normalizedName.includes('LANCAMENTO');
+    const kind = isLaunchFile ? 'unknown' : detectSource(file.name);
+    try {
+      const workbook = await readWorkbook(file, kind);
+      const rows = sheetRows(workbook);
+      if (isLaunchFile) {
+        launchRows = rows;
+        sources.push({ kind: 'unknown', fileName: file.name, loaded: true, rows: rows.length, note: 'Lista oficial de lançamentos.' });
+      } else {
+        sources.push({ kind, fileName: file.name, loaded: true, rows: rows.length });
+        if (kind !== 'unknown') workbooks.set(kind, { file, workbook, rows });
+        else sources[sources.length - 1].note = 'Arquivo não utilizado pelo motor canônico.';
+      }
+    } catch (error) {
+      sources.push({ kind, fileName: file.name, loaded: false, rows: 0, note: error instanceof Error ? error.message : 'Falha de leitura' });
+    }
   }
 
   const previousSupport = previousState?.support || EMPTY_CANONICAL_SUPPORT;
@@ -49,11 +65,17 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
 
   const priorInventory = canonicalToInventory(previousState?.inventory);
   let products = workbooks.has('stock105') ? parseStock105(workbooks.get('stock105')!.rows, cadastro) : canonicalToInventory(previousState?.inventory);
-  if (workbooks.has('stock105') && !workbooks.has('stock8013')) mergePriorPhysical(products, priorInventory);
+  if (workbooks.has('stock105')) mergePriorPhysical(products, priorInventory);
   if (workbooks.has('stock8013')) mergeStock8013(workbooks.get('stock8013')!.rows, products, priceList);
+
   let portfolio = { cost: previousState?.stock.pendingPurchaseCost || 0, sale: previousState?.stock.pendingPurchaseSale || 0, unresolved: 0 };
   if (workbooks.has('purchasePortfolio')) { clearPortfolio(products); portfolio = applyPortfolio(workbooks.get('purchasePortfolio')!.rows, products, cadastro, priceList); }
   if (portfolio.unresolved > 0) warnings.push(`${portfolio.unresolved} linha(s) da carteira não puderam ser valorizadas a preço de venda.`);
+
+  if (launchRows) {
+    const launchResult = applyLaunchList(launchRows, products, priceList);
+    if (launchResult.unresolved > 0) warnings.push(`${launchResult.unresolved} lançamento(s) da lista oficial não foram encontrados no estoque nem na Lista de Preço.`);
+  }
   products.forEach(product => { const master = (product.ean ? priceList.byEan.get(cleanDigits(product.ean)) : undefined) || (product.factoryCode ? priceList.bySku.get(cleanCode(product.factoryCode)) : undefined); if (master?.isLaunch) product.isLancamento = true; });
 
   const productArray = Array.from(products.values());
