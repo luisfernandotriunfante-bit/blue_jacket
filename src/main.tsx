@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { BlueJacketShell } from './ui/BlueJacketShell'
 import { HoverSidebar } from './ui/navigation/HoverSidebar'
 import { TopTabs } from './ui/navigation/TopTabs'
+import { PanelEmptyState, PanelPage } from './ui/pattern/PanelVisual'
 import { EstoquePage } from './pages/EstoquePage'
 import { LancamentosPage } from './pages/LancamentosPage'
 import { ConfiguracoesPage } from './pages/ConfiguracoesPage'
@@ -13,7 +14,6 @@ import './ui/theme/foundation.css'
 function App() {
   const [activeTab, setActiveTab] = useState('estoque')
   const [activeTopTab, setActiveTopTab] = useState('lancamentos')
-  const [activeSellOutTab, setActiveSellOutTab] = useState('geral')
 
   const sidebarItems = [
     { id: 'estoque', label: 'Estoque', active: activeTab === 'estoque', onSelect: () => setActiveTab('estoque') },
@@ -43,6 +43,8 @@ function App() {
     <TopTabs tabs={estoqueTopTabs} activeId={activeTopTab} onChange={setActiveTopTab} />
   ) : null
 
+  const currentLabel = sidebarItems.find(i => i.id === activeTab)?.label ?? activeTab
+
   return (
     <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
       {activeTab === 'estoque' ? (
@@ -52,9 +54,13 @@ function App() {
       ) : activeTab === 'configuracoes' ? (
         <ConfiguracoesPage />
       ) : (
-        <div style={{ padding: '80px 40px', textAlign: 'center' }}>
-          <h2 style={{ color: 'white' }}>Em breve: {sidebarItems.find(i => i.id === activeTab)?.label}</h2>
-        </div>
+        <PanelPage title={currentLabel}>
+          <PanelEmptyState
+            icon="◆"
+            title={`${currentLabel} em construção`}
+            description="A estrutura visual já segue o padrão do Sell Out. O conteúdo funcional será adicionado quando este módulo entrar na etapa de implementação."
+          />
+        </PanelPage>
       )}
     </BlueJacketShell>
   )
