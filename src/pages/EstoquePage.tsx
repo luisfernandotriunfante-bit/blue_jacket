@@ -109,6 +109,16 @@ export function EstoquePage() {
       if (ean) soldByEan.set(ean, (soldByEan.get(ean) || 0) + units);
     });
 
+    // O Cadastro 286 é a fonte de verdade para dizer se um produto existe no
+    // Winthor. Posição 105 indica estoque; 8013 indica físico; lista de lançamentos
+    // é uma fonte externa. Nenhuma dessas fontes, isoladamente, pode classificar
+    // um item como "Sem Winthor".
+    const winthorItems = canonical?.support?.itemCodes || [];
+    const winthorByInternal = new Set(winthorItems.map(item => String(item.internalCode || '').trim()).filter(Boolean));
+    const winthorByEan = new Set(winthorItems.map(item => digits(item.ean)).filter(Boolean));
+    const winthorByFactory = new Set(winthorItems.map(item => String(item.factoryCode || '').trim()).filter(Boolean));
+    const hasCadastro286 = winthorItems.length > 0;
+
     const elapsed = canonical?.sellOut.businessDaysElapsed || 0;
     const remaining = canonical?.sellOut.businessDaysRemaining || 0;
 
@@ -120,7 +130,15 @@ export function EstoquePage() {
       const averageDailyUnits = elapsed > 0 ? soldUnits / elapsed : 0;
       const coverageDays = averageDailyUnits > 0 ? product.quantidade / averageDailyUnits : null;
       const requiredRemainingUnits = averageDailyUnits * remaining;
-      const isNoWinthor = product.hasWinthor === false;
+
+      const registeredIn286 = winthorByInternal.has(String(product.codigo || '').trim())
+        || (Boolean(product.ean) && winthorByEan.has(digits(product.ean)))
+        || (Boolean(product.factoryCode) && winthorByFactory.has(String(product.factoryCode || '').trim()));
+
+      // Lançamentos sintéticos são mantidos para auditoria da lista oficial, mas
+      // não devem receber o rótulo "Sem Winthor" só por não estarem na Posição 105.
+      const isNoWinthor = !product.isLancamento
+        && (hasCadastro286 ? !registeredIn286 : product.hasWinthor === false);
       const isNew = isNoWinthor && product.saldoPedido > 0 && !product.isLancamento;
       const isRupture = !isNoWinthor && product.quantidade <= 0;
       const isRisk = !isNoWinthor
@@ -370,7 +388,7 @@ export function EstoquePage() {
           <PanelSectionHeader
             eyebrow="CATÁLOGO"
             title={`Produtos (${sortedProdutos.length}${sortedProdutos.length !== catalog.length ? ` de ${catalog.length}` : ''})`}
-            description="Lançamento vem da lista oficial por EAN; Novo identifica item ainda sem Winthor, já presente na carteira e que não é lançamento; risco de ruptura usa estoque real × ritmo faturado no 8022 até o fim do mês. Sem preço registrado, o painel não estima valor."
+            description="Lançamento vem da lista oficial por EAN; Novo identifica item realmente ausente do Cadastro 286, já presente na carteira e que não é lançamento; risco de ruptura usa estoque real × ritmo faturado no 8022 até o fim do mês. O status Sem Winthor é validado exclusivamente contra o Cadastro 286."
           />
 
           <div className="panel-toolbar" style={{ marginBottom: '12px' }}>
