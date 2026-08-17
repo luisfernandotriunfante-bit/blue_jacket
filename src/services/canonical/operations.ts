@@ -26,34 +26,61 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
 }
 
 /**
- * A CARTEIRA já representa o que continua pendente junto à indústria.
- * Portanto o saldo em trânsito é o valor integral existente no arquivo,
- * sem subtrair Bill Qty de Order Qty.
+ * A CARTEIRA representa tudo o que continua pendente junto à indústria.
+ *
+ * Regra fechada para o Blue Jacket:
+ * - CUSTO: soma 100% do valor informado na carteira. Não descartamos valor
+ *   só porque o SKU ainda não foi conciliado com o cadastro interno.
+ * - VENDA: calculamos somente quando existe preço de custo e preço de venda
+ *   registrados no estoque do sistema (posição 105). Não usamos Lista de Preço
+ *   Colgate, preço de caixa ou qualquer estimativa como substituto do preço de
+ *   venda da Milênio.
+ *
+ * Portanto, pendingPurchaseSale pode ser menor que o potencial real quando
+ * houver itens da carteira sem preço de venda registrado. Isso é intencional:
+ * ausência de informação vira pendência, nunca valor inventado.
  */
-export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>): { cost: number; sale: number; unresolved: number } {
+export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, _priceList: ReturnType<typeof parsePriceList>): { cost: number; sale: number; unresolved: number } {
   let totalCost = 0; let totalSale = 0; let unresolved = 0;
+
   for (let i = 1; i < rows.length; i++) {
-    const row = rows[i]; const rawMaterial = cleanCode(row[4]); if (!rawMaterial) continue;
-    const portfolioQty = Math.max(parseNumber(row[6]), 0);
+    const row = rows[i];
     const portfolioCost = Math.max(parseNumber(row[8]), 0);
+    const portfolioQty = Math.max(parseNumber(row[6]), 0);
+    const rawMaterial = cleanCode(row[4]);
+
     if (portfolioQty <= 0 && portfolioCost <= 0) continue;
+
+    // Todo valor financeiro presente em uma linha da carteira entra no custo.
+    // A conciliação do SKU serve apenas para distribuir e valorizar a venda.
+    totalCost += portfolioCost;
+
+    if (!rawMaterial) {
+      if (portfolioCost > 0) unresolved += 1;
+      continue;
+    }
 
     const internal = cadastro.factoryToInternal.get(rawMaterial) || rawMaterial;
     const product = products.get(internal);
-    const master = priceList.bySku.get(rawMaterial) || (product?.ean ? priceList.byEan.get(cleanDigits(product.ean)) : undefined);
     let portfolioSale = 0;
-    if (product && product.custoUnitario > 0 && product.vendaUnitario > 0 && portfolioCost > 0) portfolioSale = portfolioCost * (product.vendaUnitario / product.custoUnitario);
-    else if (master?.boxPrice && portfolioQty > 0) portfolioSale = master.boxPrice * portfolioQty;
-    else if (master?.unitPrice && portfolioQty > 0) portfolioSale = master.unitPrice * portfolioQty;
-    else unresolved += 1;
 
-    totalCost += portfolioCost; totalSale += portfolioSale;
+    // O único preço de venda aceito é o efetivamente registrado no estoque 105.
+    // Usamos a relação custo/venda do próprio SKU para valorizar exatamente o
+    // valor financeiro que está na carteira, evitando pressupor unidade/caixa.
+    if (product && product.custoUnitario > 0 && product.vendaUnitario > 0 && portfolioCost > 0) {
+      portfolioSale = portfolioCost * (product.vendaUnitario / product.custoUnitario);
+      totalSale += portfolioSale;
+    } else if (portfolioCost > 0 || portfolioQty > 0) {
+      unresolved += 1;
+    }
+
     if (product) {
       product.saldoPedido += portfolioQty;
       product.saldoPedidoValorCusto = (product.saldoPedidoValorCusto || 0) + portfolioCost;
       product.saldoPedidoValorVenda = (product.saldoPedidoValorVenda || 0) + portfolioSale;
     }
   }
+
   return { cost: totalCost, sale: totalSale, unresolved };
 }
 
