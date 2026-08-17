@@ -21,7 +21,7 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
     const existing = Array.from(products.values()).find(p => cleanDigits(p.ean) === ean);
     if (existing) { existing.physicalCases = parseNumber(row[12]); existing.physicalUnits = parseNumber(row[11]); existing.grossKg = parseNumber(row[13]); if (!existing.ean) existing.ean = ean; continue; }
     const master = priceList.byEan.get(ean); const code = master?.sku || ean;
-    products.set(code, { codigo: code, descricao: String(row[6] ?? '').trim() || master?.description || '', ean, quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: master?.unitPrice || 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: master?.isLaunch || false, hasWinthor: false, physicalCases: parseNumber(row[12]), physicalUnits: parseNumber(row[11]), grossKg: parseNumber(row[13]), factoryCode: master?.sku });
+    products.set(code, { codigo: code, descricao: String(row[6] ?? '').trim() || master?.description || '', ean, quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: master?.isLaunch || false, hasWinthor: false, physicalCases: parseNumber(row[12]), physicalUnits: parseNumber(row[11]), grossKg: parseNumber(row[13]), factoryCode: master?.sku });
   }
 }
 
@@ -35,12 +35,11 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
  *   registrados no estoque do sistema (posição 105). Não usamos Lista de Preço
  *   Colgate, preço de caixa ou qualquer estimativa como substituto do preço de
  *   venda da Milênio.
- *
- * Portanto, pendingPurchaseSale pode ser menor que o potencial real quando
- * houver itens da carteira sem preço de venda registrado. Isso é intencional:
- * ausência de informação vira pendência, nunca valor inventado.
+ * - CATÁLOGO: quando a carteira conhece um material que ainda não existe na
+ *   posição 105, ele entra no catálogo como SEM WINTHOR, com custo/venda unitários
+ *   zerados. Lista de Preço/Cadastro 286 são usados apenas para identificação.
  */
-export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, _priceList: ReturnType<typeof parsePriceList>): { cost: number; sale: number; unresolved: number } {
+export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>): { cost: number; sale: number; unresolved: number } {
   let totalCost = 0; let totalSale = 0; let unresolved = 0;
 
   for (let i = 1; i < rows.length; i++) {
@@ -51,8 +50,6 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
 
     if (portfolioQty <= 0 && portfolioCost <= 0) continue;
 
-    // Todo valor financeiro presente em uma linha da carteira entra no custo.
-    // A conciliação do SKU serve apenas para distribuir e valorizar a venda.
     totalCost += portfolioCost;
 
     if (!rawMaterial) {
@@ -61,24 +58,42 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
     }
 
     const internal = cadastro.factoryToInternal.get(rawMaterial) || rawMaterial;
-    const product = products.get(internal);
-    let portfolioSale = 0;
+    const cad = cadastro.byInternal.get(internal);
+    const master = priceList.bySku.get(rawMaterial) || (cad?.ean ? priceList.byEan.get(cleanDigits(cad.ean)) : undefined);
+    let product = products.get(internal);
 
-    // O único preço de venda aceito é o efetivamente registrado no estoque 105.
-    // Usamos a relação custo/venda do próprio SKU para valorizar exatamente o
-    // valor financeiro que está na carteira, evitando pressupor unidade/caixa.
-    if (product && product.custoUnitario > 0 && product.vendaUnitario > 0 && portfolioCost > 0) {
+    if (!product) {
+      product = {
+        codigo: internal,
+        descricao: cad?.description || master?.description || `Material ${rawMaterial}`,
+        ean: cad?.ean || master?.ean || '',
+        quantidade: 0,
+        saldoMinimo: 0,
+        custoUnitario: 0,
+        vendaUnitario: 0,
+        entradas: 0,
+        saidas: 0,
+        saldoPedido: 0,
+        saldoPedidoValorCusto: 0,
+        saldoPedidoValorVenda: 0,
+        isLancamento: master?.isLaunch || false,
+        hasWinthor: false,
+        factoryCode: rawMaterial,
+      };
+      products.set(internal, product);
+    }
+
+    let portfolioSale = 0;
+    if (product.hasWinthor !== false && product.custoUnitario > 0 && product.vendaUnitario > 0 && portfolioCost > 0) {
       portfolioSale = portfolioCost * (product.vendaUnitario / product.custoUnitario);
       totalSale += portfolioSale;
     } else if (portfolioCost > 0 || portfolioQty > 0) {
       unresolved += 1;
     }
 
-    if (product) {
-      product.saldoPedido += portfolioQty;
-      product.saldoPedidoValorCusto = (product.saldoPedidoValorCusto || 0) + portfolioCost;
-      product.saldoPedidoValorVenda = (product.saldoPedidoValorVenda || 0) + portfolioSale;
-    }
+    product.saldoPedido += portfolioQty;
+    product.saldoPedidoValorCusto = (product.saldoPedidoValorCusto || 0) + portfolioCost;
+    product.saldoPedidoValorVenda = (product.saldoPedidoValorVenda || 0) + portfolioSale;
   }
 
   return { cost: totalCost, sale: totalSale, unresolved };
@@ -95,8 +110,32 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
     const ean = cleanDigits(row[3]);
     if (!code && !ean) continue;
 
-    const product = (code && products.get(code)) || (ean && productsByEan.get(ean));
+    let product = (code && products.get(code)) || (ean && productsByEan.get(ean));
     const master = (ean && priceList.byEan.get(ean)) || (code && priceList.bySku.get(code));
+
+    if (!product && master) {
+      const catalogCode = code || master.sku || ean;
+      product = {
+        codigo: catalogCode,
+        descricao: master.description || `Lançamento ${catalogCode}`,
+        ean: ean || master.ean || '',
+        quantidade: 0,
+        saldoMinimo: 0,
+        custoUnitario: 0,
+        vendaUnitario: 0,
+        entradas: 0,
+        saidas: 0,
+        saldoPedido: 0,
+        saldoPedidoValorCusto: 0,
+        saldoPedidoValorVenda: 0,
+        isLancamento: true,
+        hasWinthor: false,
+        factoryCode: master.sku || code,
+      };
+      products.set(catalogCode, product);
+      if (product.ean) productsByEan.set(cleanDigits(product.ean), product);
+    }
+
     let found = false;
     if (product) { product.isLancamento = true; found = true; }
     if (master) { master.isLaunch = true; found = true; }
