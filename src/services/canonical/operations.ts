@@ -107,6 +107,10 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
  * Todo EAN único da lista oficial deve permanecer no catálogo, mesmo quando ainda
  * não existir no Winthor, no estoque ou na Lista de Preço. Nesses casos criamos um
  * registro de pendência com valores zerados, sem inventar preço ou código interno.
+ *
+ * Importante: a lista enviada pelo usuário já representa o universo oficial. Não
+ * aplicamos um segundo filtro por STATUS/ATIVO, porque isso elimina EANs válidos da
+ * própria lista e altera a quantidade oficial de lançamentos.
  */
 export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>, priceList: ReturnType<typeof parsePriceList>): { matched: number; unresolved: number; unique: number } {
   products.forEach(product => { product.isLancamento = false; });
@@ -124,19 +128,10 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
     const value = normalizeText(cell);
     return value.includes('DESCR') || value === 'PRODUTO' || value === 'ITEM';
   });
-  const statusColumn = header.findIndex(cell => {
-    const value = normalizeText(cell);
-    return value === 'STATUS' || value === 'ATIVO' || value === 'ATIVA' || value === 'UTILIZAR';
-  });
   const start = headerIndex >= 0 ? headerIndex + 1 : 1;
 
   for (let i = start; i < rows.length; i++) {
     const row = rows[i];
-    if (statusColumn >= 0) {
-      const status = normalizeText(row[statusColumn]);
-      if (status && status !== 'X' && status !== 'SIM' && status !== 'ATIVO' && status !== 'ATIVA') continue;
-    }
-
     const ean = cleanDigits(eanColumn >= 0 ? row[eanColumn] : row[3]);
     if (!ean || seen.has(ean)) continue;
     seen.add(ean);
