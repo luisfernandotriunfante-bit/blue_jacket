@@ -15,7 +15,7 @@ import './ui/theme/foundation.css'
 
 function App() {
   const [activeTab, setActiveTab] = useState('estoque')
-  const [activeTopTab, setActiveTopTab] = useState('lancamentos')
+  const [activeTopTab, setActiveTopTab] = useState('geral')
 
   const sidebarItems = [
     { id: 'estoque', label: 'Estoque', active: activeTab === 'estoque', onSelect: () => setActiveTab('estoque') },
@@ -38,7 +38,6 @@ function App() {
 
   const estoqueTopTabs = [
     { id: 'geral', label: 'Visão Geral' },
-    { id: 'movimentacao', label: 'Entradas & Saídas' },
     { id: 'lancamentos', label: 'Lançamentos' },
   ]
 
