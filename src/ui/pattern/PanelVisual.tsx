@@ -42,16 +42,31 @@ export function PanelCard({ className = '', style, children }: PanelCardProps) {
   return <section className={`panel-card ${className}`.trim()} style={style}>{children}</section>
 }
 
+type PanelKpiTone = 'red' | 'blue' | 'green' | 'purple' | 'amber' | 'default'
+
 type PanelKpiProps = {
   label: string
   value: ReactNode
-  tone?: 'red' | 'blue' | 'green' | 'purple' | 'amber' | 'default'
+  tone?: PanelKpiTone
   detail?: ReactNode
 }
 
+const RED_SELL_OUT_KPIS = new Set([
+  'Sell Out Total',
+  'Faturado',
+  'A Faturar',
+  'Positivação Total',
+  'Meta Sell Out T&C',
+  'Tendência',
+  'Necessário / dia',
+  'Meta Positivação',
+])
+
 export function PanelKpi({ label, value, tone = 'default', detail }: PanelKpiProps) {
+  const effectiveTone: PanelKpiTone = RED_SELL_OUT_KPIS.has(label) ? 'red' : tone
+
   return (
-    <div className={`panel-kpi panel-kpi-${tone}`}>
+    <div className={`panel-kpi panel-kpi-${effectiveTone}`}>
       <div className="panel-kpi-glow" aria-hidden="true" />
       <div className="panel-kpi-label">{label}</div>
       <div className="panel-kpi-value">{value}</div>
