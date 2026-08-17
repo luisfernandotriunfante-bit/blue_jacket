@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../store/DataContext';
+import { DailyMovementChart } from '../ui/charts/DailyMovementChart';
 import { PanelCard, PanelEmptyState, PanelKpi, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -69,12 +70,16 @@ function Resumo() {
       ) : null}
 
       <PanelCard>
-        <PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Faturado, a faturar e Sell Out total do período." />
-        <div style={{ overflowX: 'auto', marginTop: '14px' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
-            <thead><tr>{['Data','Faturado','A Faturar','Sell Out','Pos. Fat.','Pos. Total'].map((h, i) => <th key={h} style={{ padding: '10px 12px', textAlign: i === 0 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.68rem', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{h}</th>)}</tr></thead>
-            <tbody>{daily.map(d => <tr key={d.date} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}><td style={{ padding: '10px 12px', color: 'white', fontWeight: 650 }}>{new Date(`${d.date}T12:00:00`).toLocaleDateString('pt-BR')}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'white' }}>{fmtBRL(d.invoiced)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: '#4ade80' }}>{fmtBRL(d.toInvoice)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'white', fontWeight: 750 }}>{fmtBRL(d.total)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--panel-muted)' }}>{fmtInt(d.invoicedPositivation)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: '#c4b5fd' }}>{fmtInt(d.totalPositivation)}</td></tr>)}</tbody>
-          </table>
+        <PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Gráfico e planilha com faturado, a faturar e Sell Out total do período." />
+        <DailyMovementChart data={daily} />
+        <div style={{ marginTop: '22px', paddingTop: '18px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ color: 'var(--panel-muted)', fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '10px' }}>Planilha diária</div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+              <thead><tr>{['Data','Faturado','A Faturar','Sell Out','Pos. Fat.','Pos. Total'].map((h, i) => <th key={h} style={{ padding: '10px 12px', textAlign: i === 0 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.68rem', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{h}</th>)}</tr></thead>
+              <tbody>{daily.map(d => <tr key={d.date} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}><td style={{ padding: '10px 12px', color: 'white', fontWeight: 650 }}>{new Date(`${d.date}T12:00:00`).toLocaleDateString('pt-BR')}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'white' }}>{fmtBRL(d.invoiced)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: '#4ade80' }}>{fmtBRL(d.toInvoice)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'white', fontWeight: 750 }}>{fmtBRL(d.total)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--panel-muted)' }}>{fmtInt(d.invoicedPositivation)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: '#c4b5fd' }}>{fmtInt(d.totalPositivation)}</td></tr>)}</tbody>
+            </table>
+          </div>
         </div>
       </PanelCard>
 
