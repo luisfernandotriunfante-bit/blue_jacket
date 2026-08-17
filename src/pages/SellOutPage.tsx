@@ -1,13 +1,49 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../store/DataContext';
 import { DailyMovementWindow } from '../ui/charts/DailyMovementWindow';
-import { PanelCard, PanelEmptyState, PanelKpi, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
+import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtInt = (value: number) => Math.round(value || 0).toLocaleString('pt-BR');
 const fmtPct = (value: number) => `${((value || 0) * 100).toFixed(1)}%`;
+const fmtDate = (value: string) => value ? new Date(`${value}T12:00:00`).toLocaleDateString('pt-BR') : '—';
 
 type TabId = 'resumo' | 'gerencial';
+
+type InfoRow = {
+  label: string;
+  value: string;
+  detail?: string;
+  accent?: boolean;
+};
+
+function BigInfoCard({ eyebrow, title, mainLabel, mainValue, rows, note }: { eyebrow: string; title: string; mainLabel?: string; mainValue?: string; rows: InfoRow[]; note?: string }) {
+  return (
+    <PanelCard style={{ borderLeft: '4px solid var(--panel-red)', minHeight: '100%' }}>
+      <PanelSectionHeader eyebrow={eyebrow} title={title} />
+      {mainValue ? (
+        <div style={{ marginBottom: '18px' }}>
+          {mainLabel ? <div className="panel-mini-label" style={{ marginBottom: '6px' }}>{mainLabel}</div> : null}
+          <div style={{ color: 'var(--panel-text)', fontSize: 'clamp(1.9rem, 3.6vw, 3rem)', fontWeight: 850, letterSpacing: '-0.04em', lineHeight: 1 }}>
+            {mainValue}
+          </div>
+        </div>
+      ) : null}
+      <div style={{ display: 'grid', gap: '0' }}>
+        {rows.map((row, index) => (
+          <div key={`${row.label}-${index}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '18px', alignItems: 'center', padding: '11px 0', borderTop: index === 0 ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(255,255,255,0.055)' }}>
+            <div>
+              <div style={{ color: 'var(--panel-text-dim)', fontSize: '0.72rem', fontWeight: 750, letterSpacing: '0.045em', textTransform: 'uppercase' }}>{row.label}</div>
+              {row.detail ? <div style={{ color: 'var(--panel-muted)', fontSize: '0.72rem', marginTop: '3px' }}>{row.detail}</div> : null}
+            </div>
+            <div style={{ color: row.accent ? 'var(--panel-red)' : 'var(--panel-text)', fontWeight: 800, textAlign: 'right' }}>{row.value}</div>
+          </div>
+        ))}
+      </div>
+      {note ? <div style={{ color: 'var(--panel-muted)', fontSize: '0.72rem', marginTop: '14px', lineHeight: 1.45 }}>{note}</div> : null}
+    </PanelCard>
+  );
+}
 
 export function SellOutPage() {
   const { canonical, sellOut } = useData();
@@ -46,32 +82,111 @@ function Resumo() {
   const total = summary?.total ?? sellOut?.vendaTotal ?? 0;
   const positivacao = summary?.totalPositivation ?? sellOut?.positivacaoTotal ?? 0;
   const daily = canonical?.daily ?? (sellOut?.diasDeVenda || []).map(day => ({ date: day.data, invoiced: day.faturado, toInvoice: Math.max(day.venda - day.faturado, 0), total: day.venda, invoicedPositivation: day.positivacao, totalPositivation: day.positivacao }));
+  const latest = [...daily].sort((a, b) => a.date.localeCompare(b.date)).at(-1);
 
   return (
     <div style={{ display: 'grid', gap: '22px' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '12px' }}>
-        <PanelKpi label="Sell Out Total" value={fmtBRL(total)} tone="red" />
-        <PanelKpi label="Faturado" value={fmtBRL(faturado)} tone="blue" />
-        <PanelKpi label="A Faturar" value={fmtBRL(aFaturar)} tone="green" />
-        <PanelKpi label="Positivação Total" value={fmtInt(positivacao)} tone="purple" />
+      <div className="panel-grid panel-grid-2">
+        <BigInfoCard
+          eyebrow="ÚLTIMO DIA"
+          title={latest ? `Fechamento de ${fmtDate(latest.date)}` : 'Fechamento diário'}
+          mainLabel="Sell Out do dia"
+          mainValue={fmtBRL(latest?.total || 0)}
+          rows={[
+            { label: 'Faturado', value: fmtBRL(latest?.invoiced || 0) },
+            { label: 'A faturar', value: fmtBRL(latest?.toInvoice || 0) },
+            { label: 'Positivação faturada', value: fmtInt(latest?.invoicedPositivation || 0) },
+            { label: 'Positivação total', value: fmtInt(latest?.totalPositivation || 0), accent: true },
+          ]}
+        />
+        <BigInfoCard
+          eyebrow="ACUMULADO"
+          title="Resultado do mês até agora"
+          mainLabel="Sell Out acumulado"
+          mainValue={fmtBRL(total)}
+          rows={[
+            { label: 'Faturado acumulado', value: fmtBRL(faturado) },
+            { label: 'A faturar acumulado', value: fmtBRL(aFaturar) },
+            { label: 'Positivação total', value: fmtInt(positivacao) },
+            { label: 'Última atualização', value: canonical ? fmtDate(canonical.referenceDate) : '—' },
+          ]}
+        />
       </div>
 
-      {summary ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '12px' }}>
-          <PanelKpi label="Meta Sell Out T&C" value={fmtBRL(summary.sellOutTarget)} detail={`Atingimento ${fmtPct(summary.attainment)}`} />
-          <PanelKpi label="Tendência" value={fmtBRL(summary.totalTrend)} detail={`${summary.businessDaysElapsed}/${summary.businessDaysTotal} dias úteis`} />
-          <PanelKpi label="Necessário / dia" value={fmtBRL(summary.neededDailyAverage)} detail={`${summary.businessDaysRemaining} dias úteis restantes`} tone="amber" />
-          <PanelKpi label="Meta Positivação" value={fmtInt(summary.industryPositivityTarget)} detail={`Atingimento ${fmtPct(summary.positivityAttainment)}`} />
-        </div>
-      ) : null}
-
       <PanelCard>
-        <PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Janela móvel de dez dias. O mesmo controle movimenta os dois gráficos e a planilha; ao abrir, o dia mais atual fica no limite direito da visualização." />
+        <PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Gráficos e planilha usam a mesma janela móvel e o mesmo controle de datas." />
         <DailyMovementWindow data={daily} />
       </PanelCard>
-
-      {canonical ? <LineSummary /> : null}
     </div>
+  );
+}
+
+function ManagerialSellOutCards() {
+  const { canonical } = useData();
+  if (!canonical) return null;
+  const s = canonical.sellOut;
+  const dailyTarget = s.businessDaysTotal > 0 ? s.sellOutTarget / s.businessDaysTotal : 0;
+  const dailyCoverage = dailyTarget > 0 ? s.totalDailyAverage / dailyTarget : 0;
+  const positivityDailyTarget = s.businessDaysTotal > 0 ? s.industryPositivityTarget / s.businessDaysTotal : 0;
+  const positivityDailyCurrent = s.businessDaysElapsed > 0 ? s.totalPositivation / s.businessDaysElapsed : 0;
+  const positivityDailyNeeded = s.businessDaysRemaining > 0 ? Math.max(s.industryPositivityTarget - s.totalPositivation, 0) / s.businessDaysRemaining : Math.max(s.industryPositivityTarget - s.totalPositivation, 0);
+
+  return (
+    <>
+      <div className="panel-grid panel-grid-2">
+        <BigInfoCard
+          eyebrow="SELL OUT DIÁRIO"
+          title="Ritmo diário"
+          mainLabel="Venda média diária"
+          mainValue={fmtBRL(s.totalDailyAverage)}
+          rows={[
+            { label: 'Meta · venda média diária', value: fmtBRL(dailyTarget), detail: 'Meta T&C ÷ dias úteis do mês' },
+            { label: 'Cobertura da meta diária', value: fmtPct(dailyCoverage), accent: dailyCoverage < 1 },
+            { label: 'Venda média diária necessária', value: fmtBRL(s.neededDailyAverage), detail: `${s.businessDaysRemaining} dias úteis restantes` },
+          ]}
+        />
+        <BigInfoCard
+          eyebrow="SELL OUT MÊS"
+          title="Resultado e tendência"
+          mainLabel="Acumulado mês · venda"
+          mainValue={fmtBRL(s.total)}
+          rows={[
+            { label: 'Meta mês', value: fmtBRL(s.sellOutTarget) },
+            { label: 'Acum. mês faturado', value: fmtBRL(s.invoiced), detail: s.sellOutTarget > 0 ? `${fmtPct(s.invoiced / s.sellOutTarget)} da meta` : 'Meta T&C não informada' },
+            { label: 'Tendência faturado', value: fmtBRL(s.invoicedTrend), detail: s.sellOutTarget > 0 ? `${fmtPct(s.invoicedTrend / s.sellOutTarget)} da meta` : undefined },
+            { label: 'Acum. mês venda', value: fmtBRL(s.total), detail: s.sellOutTarget > 0 ? `${fmtPct(s.attainment)} da meta` : 'Meta T&C não informada' },
+            { label: 'Tendência venda', value: fmtBRL(s.totalTrend), detail: s.sellOutTarget > 0 ? `${fmtPct(s.totalTrend / s.sellOutTarget)} da meta` : undefined, accent: s.sellOutTarget > 0 && s.totalTrend < s.sellOutTarget },
+          ]}
+        />
+      </div>
+
+      <div className="panel-grid panel-grid-2">
+        <BigInfoCard
+          eyebrow="POSITIVAÇÃO"
+          title="Ritmo e fechamento"
+          mainLabel="Positivação total"
+          mainValue={fmtInt(s.totalPositivation)}
+          rows={[
+            { label: 'Meta positivação', value: fmtInt(s.industryPositivityTarget) },
+            { label: 'Atingimento', value: fmtPct(s.positivityAttainment), accent: s.positivityAttainment < 1 },
+            { label: 'Meta média diária', value: positivityDailyTarget.toFixed(1) },
+            { label: 'Média diária atual', value: positivityDailyCurrent.toFixed(1) },
+            { label: 'Necessário por dia', value: positivityDailyNeeded.toFixed(1), detail: `${s.businessDaysRemaining} dias úteis restantes` },
+          ]}
+        />
+        <BigInfoCard
+          eyebrow="HISTÓRICO"
+          title="Comparativos do painel original"
+          rows={[
+            { label: 'Sell Out mesmo mês do ano anterior', value: 'Dados não carregados' },
+            { label: 'Vs. tendência faturada', value: '—' },
+            { label: 'Sell Out médio dos 3 meses', value: 'Dados não carregados' },
+            { label: 'Vs. tendência faturada', value: '—' },
+          ]}
+          note="O motor atual ainda não recebeu uma base histórica validada. Esses campos ficam vazios de propósito; nenhum valor é estimado."
+        />
+      </div>
+    </>
   );
 }
 
@@ -108,12 +223,15 @@ function Gerencial() {
 
   return (
     <div style={{ display: 'grid', gap: '22px' }}>
+      {canonical ? <ManagerialSellOutCards /> : null}
+      {canonical ? <LineSummary /> : null}
+
       <PanelCard>
         <PanelSectionHeader eyebrow="COORDENAÇÃO" title="Resultado gerencial" description="Consolidação das equipes usando metas da Bússola e movimentos do 8022." />
         <div style={{ overflowX: 'auto', marginTop: '14px' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
             <thead><tr>{['Coordenador','Meta','Faturado','A Faturar','Total','% Meta','Pos. Total','Meta Pos.'].map((heading, index) => <th key={heading} style={{ padding: '10px 12px', textAlign: index === 0 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.68rem', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{heading}</th>)}</tr></thead>
-            <tbody>{rows.map(row => <tr key={row.name} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}><td style={{ padding: '11px 12px', color: 'white', fontWeight: 700 }}>{row.name}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{row.target ? fmtBRL(row.target) : '—'}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{fmtBRL(row.invoiced)}</td><td style={{ padding: '11px 12px', textAlign: 'right', color: '#4ade80' }}>{fmtBRL(row.toInvoice)}</td><td style={{ padding: '11px 12px', textAlign: 'right', fontWeight: 750 }}>{fmtBRL(row.total)}</td><td style={{ padding: '11px 12px', textAlign: 'right', color: '#ef3340' }}>{row.target ? fmtPct(row.attainment) : '—'}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{fmtInt(row.positivity)}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{row.positivityTarget ? fmtInt(row.positivityTarget) : '—'}</td></tr>)}</tbody>
+            <tbody>{rows.map(row => <tr key={row.name} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}><td style={{ padding: '11px 12px', color: 'white', fontWeight: 700 }}>{row.name}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{row.target ? fmtBRL(row.target) : '—'}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{fmtBRL(row.invoiced)}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{fmtBRL(row.toInvoice)}</td><td style={{ padding: '11px 12px', textAlign: 'right', fontWeight: 750 }}>{fmtBRL(row.total)}</td><td style={{ padding: '11px 12px', textAlign: 'right', color: '#ef3340' }}>{row.target ? fmtPct(row.attainment) : '—'}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{fmtInt(row.positivity)}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{row.positivityTarget ? fmtInt(row.positivityTarget) : '—'}</td></tr>)}</tbody>
           </table>
         </div>
       </PanelCard>
@@ -124,7 +242,7 @@ function Gerencial() {
           <div style={{ overflowX: 'auto', marginTop: '14px', maxHeight: '560px' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
               <thead><tr>{['Coord.','Vendedor','Meta','Total','% Meta','Falta Meta','Pos.','Meta Pos.','Target Pos./Dia'].map((heading, index) => <th key={heading} style={{ position: 'sticky', top: 0, background: '#11161d', padding: '9px 10px', textAlign: index < 2 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.66rem', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{heading}</th>)}</tr></thead>
-              <tbody>{vendors.map(vendor => <tr key={`${vendor.newCode}-${vendor.oldCode}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.055)' }}><td style={{ padding: '9px 10px', color: 'var(--panel-muted)' }}>{vendor.coordinatorName}</td><td style={{ padding: '9px 10px', color: 'white', fontWeight: 650 }}>{vendor.name}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtBRL(vendor.salesTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 700 }}>{fmtBRL(vendor.total)}</td><td style={{ padding: '9px 10px', textAlign: 'right', color: '#ef3340' }}>{fmtPct(vendor.attainment)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtBRL(vendor.salesGapToTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtInt(vendor.totalPositivation)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtInt(vendor.positivityTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right', color: '#fcd34d' }}>{vendor.positivityDailyTarget.toFixed(1)}</td></tr>)}</tbody>
+              <tbody>{vendors.map(vendor => <tr key={`${vendor.newCode}-${vendor.oldCode}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.055)' }}><td style={{ padding: '9px 10px', color: 'var(--panel-muted)' }}>{vendor.coordinatorName}</td><td style={{ padding: '9px 10px', color: 'white', fontWeight: 650 }}>{vendor.name}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtBRL(vendor.salesTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 700 }}>{fmtBRL(vendor.total)}</td><td style={{ padding: '9px 10px', textAlign: 'right', color: '#ef3340' }}>{fmtPct(vendor.attainment)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtBRL(vendor.salesGapToTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtInt(vendor.totalPositivation)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtInt(vendor.positivityTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{vendor.positivityDailyTarget.toFixed(1)}</td></tr>)}</tbody>
             </table>
           </div>
         </PanelCard>
