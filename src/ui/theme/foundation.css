@@ -13,6 +13,26 @@ body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 *,
 *::before,
 *::after {
@@ -23,10 +43,7 @@ body {
   min-height: 100vh;
   color: var(--bj-text);
   background-color: var(--bj-bg-bottom);
-  background-image:
-    radial-gradient(ellipse at 18% -10%, rgba(23, 58, 99, 0.28) 0%, rgba(23, 58, 99, 0.08) 27%, transparent 48%),
-    radial-gradient(ellipse at 84% -12%, rgba(143, 16, 41, 0.19) 0%, rgba(143, 16, 41, 0.045) 25%, transparent 45%),
-    linear-gradient(180deg, var(--bj-bg-top) 0%, #07101a 22%, var(--bj-bg-mid) 52%, #020509 75%, var(--bj-bg-bottom) 100%);
+  background-image: radial-gradient(ellipse at top center, var(--bj-bg-top) 0%, var(--bj-bg-mid) 45%, var(--bj-bg-bottom) 85%);
   background-attachment: fixed;
   background-position: center top;
   background-size: cover;
@@ -68,7 +85,6 @@ body {
   box-shadow: 0 25px 56px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
-/* Future tables inherit the material from their glass parent. */
 .bj-glass-table {
   width: 100%;
   border-collapse: collapse;
@@ -99,7 +115,6 @@ body {
   overflow: hidden;
 }
 
-/* Animation: fixed background layer. */
 .triunfante-scroll-backdrop {
   position: fixed;
   left: 50%;
@@ -114,8 +129,7 @@ body {
   background: none;
 }
 
-.triunfante-hq-video,
-.triunfante-hq-fallback {
+.triunfante-canvas {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -124,26 +138,11 @@ body {
   pointer-events: none;
   transform: translateZ(0);
   backface-visibility: hidden;
-}
-
-.triunfante-hq-video {
   object-fit: contain;
   object-position: center;
-  opacity: 0;
-  transition: opacity 160ms ease;
   background: transparent;
 }
 
-.triunfante-hq-fallback {
-  background-repeat: no-repeat;
-  background-position: 0 0;
-  background-size: 300% 200%;
-  opacity: 1;
-  transition: opacity 160ms ease;
-  image-rendering: auto;
-}
-
-/* Sidebar: completely hidden until the pointer reaches the left activation strip. */
 .bj-sidebar {
   position: fixed;
   z-index: var(--bj-layer-sidebar);
@@ -155,13 +154,13 @@ body {
   flex-direction: column;
   overflow: visible;
   color: var(--bj-text);
-  background: rgba(5, 11, 19, 0.30);
-  border-right: 1px solid var(--bj-border-soft);
-  -webkit-backdrop-filter: blur(var(--bj-blur)) saturate(116%);
-  backdrop-filter: blur(var(--bj-blur)) saturate(116%);
-  box-shadow: 20px 0 46px rgba(0, 0, 0, 0.20);
+  background: rgba(15, 23, 42, 0.25);
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: 20px 0 46px rgba(0, 0, 0, 0.50), inset -1px 0 0 rgba(255, 255, 255, 0.05);
   transform: translateX(-100%);
-  transition: transform 210ms cubic-bezier(.2,.8,.2,1), box-shadow 190ms ease;
+  transition: transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 300ms ease, background 300ms ease;
 }
 
 .bj-sidebar::after {
@@ -226,7 +225,6 @@ body {
   box-shadow: 0 0 16px rgba(181, 29, 58, 0.55);
 }
 
-/* Horizontal navigation. */
 .bj-top-tabs {
   position: sticky;
   top: 0;
@@ -239,13 +237,13 @@ body {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  border: 1px solid var(--bj-border-soft);
   border-radius: var(--bj-radius-md);
   color: var(--bj-text);
-  background: rgba(8, 16, 27, 0.34);
-  -webkit-backdrop-filter: blur(var(--bj-blur)) saturate(116%);
-  backdrop-filter: blur(var(--bj-blur)) saturate(116%);
-  box-shadow: var(--bj-shadow-nav);
+  background: rgba(15, 23, 42, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.50), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .bj-top-tab {
@@ -265,6 +263,23 @@ body {
 .bj-top-tab:hover {
   color: #f2f6fb;
   background: rgba(23, 58, 99, 0.14);
+}
+
+.bj-glass-card {
+  padding: 24px;
+  border-radius: var(--bj-radius-md);
+  background: rgba(15, 23, 42, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  color: var(--bj-text);
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+
+.bj-glass-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 42px rgba(0, 0, 0, 0.40), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .bj-top-tab[aria-selected='true'] {

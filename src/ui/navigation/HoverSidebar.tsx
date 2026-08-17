@@ -35,7 +35,10 @@ export function HoverSidebar({
             type="button"
             className="bj-sidebar-item"
             aria-current={item.active ? 'page' : undefined}
-            onClick={item.onSelect}
+            onClick={(e) => {
+              item.onSelect?.()
+              e.currentTarget.blur()
+            }}
           >
             {item.icon ? <span aria-hidden="true">{item.icon}</span> : null}
             <span>
