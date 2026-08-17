@@ -1,5 +1,12 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useData, ProdutoEstoque } from '../store/DataContext';
+import {
+  PanelCard,
+  PanelEmptyState,
+  PanelKpi,
+  PanelPage,
+  PanelSectionHeader,
+} from '../ui/pattern/PanelVisual';
 
 function formatCurrency(val: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
@@ -13,12 +20,11 @@ export function LancamentosPage() {
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: 'asc' | 'desc' } | null>(null);
 
   const sortedProdutos = useMemo(() => {
-    // Apenas produtos marcados como lançamento
     let sortableItems = [...produtos].filter(p => p.isLancamento);
 
     if (searchTerm) {
-      sortableItems = sortableItems.filter(p => 
-        p.codigo.toLowerCase().includes(searchTerm.toLowerCase()) || 
+      sortableItems = sortableItems.filter(p =>
+        p.codigo.toLowerCase().includes(searchTerm.toLowerCase()) ||
         p.descricao.toLowerCase().includes(searchTerm.toLowerCase()) ||
         p.ean.includes(searchTerm)
       );
@@ -42,6 +48,7 @@ export function LancamentosPage() {
         return 0;
       });
     }
+
     return sortableItems;
   }, [produtos, searchTerm, sortConfig]);
 
@@ -49,10 +56,12 @@ export function LancamentosPage() {
     let custo = 0;
     let venda = 0;
     const todosLancamentos = produtos.filter(p => p.isLancamento);
+
     for (const p of todosLancamentos) {
       custo += (p.quantidade * p.custoUnitario) + (p.saldoPedidoValorCusto || 0);
       venda += (p.quantidade * p.vendaUnitario) + (p.saldoPedidoValorVenda || 0);
     }
+
     return { custo, venda };
   }, [produtos]);
 
@@ -71,134 +80,102 @@ export function LancamentosPage() {
 
   if (!isLoaded) {
     return (
-      <div style={{ padding: '80px 40px', textAlign: 'center' }}>
-        <h2 style={{ color: 'white' }}>Nenhum dado carregado</h2>
-        <p style={{ color: 'var(--bj-muted)' }}>Vá até as Configurações e faça o upload das planilhas.</p>
-      </div>
+      <PanelEmptyState
+        icon="◆"
+        title="Nenhum dado carregado"
+        description={<>Vá até <strong>Configurações</strong> e faça o upload das planilhas.</>}
+      />
     );
   }
 
   return (
-    <div style={{ padding: '24px 40px', display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      <header>
-        <h1 style={{ fontSize: '2.5rem', fontWeight: 800, color: 'white', margin: 0 }}>Lançamentos</h1>
-        <p style={{ color: 'var(--bj-muted)', fontSize: '1.1rem', marginTop: '8px' }}>
-          Monitoramento exclusivo do portfólio de lançamentos.
-        </p>
-      </header>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-        <div className="bj-glass-card" style={{ padding: '32px' }}>
-          <h3 style={{ color: 'var(--bj-muted)', fontSize: '1rem', fontWeight: 600, margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Vlr Venda Lançamentos
-          </h3>
-          <div style={{ fontSize: '2.5rem', fontWeight: 800, color: 'white', textShadow: '0 0 40px rgba(255,255,255,0.3)' }}>
-            {formatCurrency(totais.venda)}
-          </div>
+    <PanelPage
+      title="Lançamentos"
+      metricLabel="Valor potencial de venda"
+      metricValue={formatCurrency(totais.venda)}
+    >
+      <div className="panel-stack">
+        <div className="panel-grid panel-grid-2">
+          <PanelKpi label="VLR VENDA LANÇAMENTOS" value={formatCurrency(totais.venda)} tone="red" />
+          <PanelKpi label="VLR CUSTO LANÇAMENTOS" value={formatCurrency(totais.custo)} tone="blue" />
         </div>
 
-        <div className="bj-glass-card" style={{ padding: '32px' }}>
-          <h3 style={{ color: 'var(--bj-muted)', fontSize: '1rem', fontWeight: 600, margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Vlr Custo Lançamentos
-          </h3>
-          <div style={{ fontSize: '2.5rem', fontWeight: 800, color: 'white', textShadow: '0 0 40px rgba(255,255,255,0.3)' }}>
-            {formatCurrency(totais.custo)}
-          </div>
-        </div>
-      </div>
-
-      <div className="bj-glass-card" style={{ flex: 1, padding: '32px', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-          <div>
-            <h2 style={{ color: 'white', fontSize: '1.4rem', fontWeight: 700, margin: 0 }}>Catálogo de Lançamentos ({sortedProdutos.length})</h2>
-          </div>
-          <input 
-            type="text" 
-            placeholder="Buscar por código ou descrição..." 
-            style={{ 
-              padding: '10px 16px', 
-              borderRadius: '8px', 
-              background: 'rgba(0,0,0,0.3)', 
-              border: '1px solid rgba(255,255,255,0.1)', 
-              color: 'white',
-              width: '300px',
-              outline: 'none'
-            }}
-            onChange={(e) => setSearchTerm(e.target.value)}
+        <PanelCard>
+          <PanelSectionHeader
+            eyebrow="PORTFÓLIO"
+            title={`Catálogo de Lançamentos (${sortedProdutos.length})`}
+            description="Monitoramento exclusivo dos itens marcados como lançamento."
+            action={(
+              <input
+                className="panel-input"
+                type="text"
+                placeholder="Buscar por código, EAN ou descrição..."
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            )}
           />
-        </div>
 
-        <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '60vh', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(0,0,0,0.2)' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
-            <thead style={{ position: 'sticky', top: 0, zIndex: 10, background: 'rgba(30,30,40,0.95)', backdropFilter: 'blur(10px)', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
-              <tr style={{ color: 'var(--bj-muted)', textTransform: 'uppercase', fontSize: '0.75rem', letterSpacing: '0.05em' }}>
-                <th onClick={() => requestSort('codigo')} style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}>Código{getSortIcon('codigo')}</th>
-                <th onClick={() => requestSort('ean')} style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}>EAN{getSortIcon('ean')}</th>
-                <th onClick={() => requestSort('descricao')} style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}>Descrição{getSortIcon('descricao')}</th>
-                <th onClick={() => requestSort('quantidade')} style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', textAlign: 'right', cursor: 'pointer' }}>Estoque (Un){getSortIcon('quantidade')}</th>
-                <th onClick={() => requestSort('saldoPedido')} style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', textAlign: 'right', cursor: 'pointer' }}>Pedido (Un){getSortIcon('saldoPedido')}</th>
-                <th onClick={() => requestSort('custoUnitario')} style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', textAlign: 'right', cursor: 'pointer' }}>Custo Un.{getSortIcon('custoUnitario')}</th>
-                <th onClick={() => requestSort('vendaUnitario')} style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.1)', textAlign: 'right', cursor: 'pointer' }}>Venda Un.{getSortIcon('vendaUnitario')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedProdutos.length === 0 ? (
+          <div className="panel-table-wrap">
+            <table className="panel-table">
+              <thead>
                 <tr>
-                  <td colSpan={7} style={{ padding: '32px', textAlign: 'center', color: 'var(--bj-muted)' }}>
-                    Nenhum item marcado como lançamento encontrado.
-                  </td>
+                  <th className="is-sortable" onClick={() => requestSort('codigo')}>Código{getSortIcon('codigo')}</th>
+                  <th className="is-sortable" onClick={() => requestSort('ean')}>EAN{getSortIcon('ean')}</th>
+                  <th className="is-sortable" onClick={() => requestSort('descricao')}>Descrição{getSortIcon('descricao')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('quantidade')}>Estoque (Un){getSortIcon('quantidade')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedido')}>Pedido (Un){getSortIcon('saldoPedido')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('custoUnitario')}>Custo Un.{getSortIcon('custoUnitario')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('vendaUnitario')}>Venda Un.{getSortIcon('vendaUnitario')}</th>
                 </tr>
-              ) : (
-                sortedProdutos.map((p, idx) => (
-                  <tr key={p.codigo} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', background: idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
-                    <td style={{ padding: '16px', color: 'white' }}>{p.codigo}</td>
-                    <td style={{ padding: '16px', color: 'var(--bj-muted)' }}>{p.ean}</td>
-                    <td style={{ padding: '16px', color: 'white', fontWeight: 500 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        {p.descricao}
-                        <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 'bold', background: 'rgba(139, 92, 246, 0.2)', color: '#c4b5fd', border: '1px solid rgba(139, 92, 246, 0.3)' }}>
-                          LANÇAMENTO
-                        </span>
-
-                        {p.quantidade === 0 && p.custoUnitario === 0 && p.saldoPedido > 0 && (
-                          <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 'bold', background: 'rgba(16, 185, 129, 0.2)', color: '#6ee7b7', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                            NOVO
-                          </span>
-                        )}
-                        
-                        {p.quantidade === 0 && (p.custoUnitario > 0 || (p.custoUnitario === 0 && p.saldoPedido === 0)) && (
-                          <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 'bold', background: 'rgba(239, 68, 68, 0.2)', color: '#fca5a5', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
-                            RUPTURA
-                          </span>
-                        )}
-
-                        {p.hasWinthor === false && (
-                          <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 'bold', background: 'rgba(245, 158, 11, 0.2)', color: '#fcd34d', border: '1px solid rgba(245, 158, 11, 0.3)' }}>
-                            SEM CADASTRO WINTHOR
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td style={{ padding: '16px', color: 'white', textAlign: 'right' }}>{p.quantidade.toLocaleString('pt-BR')}</td>
-                    <td style={{ padding: '16px', color: '#f59e0b', textAlign: 'right' }}>{p.saldoPedido.toLocaleString('pt-BR')}</td>
-                    <td style={{ padding: '16px', color: 'var(--bj-muted)', textAlign: 'right' }}>{formatCurrency(p.custoUnitario)}</td>
-                    <td style={{ padding: '16px', color: 'var(--bj-muted)', textAlign: 'right' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                        <span style={{ color: 'white' }}>{formatCurrency(p.vendaUnitario)}</span>
-                        {p.vendaUnitario > 0 && p.custoUnitario > 0 && (
-                          <span style={{ fontSize: '0.7rem', color: '#10b981', fontWeight: 'bold' }}>
-                            {(((p.vendaUnitario - p.custoUnitario) / p.vendaUnitario) * 100).toFixed(1)}% M
-                          </span>
-                        )}
-                      </div>
+              </thead>
+              <tbody>
+                {sortedProdutos.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: 'center', padding: '32px' }} className="is-muted">
+                      Nenhum item marcado como lançamento encontrado.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ) : (
+                  sortedProdutos.map((p) => (
+                    <tr key={p.codigo}>
+                      <td className="is-strong">{p.codigo}</td>
+                      <td className="is-muted">{p.ean}</td>
+                      <td>
+                        <div className="panel-badges">
+                          <span className="is-strong">{p.descricao}</span>
+                          <span className="panel-badge panel-badge-purple">LANÇAMENTO</span>
+                          {p.quantidade === 0 && p.custoUnitario === 0 && p.saldoPedido > 0 && (
+                            <span className="panel-badge panel-badge-green">NOVO</span>
+                          )}
+                          {p.quantidade === 0 && (p.custoUnitario > 0 || (p.custoUnitario === 0 && p.saldoPedido === 0)) && (
+                            <span className="panel-badge panel-badge-red">RUPTURA</span>
+                          )}
+                          {p.hasWinthor === false && (
+                            <span className="panel-badge panel-badge-amber">SEM CADASTRO WINTHOR</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="is-right is-strong">{p.quantidade.toLocaleString('pt-BR')}</td>
+                      <td className="is-right is-amber">{p.saldoPedido.toLocaleString('pt-BR')}</td>
+                      <td className="is-right is-muted">{formatCurrency(p.custoUnitario)}</td>
+                      <td className="is-right">
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+                          <span className="is-strong">{formatCurrency(p.vendaUnitario)}</span>
+                          {p.vendaUnitario > 0 && p.custoUnitario > 0 && (
+                            <span className="is-green" style={{ fontSize: '0.7rem', fontWeight: 800 }}>
+                              {(((p.vendaUnitario - p.custoUnitario) / p.vendaUnitario) * 100).toFixed(1)}% M
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </PanelCard>
       </div>
-    </div>
+    </PanelPage>
   );
 }
