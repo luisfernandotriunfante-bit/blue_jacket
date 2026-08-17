@@ -21,10 +21,11 @@ type CatalogItem = ProdutoEstoque & {
   isRisk: boolean;
   isRupture: boolean;
   isNoWinthor: boolean;
+  isNew: boolean;
 };
 
 type SortKey = keyof ProdutoEstoque | 'totalCusto' | 'totalVenda' | 'soldUnits' | 'coverageDays';
-type CatalogFilter = 'todos' | 'lancamento' | 'risco' | 'ruptura' | 'sem-winthor';
+type CatalogFilter = 'todos' | 'lancamento' | 'novo' | 'risco' | 'ruptura' | 'sem-winthor';
 
 export function EstoquePage() {
   const { isLoaded, produtos, metricas, canonical } = useData();
@@ -60,6 +61,7 @@ export function EstoquePage() {
       const coverageDays = averageDailyUnits > 0 ? product.quantidade / averageDailyUnits : null;
       const requiredRemainingUnits = averageDailyUnits * remaining;
       const isNoWinthor = product.hasWinthor === false;
+      const isNew = isNoWinthor && product.saldoPedido > 0 && !product.isLancamento;
       const isRupture = !isNoWinthor && product.quantidade <= 0;
       const isRisk = !isNoWinthor && product.quantidade > 0 && soldUnits > 0 && remaining > 0 && product.quantidade < requiredRemainingUnits;
 
@@ -72,6 +74,7 @@ export function EstoquePage() {
         isRisk,
         isRupture,
         isNoWinthor,
+        isNew,
       };
     });
   }, [produtos, canonical]);
@@ -79,6 +82,7 @@ export function EstoquePage() {
   const counts = useMemo(() => ({
     todos: catalog.length,
     lancamento: catalog.filter(p => p.isLancamento).length,
+    novo: catalog.filter(p => p.isNew).length,
     risco: catalog.filter(p => p.isRisk).length,
     ruptura: catalog.filter(p => p.isRupture).length,
     semWinthor: catalog.filter(p => p.isNoWinthor).length,
@@ -98,6 +102,7 @@ export function EstoquePage() {
     }
 
     if (activeFilter === 'lancamento') sortableItems = sortableItems.filter(p => p.isLancamento);
+    else if (activeFilter === 'novo') sortableItems = sortableItems.filter(p => p.isNew);
     else if (activeFilter === 'risco') sortableItems = sortableItems.filter(p => p.isRisk);
     else if (activeFilter === 'ruptura') sortableItems = sortableItems.filter(p => p.isRupture);
     else if (activeFilter === 'sem-winthor') sortableItems = sortableItems.filter(p => p.isNoWinthor);
@@ -236,13 +241,14 @@ export function EstoquePage() {
           <PanelSectionHeader
             eyebrow="CATÁLOGO"
             title={`Produtos (${sortedProdutos.length})`}
-            description="Lançamento vem da lista oficial; risco de ruptura usa estoque real × ritmo faturado no 8022 até o fim do mês; Sem Winthor identifica itens conhecidos pelas bases/carteira que ainda não aparecem na posição 105. Sem preço registrado, o painel mostra ausência de informação e não estima valor."
+            description="Lançamento vem da lista oficial; Novo identifica item ainda sem Winthor, já presente na carteira e que não é lançamento; risco de ruptura usa estoque real × ritmo faturado no 8022 até o fim do mês. Sem preço registrado, o painel não estima valor."
           />
 
           <div className="panel-toolbar" style={{ marginBottom: '18px' }}>
             <div className="panel-chips">
               <button className={`panel-chip${activeFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setActiveFilter('todos')}>Todos · {counts.todos}</button>
               <button className={`panel-chip${activeFilter === 'lancamento' ? ' is-active' : ''}`} onClick={() => setActiveFilter('lancamento')}>Lançamentos · {counts.lancamento}</button>
+              <button className={`panel-chip${activeFilter === 'novo' ? ' is-active' : ''}`} onClick={() => setActiveFilter('novo')}>Novos · {counts.novo}</button>
               <button className={`panel-chip is-danger${activeFilter === 'risco' ? ' is-active' : ''}`} onClick={() => setActiveFilter('risco')}>Risco de ruptura · {counts.risco}</button>
               <button className={`panel-chip is-danger${activeFilter === 'ruptura' ? ' is-active' : ''}`} onClick={() => setActiveFilter('ruptura')}>Rupturas · {counts.ruptura}</button>
               <button className={`panel-chip is-warning${activeFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setActiveFilter('sem-winthor')}>Sem Winthor · {counts.semWinthor}</button>
@@ -282,6 +288,7 @@ export function EstoquePage() {
                       <div className="panel-badges">
                         <span className="is-strong">{p.descricao}</span>
                         {p.isLancamento && <span className="panel-badge panel-badge-red">LANÇAMENTO</span>}
+                        {p.isNew && <span className="panel-badge">NOVO</span>}
                         {p.isRisk && <span className="panel-badge panel-badge-red">RISCO DE RUPTURA</span>}
                         {p.isRupture && <span className="panel-badge panel-badge-red">RUPTURA</span>}
                         {p.isNoWinthor && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}
