@@ -164,7 +164,8 @@ export function EstoquePage() {
     meta: number,
     portfolioNote: string
   ) => {
-    const variacao = coberturaEstoque - meta;
+    const coverageAvailable = coberturaEstoque > 0 || cobEstoqueMaisSaldo > 0;
+    const variacao = coverageAvailable ? coberturaEstoque - meta : 0;
     const isNegative = variacao < 0;
 
     return (
@@ -182,9 +183,9 @@ export function EstoquePage() {
         <div className="panel-subgrid">
           <div className="panel-mini-stat">
             <div className="panel-mini-label">Cobertura Atual</div>
-            <div className="panel-mini-value">{coberturaEstoque} dias</div>
-            <div className="panel-mini-note" style={{ color: isNegative ? '#f87171' : 'var(--panel-red)' }}>
-              {isNegative ? '↓' : '↑'} {Math.abs(variacao)} dias {isNegative ? 'abaixo' : 'acima'} da meta
+            <div className="panel-mini-value">{coverageAvailable ? `${coberturaEstoque} dias` : 'Aguardando histórico'}</div>
+            <div className="panel-mini-note" style={{ color: coverageAvailable ? (isNegative ? '#f87171' : 'var(--panel-red)') : 'var(--panel-muted)' }}>
+              {coverageAvailable ? `${isNegative ? '↓' : '↑'} ${Math.abs(variacao)} dias ${isNegative ? 'abaixo' : 'acima'} da meta` : 'Requer Sell Out médio dos 3 meses fechados.'}
             </div>
           </div>
 
@@ -197,7 +198,7 @@ export function EstoquePage() {
           <div className="panel-mini-stat">
             <div className="panel-mini-label">Projeção · Estoque + Pedido</div>
             <div className="panel-mini-value">{formatCurrency(estoqueMaisSaldoVal)}</div>
-            <div className="panel-mini-note">Cobertura projetada: <strong style={{ color: 'var(--panel-text)' }}>{cobEstoqueMaisSaldo} dias</strong></div>
+            <div className="panel-mini-note">Cobertura projetada: <strong style={{ color: 'var(--panel-text)' }}>{coverageAvailable ? `${cobEstoqueMaisSaldo} dias` : 'Aguardando histórico'}</strong></div>
           </div>
         </div>
       </PanelCard>
