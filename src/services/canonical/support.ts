@@ -2,9 +2,30 @@ import type * as XLSX from 'xlsx';
 import type { Row, RcaMap, CompassTarget, PremiseClient, RouteStore, ProductMaster } from './runtime';
 import { cleanCode, cleanDigits, classifyLine, displayNetwork, networkKey, normalizeText, parseNumber, sheetRows } from './utils';
 
+/**
+ * Não basta um campo ter 8-14 dígitos para ele ser EAN/GTIN. O Cadastro 286
+ * também contém códigos SAP/fornecedor de 8 dígitos e eles estavam sendo
+ * confundidos com código de barras, quebrando a conciliação com o 8013.
+ */
 function validEan(value: unknown): string {
   const digits = cleanDigits(value);
-  return digits.length >= 8 && digits.length <= 14 ? digits : '';
+  if (![8, 12, 13, 14].includes(digits.length)) return '';
+  const body = digits.slice(0, -1);
+  const expected = Number(digits.at(-1));
+  let sum = 0;
+  for (let i = body.length - 1, pos = 0; i >= 0; i--, pos++) {
+    sum += Number(body[i]) * (pos % 2 === 0 ? 3 : 1);
+  }
+  const check = (10 - (sum % 10)) % 10;
+  return check === expected ? digits : '';
+}
+
+function cadastroEan(row: Row): string {
+  // Posições observadas no relatório 286. Priorizamos EAN-13 e sempre exigimos
+  // dígito verificador válido; assim um SAP como 61052478 nunca vira EAN.
+  const preferred = [20, 21, 22, 19, 24];
+  const candidates = preferred.map(index => validEan(row[index])).filter(Boolean);
+  return candidates.find(value => value.length === 13) || candidates[0] || '';
 }
 
 export function parseRcaMap(rows: Row[]): RcaMap[] {
@@ -75,13 +96,19 @@ export function parseLegacyNetworkTargets(workbook: XLSX.WorkBook): Map<string, 
 }
 
 export function parsePriceList(rows: Row[]): { bySku: Map<string, ProductMaster>; byEan: Map<string, ProductMaster> } {
-  const bySku = new Map<string, ProductMaster>(); const byEan = new Map<string, ProductMaster>();
+  const bySku = new Map<string, ProductMaster>();
+  const byEan = new Map<string, ProductMaster>();
   for (let i = 1; i < rows.length; i++) {
-    const row = rows[i]; const sku = cleanCode(row[8]); const ean = validEan(row[10]);
+    const row = rows[i];
+    const sku = cleanCode(row[8]);
+    const ean = validEan(row[10]);
     if (!sku && !ean) continue;
-    const description = String(row[9] ?? '').trim(); const category = String(row[39] ?? '').trim(); const subcategory = String(row[40] ?? '').trim();
+    const description = String(row[9] ?? '').trim();
+    const category = String(row[39] ?? '').trim();
+    const subcategory = String(row[40] ?? '').trim();
     const item: ProductMaster = { sku, ean, description, category, subcategory, brand: String(row[41] ?? '').trim(), isLaunch: false, boxPrice: parseNumber(row[65]) || parseNumber(row[56]), unitPrice: parseNumber(row[66]) || parseNumber(row[57]), line: classifyLine(description, category, subcategory) };
-    if (sku) bySku.set(sku, item); if (ean) byEan.set(ean, item);
+    if (sku) bySku.set(sku, item);
+    if (ean) byEan.set(ean, item);
   }
   return { bySku, byEan };
 }
@@ -91,11 +118,10 @@ export function parseCadastro286(rows: Row[]) {
   const factoryToInternal = new Map<string, string>();
   for (const row of rows) {
     if (String(row[0] ?? '').trim() !== '11') continue;
-    const code = cleanCode(row[1]); if (!code || !/^\d+$/.test(code)) continue;
+    const code = cleanCode(row[1]);
+    if (!code || !/^\d+$/.test(code)) continue;
     const factoryCode = cleanCode(row[23]);
-    // O relatório 286 possui células mescladas e a coluna visual "Barras" pode
-    // chegar em 20 ou 21. Nunca aceitamos códigos curtos como EAN.
-    const ean = validEan(row[20]) || validEan(row[21]) || validEan(row[22]);
+    const ean = cadastroEan(row);
     byInternal.set(code, { description: String(row[2] ?? '').trim(), ean, factoryCode });
     if (factoryCode) factoryToInternal.set(factoryCode, code);
   }
