@@ -1,39 +1,22 @@
 # Blue Jacket — Visual Standard v1
 
-Este documento é o contrato visual da aplicação. O objetivo é preservar o que já foi validado sem carregar a arquitetura acumulada do projeto anterior.
+Este documento registra o padrão visual atualmente preservado no projeto.
 
 ## 1. Princípios
 
-1. **Uma única camada de tema.** Não criar arquivos de “correção final”, sobrescritas sucessivas ou CSS de emergência.
-2. **Sem lógica de negócio na UI.** Esta fundação não conhece vendas, metas, estoque, RCA, redes ou documentos.
-3. **Vidro é um primitive.** Toda superfície futura que precise do material usa a mesma receita de `GlassSurface`/tokens.
-4. **Animação é fundo, nunca conteúdo.** Nenhuma tela pode criar stacking context desnecessário que faça a animação aparecer sobre textos ou tabelas.
-5. **Navegação é estrutural.** Sidebar e tabs recebem configuração futura por propriedades; não conhecem módulos reais nesta etapa.
-6. **Somente peças validadas entram no `main`.** Novos componentes e regras serão implementados e validados incrementalmente.
+1. **Uma única camada de tema.** Não criar arquivos de correção final, sobrescritas sucessivas ou CSS de emergência.
+2. **Vidro é um primitive.** Superfícies que precisem do material usam a mesma receita de `GlassSurface` e tokens compartilhados.
+3. **Navegação é estrutural.** Sidebar e tabs devem continuar reutilizáveis e independentes das regras de negócio.
+4. **Somente peças validadas entram no `main`.** Novos componentes e regras são implementados e validados incrementalmente.
+5. **A animação da logo está fora do projeto nesta etapa.** Não manter código, mídia, estilos, tokens ou props reservados para ela.
 
-## 2. Paleta e fundo
+## 2. Fundo e tema
 
-```css
---bj-bg-top: #0b1624;
---bj-bg-mid: #040910;
---bj-bg-bottom: #000205;
---bj-navy: #173a63;
---bj-navy-soft: #285786;
---bj-blood: #8f1029;
---bj-blood-soft: #b51d3a;
---bj-text: #f5f8fc;
---bj-muted: #98a9bd;
-```
-
-O fundo deve ser uma única composição CSS fixa, sem elementos decorativos extras no DOM:
-
-- luz azul suave no alto à esquerda;
-- luz vermelha suave no alto à direita;
-- gradiente vertical do azul-marinho muito escuro para preto.
+O shell visual deve continuar centralizando o fundo e os tokens globais. Páginas individuais não devem criar fundos globais paralelos nem camadas decorativas que disputem com o shell.
 
 ## 3. Material de vidro
 
-Receita oficial:
+Receita base:
 
 ```css
 background: rgba(13, 24, 38, .23);
@@ -43,9 +26,9 @@ backdrop-filter: blur(18px) saturate(116%);
 box-shadow: 0 20px 48px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255, 255, 255, .08);
 ```
 
-Variações podem mudar apenas densidade, raio e espaçamento. Não devem trocar o material por preenchimentos sólidos.
+Variações podem mudar densidade, raio e espaçamento sem substituir o material por preenchimentos sólidos desnecessários.
 
-Uso futuro previsto:
+Uso previsto:
 
 - KPIs;
 - menu lateral;
@@ -56,102 +39,60 @@ Uso futuro previsto:
 
 ## 4. Contrato de camadas
 
-A ordem visual é fixa:
+A ordem visual atual é:
 
-| Camada | z-index | Responsabilidade |
-|---|---:|---|
-| Fundo | 0 | gradientes do shell |
-| Triunfante | 1 | animação central fixa |
-| Conteúdo | 2 | superfícies de vidro e conteúdo futuro |
-| Tabs | 30 | navegação horizontal sticky |
-| Sidebar | 1000 | navegação lateral retrátil |
+| Camada | Responsabilidade |
+|---|---|
+| Fundo | shell e gradiente principal |
+| Conteúdo | páginas, superfícies e informações |
+| Tabs | navegação horizontal |
+| Sidebar | navegação lateral retrátil |
 
-Regras importantes:
+Não existe camada reservada para animação.
 
-- páginas futuras não devem usar `isolation`, `filter`, `transform` ou `z-index` sem necessidade;
-- o vidro precisa enxergar a animação atrás dele para produzir o desfoque real;
-- a animação usa `pointer-events: none` e nunca bloqueia interação;
-- nenhum pseudo-elemento global deve ficar sobre a animação.
-
-## 5. Animação Triunfante
-
-Comportamento validado:
-
-- fixa no centro da viewport;
-- largura desktop `clamp(420px, 38vw, 620px)`;
-- opacidade desktop `0.68`;
-- responde ao scroll para baixo e para cima com rotação 3D no eixo Y;
-- movimento suavizado por `requestAnimationFrame`;
-- captura scroll da página e de elementos internos;
-- wheel fornece resposta imediata;
-- vídeo HQ é reconstruído a partir dos assets versionados;
-- se o vídeo HQ falhar, usa sprite WebP como fallback;
-- não há geração dinâmica de imagem nem substituição por logo genérica.
-
-Constantes da interação:
-
-```text
-PIXELS_PER_LOOP = 720
-ROTATION_PER_PIXEL = 0.58
-MOTION_EASING = 0.22
-SCROLL_STOP_DELAY = 520 ms
-FALLBACK_FRAME_COUNT = 6
-FALLBACK_COLUMNS = 3
-```
-
-## 6. Sidebar
+## 5. Sidebar
 
 Desktop:
 
 - fixa à esquerda;
-- largura aberta: `246px`;
-- estado padrão fora da viewport: `translateX(-100%)`;
-- faixa invisível de 10px na borda esquerda ativa o hover;
-- abre em aproximadamente `210ms` com curva `cubic-bezier(.2,.8,.2,1)`;
-- usa o mesmo vidro oficial;
-- deve aceitar marca, itens e rodapé futuramente por propriedades.
+- largura aberta de `246px`;
+- estado padrão fora da viewport com `translateX(-100%)`;
+- abertura por hover/foco;
+- usa o material de vidro do projeto.
 
 Mobile:
 
-- mantém comportamento retrátil, reposicionado como painel flutuante;
-- detalhes serão refinados quando houver primeira tela real.
+- mantém comportamento retrátil;
+- detalhes podem ser refinados quando necessário, sem duplicar a implementação desktop.
 
-## 7. Navegação horizontal
+## 6. Navegação horizontal
 
 - centralizada na parte alta da tela;
 - `width: max-content`;
 - sticky no topo;
-- vidro oficial;
-- raio externo de aproximadamente 18px;
-- item ativo usa gradiente vermelho escuro;
-- itens inativos usam texto azul-acinzentado;
-- recebe as tabs futuras por propriedades; não possui abas de negócio nesta etapa.
+- material de vidro compartilhado;
+- recebe as tabs por propriedades.
 
-## 8. Regras para futuras páginas
+## 7. Regras para páginas
 
-Quando uma página real for criada:
+1. usar `BlueJacketShell` como estrutura raiz;
+2. manter conteúdo dentro de `.bj-content`;
+3. reutilizar `GlassSurface` e classes compartilhadas;
+4. não redefinir shell, sidebar ou tabs dentro de páginas específicas;
+5. não adicionar CSS global apenas para corrigir um componente isolado;
+6. manter regras de dados e cálculos separadas dos primitives de UI.
 
-1. usar `BlueJacketShell`/estrutura equivalente como raiz;
-2. posicionar todo conteúdo dentro da camada `.bj-content`;
-3. usar `GlassSurface` para material fosco;
-4. não redefinir backdrop, sidebar, tabs ou animação dentro da página;
-5. não adicionar CSS global para corrigir um componente específico;
-6. dados e cálculos ficam fora de `src/ui`.
+## 8. Animação
 
-## 9. Fora do escopo desta etapa
+A animação da logo foi removida por decisão de projeto.
 
-Não fazem parte desta fundação:
+Não devem existir no `main`:
 
-- páginas;
-- KPIs reais;
-- tabelas reais;
-- gráficos reais;
-- fontes de dados;
-- parsers;
-- motores de cálculo;
-- localStorage de negócio;
-- exportação Excel/PDF;
-- modelos de documentos;
-- regras comerciais.
+- componentes de animação;
+- frames ou vídeos da logo;
+- listeners de scroll destinados à animação;
+- props de habilitação/desabilitação da animação;
+- classes CSS específicas;
+- tokens de `z-index` reservados para animação.
 
-Essas partes serão adicionadas uma por vez somente depois de suas fontes e resultados serem validados.
+Caso a animação volte, deverá ser tratada como uma implementação nova e independente.
