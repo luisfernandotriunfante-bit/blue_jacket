@@ -3,7 +3,7 @@ import type { MetricasEstoque, ProdutoEstoque, SellOutData } from '../store/Data
 import type { CanonicalState, CanonicalSupportData, ManualConfiguration, SourceAudit, SourceKind } from '../domain/canonical';
 import { DEFAULT_MANUAL_CONFIGURATION, EMPTY_CANONICAL_SUPPORT } from '../domain/canonical';
 import type { CompassTarget, PremiseClient, ProductMaster, RcaMap, RouteStore, Row, SalesTransaction } from './canonical/runtime';
-import { detectSource, readWorkbook, sheetRows, cleanCode, cleanDigits, normalizeText } from './canonical/utils';
+import { detectSource, readWorkbook, sheetRows, normalizeText } from './canonical/utils';
 import { parseActiveRoute, parseCadastro286, parseCompassTargets, parseLegacyNetworkTargets, parsePremises, parsePriceList, parseRcaMap } from './canonical/support';
 import { applyLaunchList, applyPortfolio, canonicalToInventory, clearPortfolio, inventoryToCanonical, mergePriorPhysical, mergeStock8013, parseSales, parseStock105, refreshTransactionLines } from './canonical/operations';
 import { buildClients, buildCoordinators, buildDaily, buildLines, buildNetworks, buildVendorResults, businessDayStats, legacySellOut, periodBounds } from './canonical/aggregate';
@@ -74,16 +74,12 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
 
   if (launchRows) {
     const launchResult = applyLaunchList(launchRows, products, priceList);
-    if (launchResult.unresolved > 0) warnings.push(`${launchResult.unresolved} lançamento(s) único(s) da lista oficial não foram encontrados no estoque nem na Lista de Preço.`);
+    if (launchResult.unresolved > 0) warnings.push(`${launchResult.unresolved} EAN(s) da lista oficial de lançamentos não foram encontrados no estoque nem na Lista de Preço.`);
     const launchSource = sources.find(source => source.note === 'Lista oficial de lançamentos.');
-    if (launchSource) launchSource.note = `Lista oficial de lançamentos: ${launchResult.unique} item(ns) único(s), ${launchResult.matched} conciliado(s).`;
-  } else {
-    // Sem nova lista, reaproveitamos a classificação oficial persistida da carga anterior.
-    products.forEach(product => {
-      const master = (product.ean ? priceList.byEan.get(cleanDigits(product.ean)) : undefined) || (product.factoryCode ? priceList.bySku.get(cleanCode(product.factoryCode)) : undefined);
-      if (master?.isLaunch) product.isLancamento = true;
-    });
+    if (launchSource) launchSource.note = `Lista oficial de lançamentos por EAN: ${launchResult.unique} EAN(s) único(s), ${launchResult.matched} conciliado(s).`;
   }
+  // Sem uma nova lista oficial, preservamos somente as flags já persistidas no inventário.
+  // Lista de Preço, SKU, código interno e código fabricante não podem criar LANÇAMENTO.
 
   const productArray = Array.from(products.values());
   const stockCost = productArray.reduce((s, p) => s + p.quantidade * p.custoUnitario, 0); const stockSale = productArray.reduce((s, p) => s + p.quantidade * p.vendaUnitario, 0);
