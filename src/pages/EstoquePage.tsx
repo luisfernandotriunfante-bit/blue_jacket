@@ -36,9 +36,14 @@ function matchesNumericFilter(value: number | null | undefined, expression: stri
 
 type CatalogItem = ProdutoEstoque & {
   soldUnits: number;
+  toInvoiceUnits: number;
   averageDailyUnits: number;
   coverageDays: number | null;
   requiredRemainingUnits: number;
+  projectedSupplyUnits: number;
+  remainingDemandUnits: number;
+  isActualRupture: boolean;
+  isProjectedRisk: boolean;
   isRuptureRisk: boolean;
   isNoWinthor: boolean;
 };
@@ -82,55 +87,74 @@ export function EstoquePage() {
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>(EMPTY_COLUMN_FILTERS);
 
   const catalog = useMemo<CatalogItem[]>(() => {
-    const soldByInternal = new Map<string, number>();
-    const soldByFactory = new Map<string, number>();
-    const soldByEan = new Map<string, number>();
+    const invoicedByInternal = new Map<string, number>();
+    const invoicedByFactory = new Map<string, number>();
+    const invoicedByEan = new Map<string, number>();
+    const toInvoiceByInternal = new Map<string, number>();
+    const toInvoiceByFactory = new Map<string, number>();
+    const toInvoiceByEan = new Map<string, number>();
 
     (canonical?.transactions || []).forEach(tx => {
-      if (tx.status !== 'FATURADO') return;
       const units = Math.max(Number(tx.units) || 0, 0);
       if (units <= 0) return;
 
-      if (tx.internalProductCode) soldByInternal.set(tx.internalProductCode, (soldByInternal.get(tx.internalProductCode) || 0) + units);
-      if (tx.manufacturerCode) soldByFactory.set(tx.manufacturerCode, (soldByFactory.get(tx.manufacturerCode) || 0) + units);
+      const byInternal = tx.status === 'A FATURAR' ? toInvoiceByInternal : invoicedByInternal;
+      const byFactory = tx.status === 'A FATURAR' ? toInvoiceByFactory : invoicedByFactory;
+      const byEan = tx.status === 'A FATURAR' ? toInvoiceByEan : invoicedByEan;
+
+      if (tx.internalProductCode) byInternal.set(tx.internalProductCode, (byInternal.get(tx.internalProductCode) || 0) + units);
+      if (tx.manufacturerCode) byFactory.set(tx.manufacturerCode, (byFactory.get(tx.manufacturerCode) || 0) + units);
       const ean = digits(tx.ean);
-      if (ean) soldByEan.set(ean, (soldByEan.get(ean) || 0) + units);
+      if (ean) byEan.set(ean, (byEan.get(ean) || 0) + units);
     });
 
     const elapsed = canonical?.sellOut.businessDaysElapsed || 0;
     const remaining = canonical?.sellOut.businessDaysRemaining || 0;
 
     return produtos.map(product => {
-      const soldUnits = soldByInternal.get(product.codigo)
-        ?? (product.factoryCode ? soldByFactory.get(product.factoryCode) : undefined)
-        ?? (product.ean ? soldByEan.get(digits(product.ean)) : undefined)
+      const productEan = digits(product.ean);
+      const soldUnits = invoicedByInternal.get(product.codigo)
+        ?? (product.factoryCode ? invoicedByFactory.get(product.factoryCode) : undefined)
+        ?? (productEan ? invoicedByEan.get(productEan) : undefined)
         ?? 0;
+      const toInvoiceUnits = toInvoiceByInternal.get(product.codigo)
+        ?? (product.factoryCode ? toInvoiceByFactory.get(product.factoryCode) : undefined)
+        ?? (productEan ? toInvoiceByEan.get(productEan) : undefined)
+        ?? 0;
+
       const averageDailyUnits = elapsed > 0 ? soldUnits / elapsed : 0;
       const coverageDays = averageDailyUnits > 0 ? product.quantidade / averageDailyUnits : null;
       const requiredRemainingUnits = averageDailyUnits * remaining;
+      const projectedSupplyUnits = Math.max(product.quantidade, 0) + Math.max(product.saldoPedido, 0);
+      const remainingDemandUnits = Math.max(toInvoiceUnits, requiredRemainingUnits);
 
-      // Regra de negócio: SEM WINTHOR só pode nascer da CARTEIRA Colgate.
-      // Portanto o item precisa estar pendente na carteira e não ter conciliação Winthor.
-      const isNoWinthor = product.saldoPedido > 0 && product.hasWinthor === false;
+      // SEM WINTHOR nasce exclusivamente da CARTEIRA Colgate. A quantidade pode
+      // vir zerada em algumas linhas; por isso o valor pendente também prova que
+      // o item está na carteira.
+      const hasPortfolioPending = product.saldoPedido > 0 || (product.saldoPedidoValorCusto || 0) > 0;
+      const isNoWinthor = product.hasWinthor === false && hasPortfolioPending;
 
-      // Ruptura e risco de ruptura são uma única família operacional:
-      // item Winthor com demanda no mês e estoque zerado OU insuficiente para
-      // sustentar o ritmo faturado até o fim do mês.
-      const hasDemand = soldUnits > 0;
-      const isActualRupture = product.hasWinthor !== false && hasDemand && product.quantidade <= 0;
+      // Ruptura atual: item Winthor sem estoque disponível, independentemente de
+      // ter faturado no mês. Risco projetado: estoque + carteira não cobre a maior
+      // demanda restante entre pedidos A FATURAR e ritmo faturado projetado.
+      const isActualRupture = product.hasWinthor !== false && product.quantidade <= 0;
       const isProjectedRisk = product.hasWinthor !== false
-        && hasDemand
         && product.quantidade > 0
-        && remaining > 0
-        && product.quantidade < requiredRemainingUnits;
+        && remainingDemandUnits > 0
+        && projectedSupplyUnits < remainingDemandUnits;
       const isRuptureRisk = isActualRupture || isProjectedRisk;
 
       return {
         ...product,
         soldUnits,
+        toInvoiceUnits,
         averageDailyUnits,
         coverageDays,
         requiredRemainingUnits,
+        projectedSupplyUnits,
+        remainingDemandUnits,
+        isActualRupture,
+        isProjectedRisk,
         isRuptureRisk,
         isNoWinthor,
       };
@@ -309,7 +333,7 @@ export function EstoquePage() {
           <PanelSectionHeader
             eyebrow="CATÁLOGO"
             title={`Produtos (${sortedProdutos.length}${sortedProdutos.length !== catalog.length ? ` de ${catalog.length}` : ''})`}
-            description="Lançamento vem da lista oficial por EAN. Sem Winthor aparece somente quando um item da CARTEIRA Colgate não encontra correspondência nos dados Winthor. Ruptura/Risco reúne itens Winthor com venda no mês cujo estoque está zerado ou não sustenta o ritmo faturado até o fim do mês."
+            description="Lançamento vem da lista oficial por EAN. Sem Winthor aparece somente quando um item da CARTEIRA Colgate não encontra correspondência no Winthor. Ruptura/Risco usa estoque atual + carteira em trânsito contra a maior demanda restante entre A FATURAR e o ritmo faturado projetado até o fim do mês."
           />
 
           <div className="panel-toolbar" style={{ marginBottom: '12px' }}>
@@ -366,7 +390,8 @@ export function EstoquePage() {
                       <div className="panel-badges">
                         <span className="is-strong">{p.descricao}</span>
                         {p.isLancamento && <span className="panel-badge panel-badge-red">LANÇAMENTO</span>}
-                        {p.isRuptureRisk && <span className="panel-badge panel-badge-red">RUPTURA / RISCO</span>}
+                        {p.isActualRupture && <span className="panel-badge panel-badge-red">RUPTURA</span>}
+                        {!p.isActualRupture && p.isProjectedRisk && <span className="panel-badge panel-badge-red">RISCO DE RUPTURA</span>}
                         {p.isNoWinthor && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}
                       </div>
                     </td>
