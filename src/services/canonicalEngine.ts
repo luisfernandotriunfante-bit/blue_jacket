@@ -4,7 +4,7 @@ import type { CanonicalHistoryMonth, CanonicalState, CanonicalSupportData, Manua
 import { DEFAULT_MANUAL_CONFIGURATION, EMPTY_CANONICAL_SUPPORT } from '../domain/canonical';
 import type { CompassTarget, PremiseClient, ProductMaster, RcaMap, RouteStore, Row, SalesTransaction } from './canonical/runtime';
 import { detectSource, readWorkbook, sheetRows } from './canonical/utils';
-import { parseActiveRoute, parseCadastro286, parseCompassTargets, parseLegacyNetworkTargets, parsePremises, parsePriceList, parseRcaMap } from './canonical/support';
+import { parseActiveRoute, parseCadastro286, parseCompassTargets, parseLegacyClientNetworks, parseLegacyClientOwners, parseLegacyNetworkOwners, parseLegacyNetworkTargets, parsePremises, parsePriceList, parseRcaMap } from './canonical/support';
 import { applyLaunchList, applyPortfolio, canonicalToInventory, clearPortfolio, inventoryToCanonical, mergePriorPhysical, mergeStock8013, parseSales, parseStock105, refreshTransactionLines } from './canonical/operations';
 import { buildClients, buildCoordinators, buildDaily, buildLines, buildNetworks, buildVendorResults, businessDayStats, legacySellOut, periodBounds } from './canonical/aggregate';
 import { buildHistorySummary, mergeHistoryMonths, parse379History } from './canonical/history';
@@ -69,9 +69,22 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const rcaByNew = new Map(rcas.map(r => [r.newCode, r])); const rcaByOld = new Map(rcas.filter(r => r.oldCode).map(r => [r.oldCode, r]));
   const targets = workbooks.has('compassTargets') ? parseCompassTargets(workbooks.get('compassTargets')!.workbook) : (previousSupport.vendorTargets || []) as CompassTarget[];
   const premises = workbooks.has('premises') ? parsePremises(workbooks.get('premises')!.rows) : (previousSupport.clients || []) as PremiseClient[];
-  const premisesByCnpj = new Map(premises.map(p => [p.cnpj, p]));
   const routeStores = workbooks.has('activeRoute') ? parseActiveRoute(workbooks.get('activeRoute')!.workbook) : (previousSupport.activeRoute || []) as RouteStore[];
   const detectedNetworkTargets = workbooks.has('legacyTopNetworks') ? parseLegacyNetworkTargets(workbooks.get('legacyTopNetworks')!.workbook) : new Map<string, number>(Object.entries(previousSupport.legacyNetworkTargets || {}));
+  const detectedNetworkOwners = workbooks.has('legacyTopNetworks') ? parseLegacyNetworkOwners(workbooks.get('legacyTopNetworks')!.workbook) : new Map<string, {teamCode:string;vendorCode:string}>(Object.entries(previousSupport.legacyNetworkOwners || {}));
+  const detectedClientNetworks = workbooks.has('legacyTopNetworks') ? parseLegacyClientNetworks(workbooks.get('legacyTopNetworks')!.workbook) : new Map<string, string>(Object.entries(previousSupport.legacyClientNetworks || {}));
+  const detectedClientOwners = workbooks.has('legacyTopNetworks') ? parseLegacyClientOwners(workbooks.get('legacyTopNetworks')!.workbook) : new Map<string, {teamCode:string;vendorCode:string}>(Object.entries(previousSupport.legacyClientOwners || {}));
+  const premisesByCnpj = new Map(premises.map(p => [p.cnpj, { ...p }]));
+  detectedClientNetworks.forEach((network, cnpj) => {
+    const existing = premisesByCnpj.get(cnpj);
+    if (existing) {
+      if (!existing.network) existing.network = network;
+    } else {
+      premisesByCnpj.set(cnpj, { cnpj, name: '', city: '', network, profile: '', isTop: false });
+    }
+  });
+  const resolvedPremises = Array.from(premisesByCnpj.values());
+  if (!detectedNetworkTargets.size && routeStores.some(store => store.target > 0)) warnings.push('TOP REDES de referência não carregado; a Meta Redes foi preenchida provisoriamente com a Meta Tops do Roteiro Ativo.');
 
   const priorTransactions = (previousState?.transactions || []) as SalesTransaction[];
   const transactions = refreshTransactionLines(workbooks.has('sales8022') ? parseSales(workbooks.get('sales8022')!.rows, priceList) : priorTransactions, priceList);
@@ -83,7 +96,7 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const maxDate = transactions.map(t => t.date).filter(Boolean).sort().at(-1) || previousState?.referenceDate || new Date().toISOString().slice(0, 10);
   const { start: periodStart, end: periodEnd } = periodBounds(maxDate); const business = businessDayStats(maxDate, config.holidays);
   const industryTarget = targets.reduce((s, t) => s + t.salesTarget, 0); const industryPositivityTarget = targets.reduce((s, t) => s + t.positivityTarget, 0);
-  const clients = buildClients(transactions, premisesByCnpj); const vendors = buildVendorResults(transactions, rcaByNew, rcaByOld, targets, business); const coordinators = buildCoordinators(vendors); const networks = buildNetworks(transactions, premisesByCnpj, routeStores, detectedNetworkTargets); const lines = buildLines(transactions); const daily = buildDaily(transactions);
+  const clients = buildClients(transactions, premisesByCnpj); const vendors = buildVendorResults(transactions, rcaByNew, rcaByOld, targets, business); const coordinators = buildCoordinators(vendors); const networks = buildNetworks(transactions, premisesByCnpj, routeStores, detectedNetworkTargets, detectedNetworkOwners, detectedClientOwners); const lines = buildLines(transactions); const daily = buildDaily(transactions,periodStart,periodEnd);
 
   const priorInventory = canonicalToInventory(previousState?.inventory);
   let products = workbooks.has('stock105') ? parseStock105(workbooks.get('stock105')!.rows, cadastro) : canonicalToInventory(previousState?.inventory);
@@ -122,8 +135,10 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const coverageCostProjected = historyAverage > 0 ? ((stockCost + portfolio.cost) / historyAverage) * 30 : 0;
   if (!historyAverage && (stockSale > 0 || stockCost > 0)) warnings.push('Cobertura de estoque aguardando os três meses fechados anteriores no histórico 379.');
 
-  const support: CanonicalSupportData = { rcas: rcas.map(r => ({ ...r })), vendorTargets: targets.map(t => ({ ...t })), clients: premises.map(p => ({ ...p })), activeRoute: routeStores.map(r => ({ ...r })), legacyNetworkTargets: Object.fromEntries(detectedNetworkTargets.entries()), products: Array.from(priceList.bySku.values()).map(p => ({ ...p })), itemCodes: Array.from(cadastro.byInternal.entries()).map(([internalCode, item]) => ({ internalCode, ...item })) };
-  const sellOutTarget = Math.max(config.sellOutTarget || 0, 0);
+  const support: CanonicalSupportData = { rcas: rcas.map(r => ({ ...r })), vendorTargets: targets.map(t => ({ ...t })), clients: resolvedPremises.map(p => ({ ...p })), activeRoute: routeStores.map(r => ({ ...r })), legacyNetworkTargets: Object.fromEntries(detectedNetworkTargets.entries()), legacyNetworkOwners: Object.fromEntries(detectedNetworkOwners.entries()), legacyClientNetworks: Object.fromEntries(detectedClientNetworks.entries()), legacyClientOwners: Object.fromEntries(detectedClientOwners.entries()), products: Array.from(priceList.bySku.values()).map(p => ({ ...p })), itemCodes: Array.from(cadastro.byInternal.entries()).map(([internalCode, item]) => ({ internalCode, ...item })) };
+  // Na operação Milênio a meta global do painel é a Meta PNA Colgate da
+  // Bússola. A configuração manual continua prevalecendo quando informada.
+  const sellOutTarget = config.sellOutTarget > 0 ? config.sellOutTarget : Math.max(industryTarget, 0);
   const sources = mergeSourceAudits(previousState?.sources || [], currentSources);
   const canonical: CanonicalState = {
     schemaVersion: 2, generatedAt: processedAt, referenceDate: maxDate, periodStart, periodEnd, sources, support,

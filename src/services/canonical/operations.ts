@@ -1,6 +1,6 @@
 import type { CanonicalInventoryProduct } from '../../domain/canonical';
 import type { Row, SalesTransaction, StockProduct } from './runtime';
-import { cleanCode, cleanDigits, classifyLine, normalizeText, parseNumber, toIsoDate } from './utils';
+import { canonicalCoordinatorName, cleanCnpj, cleanCode, cleanDigits, classifyLine, normalizeText, parseNumber, toIsoDate } from './utils';
 import { parseCadastro286, parsePriceList } from './support';
 
 function stockHeaderColumns(rows: Row[]) {
@@ -149,8 +149,12 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
+    const orderedQty = Math.max(parseNumber(row[6]), 0);
+    const billedQty = Math.max(parseNumber(row[7]), 0);
+    // A carteira é integralmente estoque em trânsito até a entrada física no CD.
+    // Linhas abertas usam Order Qty; linhas já faturadas usam Bill Qty.
+    const portfolioQty = orderedQty > 0 ? orderedQty : billedQty;
     const portfolioCost = Math.max(parseNumber(row[8]), 0);
-    const portfolioQty = Math.max(parseNumber(row[6]), 0);
     const rawMaterial = cleanCode(row[4]);
     if (portfolioQty <= 0 && portfolioCost <= 0) continue;
 
@@ -188,15 +192,16 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
       if (!product.factoryCode && cad?.factoryCode) product.factoryCode = cad.factoryCode;
     }
 
-    let semWinthorCounted = false;
-    if (!product && !mappedInternal) {
-      const code = `PORTFOLIO-${rawMaterial}`;
+    if (!product) {
+      // O item pode existir no Cadastro 286 sem aparecer na posição 105
+      // (estoque zero). Ainda assim criamos o registro para receber a carteira.
+      const code = mappedInternal || `PORTFOLIO-${rawMaterial}`;
       product = products.get(code);
       if (!product) {
         product = {
           codigo: code,
-          descricao: master?.description || `Item da carteira · ${rawMaterial}`,
-          ean: cleanDigits(master?.ean || ''),
+          descricao: cad?.description || master?.description || `Item da carteira · ${rawMaterial}`,
+          ean: cleanDigits(cad?.ean || master?.ean || ''),
           quantidade: 0,
           saldoMinimo: 0,
           custoUnitario: 0,
@@ -207,15 +212,13 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
           saldoPedidoValorCusto: 0,
           saldoPedidoValorVenda: 0,
           isLancamento: Boolean(master?.isLaunch),
-          hasWinthor: false,
-          factoryCode: rawMaterial,
+          hasWinthor: Boolean(mappedInternal),
+          factoryCode: cad?.factoryCode || rawMaterial,
         };
         products.set(code, product);
         productsByFactory.set(rawMaterial, product);
         if (product.ean) productsByEan.set(cleanDigits(product.ean), product);
       }
-      unresolved += 1;
-      semWinthorCounted = true;
     }
 
     if (!product) {
@@ -224,13 +227,14 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
       continue;
     }
 
-    if (product.hasWinthor === false && !semWinthorCounted) unresolved += 1;
-
     let portfolioSale = 0;
+    // A Lista de Preços representa Colgate → Milênio e não pode ser usada
+    // como preço Milênio → cliente. A valorização de venda usa somente a
+    // relação custo/venda efetivamente registrada na posição 105 do Winthor.
     if (product.hasWinthor !== false && product.custoUnitario > 0 && product.vendaUnitario > 0 && portfolioCost > 0) {
       portfolioSale = portfolioCost * (product.vendaUnitario / product.custoUnitario);
       totalSale += portfolioSale;
-    } else if (product.hasWinthor !== false && (portfolioCost > 0 || portfolioQty > 0)) {
+    } else if (portfolioCost > 0 || portfolioQty > 0) {
       unresolved += 1;
     }
 
@@ -353,12 +357,12 @@ export function parseSales(rows: Row[], priceList: ReturnType<typeof parsePriceL
       status,
       clientCode: cleanCode(row[3]),
       clientName: String(row[4] ?? '').trim(),
-      cnpj: cleanDigits(row[5]) || cleanCode(row[3]),
+      cnpj: cleanCnpj(row[5]) || cleanCode(row[3]),
       city: String(row[7] ?? '').trim(),
       vendorCode: cleanCode(row[17]),
       vendorName: String(row[18] ?? '').trim(),
       supervisorCode: cleanCode(row[19]),
-      supervisorName: String(row[20] ?? '').trim(),
+      supervisorName: canonicalCoordinatorName(row[20]),
       manufacturerCode,
       ean,
       internalProductCode: cleanCode(row[24]),

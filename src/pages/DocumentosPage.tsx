@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useData } from '../store/DataContext';
 import { downloadSellOutDocument, downloadTopNetworksDocument } from '../services/documentGenerator';
 import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
@@ -6,6 +7,8 @@ const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'curren
 
 export function DocumentosPage() {
   const { canonical } = useData();
+  const [generating, setGenerating] = useState<'painel'|'redes'|null>(null);
+  const [error, setError] = useState('');
 
   if (!canonical) {
     return (
@@ -21,6 +24,17 @@ export function DocumentosPage() {
 
   const sourceCount = canonical.sources.filter(source => source.loaded).length;
   const networkCount = canonical.networks.filter(network => network.networkTarget > 0 || network.topTarget > 0 || network.total > 0).length;
+  const generate = async (kind:'painel'|'redes') => {
+    setGenerating(kind); setError('');
+    try {
+      if (kind === 'painel') await downloadSellOutDocument(canonical);
+      else await downloadTopNetworksDocument(canonical);
+    } catch (generationError) {
+      setError(generationError instanceof Error ? generationError.message : 'Não foi possível gerar o arquivo.');
+    } finally {
+      setGenerating(null);
+    }
+  };
 
   return (
     <PanelPage
@@ -41,8 +55,8 @@ export function DocumentosPage() {
             <Info label="Meta indústria" value={fmtBRL(canonical.industryTarget)} />
             <Info label="Carteira / estoque em trânsito" value={fmtBRL(canonical.stock.pendingPurchaseCost)} />
           </div>
-          <button className="panel-primary-button" onClick={() => downloadSellOutDocument(canonical)}>
-            Gerar Painel Sell Out
+          <button className="panel-primary-button" disabled={generating!==null} onClick={() => void generate('painel')}>
+            {generating==='painel'?'Gerando modelo padrão...':'Gerar Painel Sell Out'}
           </button>
         </PanelCard>
 
@@ -50,7 +64,7 @@ export function DocumentosPage() {
           <PanelSectionHeader
             eyebrow="ENTREGA DIÁRIA"
             title="TOP REDES"
-            description="Gera Top Redes, Loja a Loja e Equipe com Meta Redes editável, Meta Tops do Roteiro Ativo e o realizado do 8022."
+            description="Preenche o modelo oficial com Top Redes, Loja a Loja, Equipe e abas auxiliares usando a mesma base do painel."
           />
           <div style={{ display: 'grid', gap: '8px', margin: '20px 0' }}>
             <Info label="Redes apuradas" value={networkCount.toLocaleString('pt-BR')} />
@@ -58,11 +72,13 @@ export function DocumentosPage() {
             <Info label="Realizado + A faturar" value={fmtBRL(canonical.networks.reduce((sum, network) => sum + network.total, 0))} />
             <Info label="Arquivos válidos na base" value={sourceCount.toLocaleString('pt-BR')} />
           </div>
-          <button className="panel-primary-button" onClick={() => downloadTopNetworksDocument(canonical)}>
-            Gerar TOP REDES
+          <button className="panel-primary-button" disabled={generating!==null} onClick={() => void generate('redes')}>
+            {generating==='redes'?'Gerando modelo padrão...':'Gerar TOP REDES'}
           </button>
         </PanelCard>
       </div>
+
+      {error ? <div style={{color:'#fca5a5',padding:'12px 14px',border:'1px solid rgba(248,113,113,.22)',borderRadius:'10px',background:'rgba(248,113,113,.06)'}}>{error}</div> : null}
 
       {canonical.warnings.length > 0 ? (
         <PanelCard>

@@ -1,6 +1,6 @@
 import type * as XLSX from 'xlsx';
 import type { Row, RcaMap, CompassTarget, PremiseClient, RouteStore, ProductMaster } from './runtime';
-import { cleanCode, cleanDigits, classifyLine, displayNetwork, networkKey, normalizeText, parseNumber, sheetRows } from './utils';
+import { canonicalCoordinatorName, cleanCnpj, cleanCode, cleanDigits, classifyLine, displayNetwork, networkKey, normalizeText, parseNumber, sheetRows } from './utils';
 
 /**
  * Não basta um campo ter 8-14 dígitos para ele ser EAN/GTIN. O Cadastro 286
@@ -33,7 +33,7 @@ export function parseRcaMap(rows: Row[]): RcaMap[] {
   const add = (newCode: unknown, name: unknown, coordCode: unknown, coordName: unknown, oldCode: unknown) => {
     const n = cleanCode(newCode);
     if (!n || normalizeText(n) === 'COD') return;
-    result.set(n, { newCode: n, oldCode: cleanCode(oldCode), name: String(name ?? '').trim(), coordinatorCode: cleanCode(coordCode), coordinatorName: String(coordName ?? '').trim() });
+    result.set(n, { newCode: n, oldCode: cleanCode(oldCode), name: String(name ?? '').trim(), coordinatorCode: cleanCode(coordCode), coordinatorName: canonicalCoordinatorName(coordName) });
   };
   rows.forEach(row => { add(row[0], row[2], row[3], row[4], row[5]); add(row[9], row[10], row[11], row[12], row[13]); });
   return Array.from(result.values());
@@ -50,7 +50,7 @@ export function parseCompassTargets(workbook: XLSX.WorkBook): CompassTarget[] {
     if (normalizeText(row[3]) !== 'MCD' || !normalizeText(row[7]).includes('COLGATE')) continue;
     const oldCode = cleanCode(row[1]);
     if (!oldCode) continue;
-    result.push({ oldCode, name: String(row[4] ?? '').trim(), supervisorName: String(row[0] ?? '').trim(), salesTarget: parseNumber(row[16]), positivityTarget: parseNumber(row[21]) });
+    result.push({ oldCode, name: String(row[4] ?? '').trim(), supervisorName: canonicalCoordinatorName(row[0]), salesTarget: parseNumber(row[16]), positivityTarget: parseNumber(row[21]) });
   }
   return result;
 }
@@ -60,10 +60,13 @@ export function parsePremises(rows: Row[]): PremiseClient[] {
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     if (normalizeText(row[10]) && normalizeText(row[10]) !== 'MILENIO') continue;
-    const cnpj = cleanDigits(row[2]);
+    const cnpj = cleanCnpj(row[2]);
     if (!cnpj) continue;
     const profile = String(row[12] ?? '').trim();
-    result.push({ cnpj, name: String(row[3] ?? '').trim(), city: String(row[6] ?? '').trim(), network: displayNetwork(String(row[15] ?? '')), profile, isTop: normalizeText(profile).includes('TOP VAREJISTA') });
+    const rawNetwork = String(row[15] ?? '').trim();
+    // Rede vazia na base de premissas não significa "SEM REDE" de forma
+    // definitiva: o Roteiro Ativo pode trazer a rede oficial dessa loja.
+    result.push({ cnpj, name: String(row[3] ?? '').trim(), city: String(row[6] ?? '').trim(), network: rawNetwork ? displayNetwork(rawNetwork) : '', profile, isTop: normalizeText(profile).includes('TOP VAREJISTA') });
   }
   return result;
 }
@@ -74,9 +77,9 @@ export function parseActiveRoute(workbook: XLSX.WorkBook): RouteStore[] {
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     if (normalizeText(row[1]) !== 'MILENIO') continue;
-    const cnpj = cleanDigits(row[2]);
+    const cnpj = cleanCnpj(row[2]);
     if (!cnpj) continue;
-    result.push({ cnpj, name: String(row[3] ?? '').trim(), fantasyName: String(row[15] ?? '').trim(), city: String(row[16] ?? '').trim(), networkRaw: String(row[5] ?? '').trim(), managerCnpj: cleanDigits(row[8]), groupingCode: String(row[9] ?? '').trim(), tier: String(row[10] ?? '').trim(), storeType: String(row[11] ?? '').trim(), target: parseNumber(row[18]) });
+    result.push({ cnpj, name: String(row[3] ?? '').trim(), fantasyName: String(row[15] ?? '').trim(), city: String(row[16] ?? '').trim(), networkRaw: String(row[5] ?? '').trim(), managerCnpj: cleanCnpj(row[8]), groupingCode: String(row[9] ?? '').trim(), tier: String(row[10] ?? '').trim(), storeType: String(row[11] ?? '').trim(), target: parseNumber(row[18]) });
   }
   return result;
 }
@@ -91,6 +94,67 @@ export function parseLegacyNetworkTargets(workbook: XLSX.WorkBook): Map<string, 
     if (!name || normalizeText(name) === 'TOTAL') continue;
     const target = parseNumber(rows[i][3]);
     if (target > 0) result.set(networkKey(name), target);
+  }
+  return result;
+}
+
+export function parseLegacyNetworkOwners(workbook: XLSX.WorkBook): Map<string, { teamCode:string; vendorCode:string }> {
+  const rows = sheetRows(workbook, 'Top Redes');
+  const result = new Map<string, { teamCode:string; vendorCode:string }>();
+  const header = rows.findIndex(row => normalizeText(row[0]) === 'REDE' && normalizeText(row[1]).includes('EQUIPE'));
+  if (header < 0) return result;
+  for (let i = header + 1; i < rows.length; i++) {
+    const name = displayNetwork(String(rows[i][0] ?? ''));
+    if (!name || normalizeText(name) === 'TOTAL') continue;
+    const teamCode = cleanCode(rows[i][1]);
+    const vendorCode = cleanCode(rows[i][2]);
+    if (teamCode || vendorCode) result.set(networkKey(name), { teamCode, vendorCode });
+  }
+  return result;
+}
+
+export function parseLegacyClientNetworks(workbook: XLSX.WorkBook): Map<string, string> {
+  const rows = sheetRows(workbook, 'redes');
+  const result = new Map<string, string>();
+  const headerIndex = rows.findIndex(row => row.some(cell => normalizeText(cell) === 'CNPJ') && row.some(cell => normalizeText(cell) === 'REDE'));
+  if (headerIndex < 0) return result;
+  const header = rows[headerIndex].map(normalizeText);
+  const cnpjColumn = header.findIndex(value => value === 'CNPJ');
+  const networkColumn = header.findIndex(value => value === 'REDE');
+  for (let i = headerIndex + 1; i < rows.length; i++) {
+    const cnpj = cleanCnpj(rows[i][cnpjColumn]);
+    const rawNetwork = String(rows[i][networkColumn] ?? '').trim();
+    if (cnpj && rawNetwork) result.set(cnpj, displayNetwork(rawNetwork));
+  }
+  return result;
+}
+
+export function parseLegacyClientOwners(workbook: XLSX.WorkBook): Map<string, { teamCode:string; vendorCode:string }> {
+  const teamRows = sheetRows(workbook, 'Equipe');
+  const teamByVendor = new Map<string, string>();
+  const teamHeader = teamRows.findIndex(row => row.some(cell => normalizeText(cell) === 'COD') && row.some(cell => normalizeText(cell) === 'COORD'));
+  if (teamHeader >= 0) {
+    const header = teamRows[teamHeader].map(normalizeText);
+    const vendorColumn = header.findIndex(value => value === 'COD');
+    const teamColumn = header.findIndex(value => value === 'COORD');
+    for (let i = teamHeader + 1; i < teamRows.length; i++) {
+      const vendor = cleanCode(teamRows[i][vendorColumn]);
+      const team = cleanCode(teamRows[i][teamColumn]);
+      if (vendor) teamByVendor.set(vendor, team);
+    }
+  }
+
+  const rows = sheetRows(workbook, '319');
+  const result = new Map<string, { teamCode:string; vendorCode:string }>();
+  const headerIndex = rows.findIndex(row => row.some(cell => normalizeText(cell) === 'CNPJ') && row.some(cell => normalizeText(cell) === 'REP'));
+  if (headerIndex < 0) return result;
+  const header = rows[headerIndex].map(normalizeText);
+  const cnpjColumn = header.findIndex(value => value === 'CNPJ');
+  const vendorColumn = header.findIndex(value => value === 'REP');
+  for (let i = headerIndex + 1; i < rows.length; i++) {
+    const cnpj = cleanCnpj(rows[i][cnpjColumn]);
+    const vendorCode = cleanCode(rows[i][vendorColumn]);
+    if (cnpj && vendorCode) result.set(cnpj, { vendorCode, teamCode: teamByVendor.get(vendorCode) || '' });
   }
   return result;
 }
