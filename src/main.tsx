@@ -7,6 +7,7 @@ import { PanelEmptyState, PanelPage } from './ui/pattern/PanelVisual'
 import { EstoquePage } from './pages/EstoquePage'
 import { LancamentosPage } from './pages/LancamentosPage'
 import { ConfiguracoesPage } from './pages/ConfiguracoesPage'
+import { MetasPage } from './pages/MetasPage'
 import { SellOutPage } from './pages/SellOutPage'
 import { DocumentosPage } from './pages/DocumentosPage'
 import { DataProvider } from './store/DataContext'
@@ -24,6 +25,7 @@ function App() {
     { id: 'clientes', label: 'Clientes', active: activeTab === 'clientes', onSelect: () => setActiveTab('clientes') },
     { id: 'atividades', label: 'Atividades', active: activeTab === 'atividades', onSelect: () => setActiveTab('atividades') },
     { id: 'relatorios', label: 'Documentos', active: activeTab === 'relatorios', onSelect: () => setActiveTab('relatorios') },
+    { id: 'metas', label: 'Metas', active: activeTab === 'metas', onSelect: () => setActiveTab('metas') },
     { id: 'configuracoes', label: 'Configurações', active: activeTab === 'configuracoes', onSelect: () => setActiveTab('configuracoes') },
   ]
 
@@ -54,6 +56,8 @@ function App() {
         <SellOutPage />
       ) : activeTab === 'relatorios' ? (
         <DocumentosPage />
+      ) : activeTab === 'metas' ? (
+        <MetasPage />
       ) : activeTab === 'configuracoes' ? (
         <ConfiguracoesPage />
       ) : (
@@ -73,6 +77,5 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
     <DataProvider>
       <App />
-    </DataProvider>
-  </React.StrictMode>,
+    </React.StrictMode>,
 )
