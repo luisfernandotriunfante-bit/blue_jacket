@@ -74,9 +74,16 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
 
   if (launchRows) {
     const launchResult = applyLaunchList(launchRows, products, priceList);
-    if (launchResult.unresolved > 0) warnings.push(`${launchResult.unresolved} lançamento(s) da lista oficial não foram encontrados no estoque nem na Lista de Preço.`);
+    if (launchResult.unresolved > 0) warnings.push(`${launchResult.unresolved} lançamento(s) único(s) da lista oficial não foram encontrados no estoque nem na Lista de Preço.`);
+    const launchSource = sources.find(source => source.note === 'Lista oficial de lançamentos.');
+    if (launchSource) launchSource.note = `Lista oficial de lançamentos: ${launchResult.unique} item(ns) único(s), ${launchResult.matched} conciliado(s).`;
+  } else {
+    // Sem nova lista, reaproveitamos a classificação oficial persistida da carga anterior.
+    products.forEach(product => {
+      const master = (product.ean ? priceList.byEan.get(cleanDigits(product.ean)) : undefined) || (product.factoryCode ? priceList.bySku.get(cleanCode(product.factoryCode)) : undefined);
+      if (master?.isLaunch) product.isLancamento = true;
+    });
   }
-  products.forEach(product => { const master = (product.ean ? priceList.byEan.get(cleanDigits(product.ean)) : undefined) || (product.factoryCode ? priceList.bySku.get(cleanCode(product.factoryCode)) : undefined); if (master?.isLaunch) product.isLancamento = true; });
 
   const productArray = Array.from(products.values());
   const stockCost = productArray.reduce((s, p) => s + p.quantidade * p.custoUnitario, 0); const stockSale = productArray.reduce((s, p) => s + p.quantidade * p.vendaUnitario, 0);
@@ -85,14 +92,14 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const invClients = new Set(transactions.filter(t => t.status === 'FATURADO').map(t => t.cnpj)); const allClients = new Set(transactions.map(t => t.cnpj)); const futurePositivation = Math.max(allClients.size - invClients.size, 0);
   const invDailyAverage = business.elapsed > 0 ? invoiced / business.elapsed : 0; const totalDailyAverage = business.elapsed > 0 ? total / business.elapsed : 0;
   const coverageCurrent = 0; const coverageProjected = 0;
-  if (stockSale > 0) warnings.push('Cobertura de estoque ficou pendente de uma base histórica validada; o motor não inventa cobertura a partir do 8022 parcial.');
+  if (stockSale > 0 || stockCost > 0) warnings.push('Cobertura de estoque aguardando histórico: a regra validada é Estoque ÷ Sell Out médio dos 3 meses fechados × 30. O 8022 parcial não substitui essa base.');
 
   const support: CanonicalSupportData = { rcas: rcas.map(r => ({ ...r })), vendorTargets: targets.map(t => ({ ...t })), clients: premises.map(p => ({ ...p })), activeRoute: routeStores.map(r => ({ ...r })), legacyNetworkTargets: Object.fromEntries(detectedNetworkTargets.entries()), products: Array.from(priceList.bySku.values()).map(p => ({ ...p })), itemCodes: Array.from(cadastro.byInternal.entries()).map(([internalCode, item]) => ({ internalCode, ...item })) };
   const sellOutTarget = Math.max(config.sellOutTarget || 0, 0);
   const canonical: CanonicalState = {
     schemaVersion: 2, generatedAt: new Date().toISOString(), referenceDate: maxDate, periodStart, periodEnd, sources, support,
     transactions: transactions.map(tx => ({ ...tx })), inventory: inventoryToCanonical(products), daily, industryTarget, industryPositivityTarget,
-    sellOut: { invoiced, toInvoice, total, sellOutTarget, attainment: sellOutTarget > 0 ? total / sellOutTarget : 0, invoicedPositivation: invClients.size, futurePositivation, totalPositivation: invClients.size + futurePositivation, industryPositivityTarget, positivityAttainment: industryPositivityTarget > 0 ? (invClients.size + futurePositivation) / industryPositivityTarget : 0, ticketAverage: invClients.size > 0 ? invoiced / invClients.size : 0, businessDaysTotal: business.total, businessDaysElapsed: business.elapsed, businessDaysRemaining: business.remaining, invoicedDailyAverage: invDailyAverage, totalDailyAverage, neededDailyAverage: business.remaining > 0 ? Math.max(sellOutTarget - total, 0) / business.remaining : Math.max(sellOutTarget - total, 0), invoicedTrend: business.elapsed > 0 ? invDailyAverage * business.total : 0, totalTrend: business.elapsed > 0 ? totalDailyAverage * business.total : 0 },
+    sellOut: { invoiced, toInvoice, total, sellOutTarget, attainment: sellOutTarget > 0 ? total / sellOutTarget : 0, invoicedPositivation: invClients.size, futurePositivation, totalPositivation: invClients.size + futurePositivation, industryPositivityTarget, positivityAttainment: industryPositivityTarget > 0 ? (invClients.size + futurePositivation) / industryPositivityTarget : 0, ticketAverage: invClients.size > 0 ? invoiced / invClients.size : 0, businessDaysTotal: business.total, businessDaysElapsed: business.elapsed, businessDaysRemaining: business.remaining, invoicedDailyAverage: invDailyAverage, totalDailyAverage: totalDailyAverage, neededDailyAverage: business.remaining > 0 ? Math.max(sellOutTarget - total, 0) / business.remaining : Math.max(sellOutTarget - total, 0), invoicedTrend: business.elapsed > 0 ? invDailyAverage * business.total : 0, totalTrend: business.elapsed > 0 ? totalDailyAverage * business.total : 0 },
     stock: { costValue: stockCost, saleValue: stockSale, pendingPurchaseCost: portfolio.cost, pendingPurchaseSale: portfolio.sale, projectedCostValue: stockCost + portfolio.cost, projectedSaleValue: stockSale + portfolio.sale, physicalUnits, physicalCases, grossKg, coverageCurrentDays: Math.round(coverageCurrent), coverageProjectedDays: Math.round(coverageProjected), coverageTargetDays: config.coverageTargetDays },
     vendors, coordinators, clients,
     networks: networks.map(n => { const manual = config.networkTargets[n.key]; const target = Number.isFinite(manual) ? Math.max(manual, 0) : n.detectedNetworkTarget; return { ...n, networkTarget: target, networkAttainment: target > 0 ? n.total / target : 0, gapToNetworkTarget: Math.max(target - n.total, 0) }; }),
