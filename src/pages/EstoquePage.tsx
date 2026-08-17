@@ -11,13 +11,8 @@ const digits = (value: string | undefined) => String(value || '').replace(/\D/g,
 function parseLocaleNumber(raw: string): number {
   let value = raw.trim().replace(/r\$/gi, '').replace(/\s/g, '');
   if (!value) return Number.NaN;
-
-  if (value.includes(',')) {
-    value = value.replace(/\./g, '').replace(',', '.');
-  } else if (/^-?\d{1,3}(\.\d{3})+$/.test(value)) {
-    value = value.replace(/\./g, '');
-  }
-
+  if (value.includes(',')) value = value.replace(/\./g, '').replace(',', '.');
+  else if (/^-?\d{1,3}(\.\d{3})+$/.test(value)) value = value.replace(/\./g, '');
   return Number(value);
 }
 
@@ -28,7 +23,6 @@ function matchesNumericFilter(value: number | null | undefined, expression: stri
 
   const match = filter.match(/^(>=|<=|>|<|=)?\s*(.+)$/);
   if (!match) return true;
-
   const operator = match[1] || '=';
   const target = parseLocaleNumber(match[2]);
   if (!Number.isFinite(target)) return true;
@@ -45,14 +39,12 @@ type CatalogItem = ProdutoEstoque & {
   averageDailyUnits: number;
   coverageDays: number | null;
   requiredRemainingUnits: number;
-  isRisk: boolean;
-  isRupture: boolean;
+  isRuptureRisk: boolean;
   isNoWinthor: boolean;
-  isNew: boolean;
 };
 
 type SortKey = keyof ProdutoEstoque | 'totalCusto' | 'totalVenda' | 'soldUnits' | 'coverageDays';
-type CatalogFilter = 'todos' | 'lancamento' | 'novo' | 'risco' | 'ruptura' | 'sem-winthor';
+type CatalogFilter = 'todos' | 'lancamento' | 'ruptura-risco' | 'sem-winthor';
 
 type ColumnFilters = {
   codigo: string;
@@ -99,25 +91,11 @@ export function EstoquePage() {
       const units = Math.max(Number(tx.units) || 0, 0);
       if (units <= 0) return;
 
-      if (tx.internalProductCode) {
-        soldByInternal.set(tx.internalProductCode, (soldByInternal.get(tx.internalProductCode) || 0) + units);
-      }
-      if (tx.manufacturerCode) {
-        soldByFactory.set(tx.manufacturerCode, (soldByFactory.get(tx.manufacturerCode) || 0) + units);
-      }
+      if (tx.internalProductCode) soldByInternal.set(tx.internalProductCode, (soldByInternal.get(tx.internalProductCode) || 0) + units);
+      if (tx.manufacturerCode) soldByFactory.set(tx.manufacturerCode, (soldByFactory.get(tx.manufacturerCode) || 0) + units);
       const ean = digits(tx.ean);
       if (ean) soldByEan.set(ean, (soldByEan.get(ean) || 0) + units);
     });
-
-    // O Cadastro 286 é a fonte de verdade para dizer se um produto existe no
-    // Winthor. Posição 105 indica estoque; 8013 indica físico; lista de lançamentos
-    // é uma fonte externa. Nenhuma dessas fontes, isoladamente, pode classificar
-    // um item como "Sem Winthor".
-    const winthorItems = canonical?.support?.itemCodes || [];
-    const winthorByInternal = new Set(winthorItems.map(item => String(item.internalCode || '').trim()).filter(Boolean));
-    const winthorByEan = new Set(winthorItems.map(item => digits(item.ean)).filter(Boolean));
-    const winthorByFactory = new Set(winthorItems.map(item => String(item.factoryCode || '').trim()).filter(Boolean));
-    const hasCadastro286 = winthorItems.length > 0;
 
     const elapsed = canonical?.sellOut.businessDaysElapsed || 0;
     const remaining = canonical?.sellOut.businessDaysRemaining || 0;
@@ -131,21 +109,21 @@ export function EstoquePage() {
       const coverageDays = averageDailyUnits > 0 ? product.quantidade / averageDailyUnits : null;
       const requiredRemainingUnits = averageDailyUnits * remaining;
 
-      const registeredIn286 = winthorByInternal.has(String(product.codigo || '').trim())
-        || (Boolean(product.ean) && winthorByEan.has(digits(product.ean)))
-        || (Boolean(product.factoryCode) && winthorByFactory.has(String(product.factoryCode || '').trim()));
+      // Regra de negócio: SEM WINTHOR só pode nascer da CARTEIRA Colgate.
+      // Portanto o item precisa estar pendente na carteira e não ter conciliação Winthor.
+      const isNoWinthor = product.saldoPedido > 0 && product.hasWinthor === false;
 
-      // Lançamentos sintéticos são mantidos para auditoria da lista oficial, mas
-      // não devem receber o rótulo "Sem Winthor" só por não estarem na Posição 105.
-      const isNoWinthor = !product.isLancamento
-        && (hasCadastro286 ? !registeredIn286 : product.hasWinthor === false);
-      const isNew = isNoWinthor && product.saldoPedido > 0 && !product.isLancamento;
-      const isRupture = !isNoWinthor && product.quantidade <= 0;
-      const isRisk = !isNoWinthor
+      // Ruptura e risco de ruptura são uma única família operacional:
+      // item Winthor com demanda no mês e estoque zerado OU insuficiente para
+      // sustentar o ritmo faturado até o fim do mês.
+      const hasDemand = soldUnits > 0;
+      const isActualRupture = product.hasWinthor !== false && hasDemand && product.quantidade <= 0;
+      const isProjectedRisk = product.hasWinthor !== false
+        && hasDemand
         && product.quantidade > 0
-        && soldUnits > 0
         && remaining > 0
         && product.quantidade < requiredRemainingUnits;
+      const isRuptureRisk = isActualRupture || isProjectedRisk;
 
       return {
         ...product,
@@ -153,10 +131,8 @@ export function EstoquePage() {
         averageDailyUnits,
         coverageDays,
         requiredRemainingUnits,
-        isRisk,
-        isRupture,
+        isRuptureRisk,
         isNoWinthor,
-        isNew,
       };
     });
   }, [produtos, canonical]);
@@ -164,9 +140,7 @@ export function EstoquePage() {
   const counts = useMemo(() => ({
     todos: catalog.length,
     lancamento: catalog.filter(p => p.isLancamento).length,
-    novo: catalog.filter(p => p.isNew).length,
-    risco: catalog.filter(p => p.isRisk).length,
-    ruptura: catalog.filter(p => p.isRupture).length,
+    rupturaRisco: catalog.filter(p => p.isRuptureRisk).length,
     semWinthor: catalog.filter(p => p.isNoWinthor).length,
   }), [catalog]);
 
@@ -175,38 +149,25 @@ export function EstoquePage() {
     const search = searchTerm.trim().toLowerCase();
 
     if (search) {
-      sortableItems = sortableItems.filter(p => [
-        p.codigo,
-        p.ean,
-        p.descricao,
-        p.factoryCode,
-      ].some(value => String(value || '').toLowerCase().includes(search)));
+      sortableItems = sortableItems.filter(p => [p.codigo, p.ean, p.descricao, p.factoryCode]
+        .some(value => String(value || '').toLowerCase().includes(search)));
     }
 
     if (activeFilter === 'lancamento') sortableItems = sortableItems.filter(p => p.isLancamento);
-    else if (activeFilter === 'novo') sortableItems = sortableItems.filter(p => p.isNew);
-    else if (activeFilter === 'risco') sortableItems = sortableItems.filter(p => p.isRisk);
-    else if (activeFilter === 'ruptura') sortableItems = sortableItems.filter(p => p.isRupture);
+    else if (activeFilter === 'ruptura-risco') sortableItems = sortableItems.filter(p => p.isRuptureRisk);
     else if (activeFilter === 'sem-winthor') sortableItems = sortableItems.filter(p => p.isNoWinthor);
 
     const codeFilter = columnFilters.codigo.trim().toLowerCase();
     const eanFilter = columnFilters.ean.trim().toLowerCase();
     const descriptionFilter = columnFilters.descricao.trim().toLowerCase();
 
-    if (codeFilter) {
-      sortableItems = sortableItems.filter(p => String(p.codigo || '').toLowerCase().includes(codeFilter));
-    }
-    if (eanFilter) {
-      sortableItems = sortableItems.filter(p => String(p.ean || '').toLowerCase().includes(eanFilter));
-    }
-    if (descriptionFilter) {
-      sortableItems = sortableItems.filter(p => String(p.descricao || '').toLowerCase().includes(descriptionFilter));
-    }
+    if (codeFilter) sortableItems = sortableItems.filter(p => String(p.codigo || '').toLowerCase().includes(codeFilter));
+    if (eanFilter) sortableItems = sortableItems.filter(p => String(p.ean || '').toLowerCase().includes(eanFilter));
+    if (descriptionFilter) sortableItems = sortableItems.filter(p => String(p.descricao || '').toLowerCase().includes(descriptionFilter));
 
     sortableItems = sortableItems.filter(p => {
       const totalCusto = p.custoUnitario > 0 ? p.quantidade * p.custoUnitario : null;
       const totalVenda = p.vendaUnitario > 0 ? p.quantidade * p.vendaUnitario : null;
-
       return matchesNumericFilter(p.quantidade, columnFilters.quantidade)
         && matchesNumericFilter(p.soldUnits, columnFilters.soldUnits)
         && matchesNumericFilter(p.coverageDays, columnFilters.coverageDays)
@@ -221,7 +182,6 @@ export function EstoquePage() {
       sortableItems.sort((a, b) => {
         let valA: any = a[sortConfig.key as keyof CatalogItem];
         let valB: any = b[sortConfig.key as keyof CatalogItem];
-
         if (sortConfig.key === 'totalCusto') {
           valA = a.quantidade * a.custoUnitario;
           valB = b.quantidade * b.custoUnitario;
@@ -232,7 +192,6 @@ export function EstoquePage() {
           valA = a.coverageDays ?? Number.POSITIVE_INFINITY;
           valB = b.coverageDays ?? Number.POSITIVE_INFINITY;
         }
-
         if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
         if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
@@ -290,13 +249,7 @@ export function EstoquePage() {
   );
 
   if (!isLoaded) {
-    return (
-      <PanelEmptyState
-        icon="◆"
-        title="Nenhum dado carregado"
-        description={<>Vá até <strong>Configurações</strong> e faça o upload das planilhas de estoque, itens e carteira.</>}
-      />
-    );
+    return <PanelEmptyState icon="◆" title="Nenhum dado carregado" description={<>Vá até <strong>Configurações</strong> e faça o upload das planilhas de estoque, itens e carteira.</>} />;
   }
 
   const renderKpiSection = (
@@ -316,14 +269,8 @@ export function EstoquePage() {
 
     return (
       <PanelCard style={{ borderLeft: '4px solid var(--panel-red)' }}>
-        <PanelSectionHeader
-          eyebrow={title}
-          title={estoqueAtualLabel}
-          action={<span className="panel-badge">META COBERTURA · {meta} DIAS</span>}
-        />
-        <div style={{ color: 'var(--panel-text)', fontSize: 'clamp(1.8rem, 4vw, 3rem)', fontWeight: 800, letterSpacing: '-0.04em', lineHeight: 1, marginBottom: '20px' }}>
-          {formatCurrency(estoqueAtualVal)}
-        </div>
+        <PanelSectionHeader eyebrow={title} title={estoqueAtualLabel} action={<span className="panel-badge">META COBERTURA · {meta} DIAS</span>} />
+        <div style={{ color: 'var(--panel-text)', fontSize: 'clamp(1.8rem, 4vw, 3rem)', fontWeight: 800, letterSpacing: '-0.04em', lineHeight: 1, marginBottom: '20px' }}>{formatCurrency(estoqueAtualVal)}</div>
         <div className="panel-subgrid">
           <div className="panel-mini-stat">
             <div className="panel-mini-label">Cobertura Atual</div>
@@ -340,83 +287,44 @@ export function EstoquePage() {
           <div className="panel-mini-stat">
             <div className="panel-mini-label">Projeção · Estoque + Pedido</div>
             <div className="panel-mini-value">{formatCurrency(estoqueMaisSaldoVal)}</div>
-            <div className="panel-mini-note">
-              Cobertura projetada: <strong style={{ color: 'var(--panel-text)' }}>{coverageAvailable ? `${cobEstoqueMaisSaldo} dias` : 'Aguardando histórico'}</strong>
-            </div>
+            <div className="panel-mini-note">Cobertura projetada: <strong style={{ color: 'var(--panel-text)' }}>{coverageAvailable ? `${cobEstoqueMaisSaldo} dias` : 'Aguardando histórico'}</strong></div>
           </div>
         </div>
       </PanelCard>
     );
   };
 
-  const costCoverageCurrent = canonical?.stock.coverageCostCurrentDays
-    ?? metricas.coberturaDiasAtualCusto
-    ?? metricas.coberturaDiasAtual;
-  const costCoverageProjected = canonical?.stock.coverageCostProjectedDays
-    ?? metricas.coberturaEstoqueMaisSaldoCusto
-    ?? metricas.coberturaEstoqueMaisSaldo;
+  const costCoverageCurrent = canonical?.stock.coverageCostCurrentDays ?? metricas.coberturaDiasAtualCusto ?? metricas.coberturaDiasAtual;
+  const costCoverageProjected = canonical?.stock.coverageCostProjectedDays ?? metricas.coberturaEstoqueMaisSaldoCusto ?? metricas.coberturaEstoqueMaisSaldo;
 
   return (
     <PanelPage title="Estoque" metricLabel="Valor potencial de venda" metricValue={formatCurrency(metricas.valorEstoqueVenda)}>
       <div className="panel-stack">
         <div className="panel-grid panel-grid-2">
-          {renderKpiSection(
-            'VLR VENDA',
-            'Faturamento Potencial do Estoque Atual',
-            metricas.valorEstoqueVenda,
-            metricas.coberturaDiasAtual,
-            metricas.saldoPedidoVenda,
-            metricas.valorEstoqueVenda + metricas.saldoPedidoVenda,
-            metricas.coberturaEstoqueMaisSaldo,
-            metricas.metaCobertura,
-            'Somente itens da carteira com preço de venda registrado no sistema.',
-          )}
-          {renderKpiSection(
-            'VLR CUSTO',
-            'Custo de Aquisição do Estoque Atual',
-            metricas.valorEstoqueCompra,
-            costCoverageCurrent,
-            metricas.saldoPedidoCusto,
-            metricas.valorEstoqueCompra + metricas.saldoPedidoCusto,
-            costCoverageProjected,
-            metricas.metaCobertura,
-            'Valor integral informado na carteira.',
-          )}
+          {renderKpiSection('VLR VENDA', 'Faturamento Potencial do Estoque Atual', metricas.valorEstoqueVenda, metricas.coberturaDiasAtual, metricas.saldoPedidoVenda, metricas.valorEstoqueVenda + metricas.saldoPedidoVenda, metricas.coberturaEstoqueMaisSaldo, metricas.metaCobertura, 'Somente itens da carteira com preço de venda registrado no sistema.')}
+          {renderKpiSection('VLR CUSTO', 'Custo de Aquisição do Estoque Atual', metricas.valorEstoqueCompra, costCoverageCurrent, metricas.saldoPedidoCusto, metricas.valorEstoqueCompra + metricas.saldoPedidoCusto, costCoverageProjected, metricas.metaCobertura, 'Valor integral informado na carteira.')}
         </div>
 
         <PanelCard>
           <PanelSectionHeader
             eyebrow="CATÁLOGO"
             title={`Produtos (${sortedProdutos.length}${sortedProdutos.length !== catalog.length ? ` de ${catalog.length}` : ''})`}
-            description="Lançamento vem da lista oficial por EAN; Novo identifica item realmente ausente do Cadastro 286, já presente na carteira e que não é lançamento; risco de ruptura usa estoque real × ritmo faturado no 8022 até o fim do mês. O status Sem Winthor é validado exclusivamente contra o Cadastro 286."
+            description="Lançamento vem da lista oficial por EAN. Sem Winthor aparece somente quando um item da CARTEIRA Colgate não encontra correspondência nos dados Winthor. Ruptura/Risco reúne itens Winthor com venda no mês cujo estoque está zerado ou não sustenta o ritmo faturado até o fim do mês."
           />
 
           <div className="panel-toolbar" style={{ marginBottom: '12px' }}>
             <div className="panel-chips">
               <button className={`panel-chip${activeFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setActiveFilter('todos')}>Todos · {counts.todos}</button>
               <button className={`panel-chip${activeFilter === 'lancamento' ? ' is-active' : ''}`} onClick={() => setActiveFilter('lancamento')}>Lançamentos · {counts.lancamento}</button>
-              <button className={`panel-chip${activeFilter === 'novo' ? ' is-active' : ''}`} onClick={() => setActiveFilter('novo')}>Novos · {counts.novo}</button>
-              <button className={`panel-chip is-danger${activeFilter === 'risco' ? ' is-active' : ''}`} onClick={() => setActiveFilter('risco')}>Risco de ruptura · {counts.risco}</button>
-              <button className={`panel-chip is-danger${activeFilter === 'ruptura' ? ' is-active' : ''}`} onClick={() => setActiveFilter('ruptura')}>Rupturas · {counts.ruptura}</button>
+              <button className={`panel-chip is-danger${activeFilter === 'ruptura-risco' ? ' is-active' : ''}`} onClick={() => setActiveFilter('ruptura-risco')}>Ruptura / Risco · {counts.rupturaRisco}</button>
               <button className={`panel-chip is-warning${activeFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setActiveFilter('sem-winthor')}>Sem Winthor · {counts.semWinthor}</button>
             </div>
-            <input
-              id="searchInput"
-              className="panel-input"
-              type="text"
-              value={searchTerm}
-              placeholder="Buscar por código, EAN ou descrição..."
-              onChange={event => setSearchTerm(event.target.value)}
-            />
+            <input id="searchInput" className="panel-input" type="text" value={searchTerm} placeholder="Buscar por código, EAN ou descrição..." onChange={event => setSearchTerm(event.target.value)} />
           </div>
 
           <div className="panel-toolbar" style={{ marginBottom: '18px', justifyContent: 'flex-end' }}>
-            <span style={{ color: 'var(--panel-muted)', fontSize: '0.72rem' }}>
-              Filtros numéricos: use &gt;, &lt;, &gt;=, &lt;= ou =. Ex.: &gt;1000 ou &lt;R$ 5,00.
-            </span>
-            <button className="panel-secondary-button" onClick={clearFilters} disabled={!hasAnyFilter}>
-              Limpar filtros{activeColumnFilterCount > 0 ? ` · ${activeColumnFilterCount}` : ''}
-            </button>
+            <span style={{ color: 'var(--panel-muted)', fontSize: '0.72rem' }}>Filtros numéricos: use &gt;, &lt;, &gt;=, &lt;= ou =. Ex.: &gt;1000 ou &lt;R$ 5,00.</span>
+            <button className="panel-secondary-button" onClick={clearFilters} disabled={!hasAnyFilter}>Limpar filtros{activeColumnFilterCount > 0 ? ` · ${activeColumnFilterCount}` : ''}</button>
           </div>
 
           <div className="panel-table-wrap">
@@ -458,18 +366,14 @@ export function EstoquePage() {
                       <div className="panel-badges">
                         <span className="is-strong">{p.descricao}</span>
                         {p.isLancamento && <span className="panel-badge panel-badge-red">LANÇAMENTO</span>}
-                        {p.isNew && <span className="panel-badge">NOVO</span>}
-                        {p.isRisk && <span className="panel-badge panel-badge-red">RISCO DE RUPTURA</span>}
-                        {p.isRupture && <span className="panel-badge panel-badge-red">RUPTURA</span>}
+                        {p.isRuptureRisk && <span className="panel-badge panel-badge-red">RUPTURA / RISCO</span>}
                         {p.isNoWinthor && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}
                       </div>
                     </td>
                     <td className="is-right is-strong">{p.quantidade.toLocaleString('pt-BR')}</td>
                     <td className="is-right">{Math.round(p.soldUnits).toLocaleString('pt-BR')}</td>
                     <td className="is-right">
-                      {p.coverageDays === null
-                        ? '—'
-                        : <span style={{ color: p.isRisk || p.isRupture ? 'var(--panel-red)' : 'var(--panel-text-dim)', fontWeight: p.isRisk ? 800 : 500 }}>{p.coverageDays.toFixed(1)} dias</span>}
+                      {p.coverageDays === null ? '—' : <span style={{ color: p.isRuptureRisk ? 'var(--panel-red)' : 'var(--panel-text-dim)', fontWeight: p.isRuptureRisk ? 800 : 500 }}>{p.coverageDays.toFixed(1)} dias</span>}
                     </td>
                     <td className="is-right">{p.saldoPedido.toLocaleString('pt-BR')}</td>
                     <td className="is-right is-muted">{p.custoUnitario > 0 ? formatCurrency(p.custoUnitario) : '—'}</td>
