@@ -8,7 +8,6 @@ Este documento registra o padrão visual atualmente preservado no projeto.
 2. **Vidro é um primitive.** Superfícies que precisem do material usam a mesma receita de `GlassSurface` e tokens compartilhados.
 3. **Navegação é estrutural.** Sidebar e tabs devem continuar reutilizáveis e independentes das regras de negócio.
 4. **Somente peças validadas entram no `main`.** Novos componentes e regras são implementados e validados incrementalmente.
-5. **A animação da logo está fora do projeto nesta etapa.** Não manter código, mídia, estilos, tokens ou props reservados para ela.
 
 ## 2. Fundo e tema
 
@@ -48,8 +47,6 @@ A ordem visual atual é:
 | Tabs | navegação horizontal |
 | Sidebar | navegação lateral retrátil |
 
-Não existe camada reservada para animação.
-
 ## 5. Sidebar
 
 Desktop:
@@ -81,18 +78,3 @@ Mobile:
 4. não redefinir shell, sidebar ou tabs dentro de páginas específicas;
 5. não adicionar CSS global apenas para corrigir um componente isolado;
 6. manter regras de dados e cálculos separadas dos primitives de UI.
-
-## 8. Animação
-
-A animação da logo foi removida por decisão de projeto.
-
-Não devem existir no `main`:
-
-- componentes de animação;
-- frames ou vídeos da logo;
-- listeners de scroll destinados à animação;
-- props de habilitação/desabilitação da animação;
-- classes CSS específicas;
-- tokens de `z-index` reservados para animação.
-
-Caso a animação volte, deverá ser tratada como uma implementação nova e independente.
