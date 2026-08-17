@@ -1,6 +1,7 @@
-import React, { useState, useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { useData } from '../store/DataContext';
 import { processExcelFiles, processSellOutFile } from '../services/excelParser';
+import { PanelCard, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const FILE_TYPES: { key: string; label: string; color: string }[] = [
   { key: 'posicao', label: 'Posição de Estoque', color: '#3b82f6' },
@@ -83,8 +84,8 @@ export function ConfiguracoesPage() {
 
       setSuccess(true);
     } catch (error) {
-      console.error("Erro ao processar planilhas:", error);
-      alert("Houve um erro ao ler os arquivos. Verifique o console.");
+      console.error('Erro ao processar planilhas:', error);
+      alert('Houve um erro ao ler os arquivos. Verifique o console.');
     } finally {
       setIsProcessing(false);
     }
@@ -94,128 +95,120 @@ export function ConfiguracoesPage() {
   const vendasFiles = selectedFiles.filter(f => f.name.toLowerCase().includes('vendas') || f.name.toLowerCase().includes('8022'));
 
   return (
-    <div style={{ padding: '24px 40px', display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      <header>
-        <h1 style={{ fontSize: '2.5rem', fontWeight: 800, color: 'white', margin: 0 }}>Configurações</h1>
-        <p style={{ color: 'var(--bj-muted)', fontSize: '1.1rem', marginTop: '8px' }}>
-          Upload dos relatórios diários. Adicione os arquivos e clique em processar.
-        </p>
-      </header>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
-        <div
-          className="bj-glass-card"
-          style={{
-            border: isDragging ? '2px dashed #3b82f6' : '1px solid rgba(255,255,255,0.1)',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            minHeight: '200px', cursor: 'pointer', transition: 'all 0.2s ease',
-            backgroundColor: isDragging ? 'rgba(59,130,246,0.1)' : 'rgba(15,23,42,0.25)'
-          }}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <input type="file" multiple accept=".xls,.xlsx" style={{ display: 'none' }} ref={fileInputRef} onChange={handleFileChange} />
-          <div style={{ fontSize: '3rem', marginBottom: '16px' }}>📂</div>
-          <h2 style={{ color: 'white', marginBottom: '8px', textAlign: 'center' }}>Arraste os arquivos Excel aqui</h2>
-          <p style={{ color: 'var(--bj-muted)', textAlign: 'center' }}>
-            Ou clique para selecionar.
-          </p>
-          <div style={{ marginTop: '20px', display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'center' }}>
-            {FILE_TYPES.map(ft => (
-              <span key={ft.key} style={{ fontSize: '0.7rem', padding: '3px 8px', borderRadius: '12px', background: `${ft.color}22`, color: ft.color, border: `1px solid ${ft.color}44` }}>
-                {ft.label}
-              </span>
-            ))}
+    <PanelPage
+      title="Configurações"
+      metricLabel="Arquivos na fila"
+      metricValue={selectedFiles.length.toLocaleString('pt-BR')}
+    >
+      <div className="panel-grid panel-grid-2">
+        <PanelCard className={`panel-dropzone${isDragging ? ' is-dragging' : ''}`}>
+          <input
+            type="file"
+            multiple
+            accept=".xls,.xlsx"
+            style={{ display: 'none' }}
+            ref={fileInputRef}
+            onChange={handleFileChange}
+          />
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            style={{ width: '100%', minHeight: '190px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
+          >
+            <div className="panel-dropzone-icon">⬆</div>
+            <h2>Arraste os arquivos Excel aqui</h2>
+            <p>Ou clique para selecionar os relatórios que deseja processar.</p>
+            <div className="panel-badges" style={{ justifyContent: 'center', marginTop: '18px' }}>
+              {FILE_TYPES.map(ft => (
+                <span
+                  key={ft.key}
+                  className="panel-badge"
+                  style={{ color: ft.color, borderColor: `${ft.color}44`, background: `${ft.color}12` }}
+                >
+                  {ft.label}
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
+        </PanelCard>
 
-        <div className="bj-glass-card" style={{ display: 'flex', flexDirection: 'column' }}>
-          <h2 style={{ color: 'white', fontSize: '1.2rem', marginBottom: '16px' }}>
-            Arquivos na Fila ({selectedFiles.length})
-          </h2>
+        <PanelCard style={undefined as never}>
+          <PanelSectionHeader
+            eyebrow="IMPORTAÇÃO"
+            title={`Arquivos na Fila (${selectedFiles.length})`}
+            description="Os arquivos permanecem separados por módulo até o processamento."
+          />
 
-          {estoqueFiles.length > 0 && (
-            <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#60a5fa', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
-                📦 Módulo de Estoque ({estoqueFiles.length})
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {estoqueFiles.map(f => {
-                  const { label, color } = getFileType(f.name);
-                  return (
-                    <FileRow key={f.name} file={f} label={label} color={color} onRemove={removeFile} />
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {vendasFiles.length > 0 && (
-            <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#f87171', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '8px' }}>
-                📊 Módulo Sell-Out / Vendas ({vendasFiles.length})
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {vendasFiles.map(f => {
-                  const { label, color } = getFileType(f.name);
-                  return (
-                    <FileRow key={f.name} file={f} label={label} color={color} onRemove={removeFile} />
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {selectedFiles.length === 0 && (
-            <div style={{ color: 'var(--bj-muted)', fontStyle: 'italic', flex: 1, display: 'flex', alignItems: 'center' }}>
-              Nenhum arquivo adicionado.
-            </div>
-          )}
-
-          <div style={{ marginTop: 'auto', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <button
-              onClick={handleProcess}
-              disabled={selectedFiles.length === 0 || isProcessing}
-              style={{
-                background: selectedFiles.length > 0
-                  ? 'linear-gradient(135deg, #3b82f6, #6366f1)'
-                  : 'rgba(255,255,255,0.1)',
-                color: 'white', border: 'none', padding: '14px 24px', borderRadius: '10px',
-                fontWeight: 'bold', fontSize: '1rem', cursor: selectedFiles.length > 0 ? 'pointer' : 'not-allowed',
-                transition: 'all 0.2s ease', boxShadow: selectedFiles.length > 0 ? '0 4px 20px rgba(99,102,241,0.4)' : 'none'
-              }}
-            >
-              {isProcessing ? '⚙️ Processando...' : '🚀 Processar Dados e Gerar Painéis'}
-            </button>
-            {success && (
-              <div style={{ color: '#10b981', textAlign: 'center', fontWeight: 'bold', padding: '10px', background: 'rgba(16,185,129,0.1)', borderRadius: '8px', border: '1px solid rgba(16,185,129,0.3)' }}>
-                ✓ Painéis atualizados com sucesso!
+          <div className="panel-stack" style={{ gap: '18px' }}>
+            {estoqueFiles.length > 0 && (
+              <div>
+                <div className="panel-eyebrow" style={{ color: '#60a5fa', marginBottom: '9px' }}>
+                  ESTOQUE · {estoqueFiles.length}
+                </div>
+                <div className="panel-file-list">
+                  {estoqueFiles.map(f => {
+                    const { label, color } = getFileType(f.name);
+                    return <FileRow key={f.name} file={f} label={label} color={color} onRemove={removeFile} />;
+                  })}
+                </div>
               </div>
             )}
+
+            {vendasFiles.length > 0 && (
+              <div>
+                <div className="panel-eyebrow" style={{ marginBottom: '9px' }}>
+                  SELL OUT · {vendasFiles.length}
+                </div>
+                <div className="panel-file-list">
+                  {vendasFiles.map(f => {
+                    const { label, color } = getFileType(f.name);
+                    return <FileRow key={f.name} file={f} label={label} color={color} onRemove={removeFile} />;
+                  })}
+                </div>
+              </div>
+            )}
+
+            {selectedFiles.length === 0 && (
+              <div style={{ color: 'var(--panel-muted)', fontStyle: 'italic', minHeight: '82px', display: 'flex', alignItems: 'center' }}>
+                Nenhum arquivo adicionado.
+              </div>
+            )}
+
+            <div style={{ marginTop: 'auto', paddingTop: '4px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <button
+                className="panel-primary-button"
+                onClick={handleProcess}
+                disabled={selectedFiles.length === 0 || isProcessing}
+              >
+                {isProcessing ? 'Processando dados...' : 'Processar dados e atualizar painéis'}
+              </button>
+              {success && <div className="panel-success">Painéis atualizados com sucesso.</div>}
+            </div>
           </div>
-        </div>
+        </PanelCard>
       </div>
-    </div>
+    </PanelPage>
   );
 }
 
 function FileRow({ file, label, color, onRemove }: { file: File; label: string; color: string; onRemove: (name: string) => void }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: `1px solid ${color}33` }}>
-      <div>
-        <div style={{ color, fontWeight: 'bold', fontSize: '0.85rem' }}>{label}</div>
-        <div style={{ color: 'var(--bj-muted)', fontSize: '0.75rem', marginTop: '2px' }}>{file.name}</div>
-        <div style={{ color: '#64748b', fontSize: '0.7rem', marginTop: '2px' }}>
-          Atualizado: {new Date(file.lastModified).toLocaleDateString('pt-BR')}
-        </div>
+    <div className="panel-file-row" style={{ borderLeft: `3px solid ${color}` }}>
+      <div style={{ minWidth: 0 }}>
+        <div className="panel-file-title" style={{ color }}>{label}</div>
+        <div className="panel-file-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</div>
+        <div className="panel-file-date">Atualizado: {new Date(file.lastModified).toLocaleDateString('pt-BR')}</div>
       </div>
       <button
+        className="panel-icon-button"
         onClick={(e) => { e.stopPropagation(); onRemove(file.name); }}
-        style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '8px', fontSize: '1rem' }}
         title="Remover"
-      >✕</button>
+        aria-label={`Remover ${file.name}`}
+      >
+        ✕
+      </button>
     </div>
   );
 }
