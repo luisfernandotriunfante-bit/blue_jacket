@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../store/DataContext';
-import { DailyMovementChart } from '../ui/charts/DailyMovementChart';
+import { DailyMovementWindow } from '../ui/charts/DailyMovementWindow';
 import { PanelCard, PanelEmptyState, PanelKpi, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -16,11 +16,7 @@ export function SellOutPage() {
   if (!canonical && !sellOut) {
     return (
       <PanelPage title="Sell Out">
-        <PanelEmptyState
-          icon="▥"
-          title="Nenhum relatório de vendas carregado"
-          description="Vá em Configurações e processe o vendas-8022 para iniciar a visão gerencial."
-        />
+        <PanelEmptyState icon="▥" title="Nenhum relatório de vendas carregado" description="Vá em Configurações e processe o vendas-8022 para iniciar a visão gerencial." />
       </PanelPage>
     );
   }
@@ -49,7 +45,7 @@ function Resumo() {
   const aFaturar = summary?.toInvoice ?? sellOut?.aFaturarTotal ?? 0;
   const total = summary?.total ?? sellOut?.vendaTotal ?? 0;
   const positivacao = summary?.totalPositivation ?? sellOut?.positivacaoTotal ?? 0;
-  const daily = canonical?.daily ?? (sellOut?.diasDeVenda || []).map(d => ({ date: d.data, invoiced: d.faturado, toInvoice: Math.max(d.venda - d.faturado, 0), total: d.venda, invoicedPositivation: d.positivacao, totalPositivation: d.positivacao }));
+  const daily = canonical?.daily ?? (sellOut?.diasDeVenda || []).map(day => ({ date: day.data, invoiced: day.faturado, toInvoice: Math.max(day.venda - day.faturado, 0), total: day.venda, invoicedPositivation: day.positivacao, totalPositivation: day.positivacao }));
 
   return (
     <div style={{ display: 'grid', gap: '22px' }}>
@@ -70,17 +66,8 @@ function Resumo() {
       ) : null}
 
       <PanelCard>
-        <PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Gráfico e planilha com faturado, a faturar e Sell Out total do período." />
-        <DailyMovementChart data={daily} />
-        <div style={{ marginTop: '22px', paddingTop: '18px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-          <div style={{ color: 'var(--panel-muted)', fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '10px' }}>Planilha diária</div>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
-              <thead><tr>{['Data','Faturado','A Faturar','Sell Out','Pos. Fat.','Pos. Total'].map((h, i) => <th key={h} style={{ padding: '10px 12px', textAlign: i === 0 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.68rem', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{h}</th>)}</tr></thead>
-              <tbody>{daily.map(d => <tr key={d.date} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}><td style={{ padding: '10px 12px', color: 'white', fontWeight: 650 }}>{new Date(`${d.date}T12:00:00`).toLocaleDateString('pt-BR')}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'white' }}>{fmtBRL(d.invoiced)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: '#4ade80' }}>{fmtBRL(d.toInvoice)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'white', fontWeight: 750 }}>{fmtBRL(d.total)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--panel-muted)' }}>{fmtInt(d.invoicedPositivation)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: '#c4b5fd' }}>{fmtInt(d.totalPositivation)}</td></tr>)}</tbody>
-            </table>
-          </div>
-        </div>
+        <PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Janela móvel de sete dias. O mesmo controle movimenta gráfico e planilha; ao abrir, o dia mais atual fica no limite direito da visualização." />
+        <DailyMovementWindow data={daily} />
       </PanelCard>
 
       {canonical ? <LineSummary /> : null}
@@ -115,8 +102,8 @@ function Gerencial() {
   const hasCanonical = Boolean(canonical);
 
   const rows = useMemo(() => {
-    if (hasCanonical) return coordinators.map(c => ({ name: c.name, target: c.salesTarget, invoiced: c.invoiced, toInvoice: c.toInvoice, total: c.total, attainment: c.attainment, positivity: c.totalPositivation, positivityTarget: c.positivityTarget }));
-    return legacyCoordinators.map(c => ({ name: c.nomeCoord, target: 0, invoiced: c.faturado, toInvoice: c.aFaturar, total: c.faturado + c.aFaturar, attainment: 0, positivity: c.positivacao, positivityTarget: 0 }));
+    if (hasCanonical) return coordinators.map(coord => ({ name: coord.name, target: coord.salesTarget, invoiced: coord.invoiced, toInvoice: coord.toInvoice, total: coord.total, attainment: coord.attainment, positivity: coord.totalPositivation, positivityTarget: coord.positivityTarget }));
+    return legacyCoordinators.map(coord => ({ name: coord.nomeCoord, target: 0, invoiced: coord.faturado, toInvoice: coord.aFaturar, total: coord.faturado + coord.aFaturar, attainment: 0, positivity: coord.positivacao, positivityTarget: 0 }));
   }, [hasCanonical, coordinators, legacyCoordinators]);
 
   return (
@@ -124,7 +111,10 @@ function Gerencial() {
       <PanelCard>
         <PanelSectionHeader eyebrow="COORDENAÇÃO" title="Resultado gerencial" description="Consolidação das equipes usando metas da Bússola e movimentos do 8022." />
         <div style={{ overflowX: 'auto', marginTop: '14px' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}><thead><tr>{['Coordenador','Meta','Faturado','A Faturar','Total','% Meta','Pos. Total','Meta Pos.'].map((h, i) => <th key={h} style={{ padding: '10px 12px', textAlign: i === 0 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.68rem', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{h}</th>)}</tr></thead><tbody>{rows.map(row => <tr key={row.name} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}><td style={{ padding: '11px 12px', color: 'white', fontWeight: 700 }}>{row.name}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{row.target ? fmtBRL(row.target) : '—'}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{fmtBRL(row.invoiced)}</td><td style={{ padding: '11px 12px', textAlign: 'right', color: '#4ade80' }}>{fmtBRL(row.toInvoice)}</td><td style={{ padding: '11px 12px', textAlign: 'right', fontWeight: 750 }}>{fmtBRL(row.total)}</td><td style={{ padding: '11px 12px', textAlign: 'right', color: '#ef3340' }}>{row.target ? fmtPct(row.attainment) : '—'}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{fmtInt(row.positivity)}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{row.positivityTarget ? fmtInt(row.positivityTarget) : '—'}</td></tr>)}</tbody></table>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+            <thead><tr>{['Coordenador','Meta','Faturado','A Faturar','Total','% Meta','Pos. Total','Meta Pos.'].map((heading, index) => <th key={heading} style={{ padding: '10px 12px', textAlign: index === 0 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.68rem', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{heading}</th>)}</tr></thead>
+            <tbody>{rows.map(row => <tr key={row.name} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}><td style={{ padding: '11px 12px', color: 'white', fontWeight: 700 }}>{row.name}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{row.target ? fmtBRL(row.target) : '—'}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{fmtBRL(row.invoiced)}</td><td style={{ padding: '11px 12px', textAlign: 'right', color: '#4ade80' }}>{fmtBRL(row.toInvoice)}</td><td style={{ padding: '11px 12px', textAlign: 'right', fontWeight: 750 }}>{fmtBRL(row.total)}</td><td style={{ padding: '11px 12px', textAlign: 'right', color: '#ef3340' }}>{row.target ? fmtPct(row.attainment) : '—'}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{fmtInt(row.positivity)}</td><td style={{ padding: '11px 12px', textAlign: 'right' }}>{row.positivityTarget ? fmtInt(row.positivityTarget) : '—'}</td></tr>)}</tbody>
+          </table>
         </div>
       </PanelCard>
 
@@ -132,7 +122,10 @@ function Gerencial() {
         <PanelCard>
           <PanelSectionHeader eyebrow="VENDEDORES" title="Ritmo individual" description="Meta, realizado + a faturar, gap e positivação por vendedor." />
           <div style={{ overflowX: 'auto', marginTop: '14px', maxHeight: '560px' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}><thead><tr>{['Coord.','Vendedor','Meta','Total','% Meta','Falta Meta','Pos.','Meta Pos.','Target Pos./Dia'].map((h, i) => <th key={h} style={{ position: 'sticky', top: 0, background: '#11161d', padding: '9px 10px', textAlign: i < 2 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.66rem', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{h}</th>)}</tr></thead><tbody>{vendors.map(v => <tr key={`${v.newCode}-${v.oldCode}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.055)' }}><td style={{ padding: '9px 10px', color: 'var(--panel-muted)' }}>{v.coordinatorName}</td><td style={{ padding: '9px 10px', color: 'white', fontWeight: 650 }}>{v.name}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtBRL(v.salesTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 700 }}>{fmtBRL(v.total)}</td><td style={{ padding: '9px 10px', textAlign: 'right', color: '#ef3340' }}>{fmtPct(v.attainment)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtBRL(v.salesGapToTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtInt(v.totalPositivation)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtInt(v.positivityTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right', color: '#fcd34d' }}>{v.positivityDailyTarget.toFixed(1)}</td></tr>)}</tbody></table>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+              <thead><tr>{['Coord.','Vendedor','Meta','Total','% Meta','Falta Meta','Pos.','Meta Pos.','Target Pos./Dia'].map((heading, index) => <th key={heading} style={{ position: 'sticky', top: 0, background: '#11161d', padding: '9px 10px', textAlign: index < 2 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.66rem', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{heading}</th>)}</tr></thead>
+              <tbody>{vendors.map(vendor => <tr key={`${vendor.newCode}-${vendor.oldCode}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.055)' }}><td style={{ padding: '9px 10px', color: 'var(--panel-muted)' }}>{vendor.coordinatorName}</td><td style={{ padding: '9px 10px', color: 'white', fontWeight: 650 }}>{vendor.name}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtBRL(vendor.salesTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 700 }}>{fmtBRL(vendor.total)}</td><td style={{ padding: '9px 10px', textAlign: 'right', color: '#ef3340' }}>{fmtPct(vendor.attainment)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtBRL(vendor.salesGapToTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtInt(vendor.totalPositivation)}</td><td style={{ padding: '9px 10px', textAlign: 'right' }}>{fmtInt(vendor.positivityTarget)}</td><td style={{ padding: '9px 10px', textAlign: 'right', color: '#fcd34d' }}>{vendor.positivityDailyTarget.toFixed(1)}</td></tr>)}</tbody>
+            </table>
           </div>
         </PanelCard>
       ) : null}
