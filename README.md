@@ -4,35 +4,24 @@ Painel executivo para cálculos, apresentação de informações e geração de 
 
 ## Estado atual
 
-Este repositório começa deliberadamente apenas pela **fundação visual validada**. Nenhuma regra de negócio, fonte de dados, parser, cálculo, KPI, página funcional ou modelo de documento foi migrado do projeto anterior.
+O repositório usa como base o checkpoint trazido do Antigravity.
 
-A regra do projeto é simples: **só entra no repositório principal aquilo que já foi validado**.
+A regra do projeto é: **somente funcionalidades validadas permanecem no `main`**.
 
-## Padrão visual v1
+## Decisão atual sobre animação
 
-A fundação visual inicial é composta por:
+A animação da logo foi retirada integralmente do projeto por enquanto.
 
-- fundo escuro contínuo com iluminação em gradiente azul e vermelho;
-- animação Triunfante em alta qualidade, fixa e centralizada, reagindo ao scroll para baixo e para cima;
-- menu lateral retrátil por hover/foco;
-- navegação horizontal centralizada no topo, preparada para receber abas futuras;
-- uma única receita de vidro embaçado para menus e futuras superfícies de KPI, tabela e gráfico;
-- contrato explícito de camadas para impedir sobreposição incorreta entre animação, conteúdo e navegação.
+Não há componente de animação, prop de ativação, estilos específicos, token de camada ou mídia da animação no `main`.
 
-A especificação detalhada está em `docs/VISUAL_STANDARD.md`.
+Se esse recurso voltar no futuro, será implementado novamente como uma etapa independente e validada antes de entrar no projeto principal.
 
-## Arquitetura desta etapa
+## Estrutura visual preservada
 
-```text
-src/
-  ui/
-    animation/
-    navigation/
-    primitives/
-    theme/
-docs/
-```
+- fundo e tema do painel;
+- menu lateral;
+- navegação horizontal;
+- superfícies com efeito de vidro;
+- páginas e componentes já presentes no checkpoint do Antigravity.
 
-A mídia da animação está temporariamente referenciada por URLs imutáveis, fixadas no último checkpoint visual validado do projeto anterior. Isso reaproveita apenas os arquivos de mídia aprovados; nenhum código de dados ou regra de negócio é importado.
-
-Não existe `App`, dashboard, página de demonstração ou camada de dados nesta etapa. Os componentes visuais são apenas primitives reutilizáveis para as próximas implementações.
+A especificação visual fica em `docs/VISUAL_STANDARD.md`.
