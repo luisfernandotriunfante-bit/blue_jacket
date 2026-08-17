@@ -23,14 +23,23 @@ function addDays(date: string, amount: number) {
   return value.toISOString().slice(0, 10);
 }
 
+function firstDayOfMonth(date: string) {
+  return `${date.slice(0, 7)}-01`;
+}
+
 function buildCalendar(data: MovementDay[]) {
   if (!data.length) return [] as MovementDay[];
   const ordered = [...data].sort((a, b) => a.date.localeCompare(b.date));
   const byDate = new Map(ordered.map(item => [item.date, item]));
   const firstActual = ordered[0].date;
   const latest = ordered[ordered.length - 1].date;
+
+  // A janela precisa poder navegar antes da primeira venda registrada.
+  // Por isso o calendário começa no primeiro dia do mês da base e
+  // preenche dias sem movimento com zero.
+  const monthStart = firstDayOfMonth(firstActual);
   const minimumWindowStart = addDays(latest, -(WINDOW_DAYS - 1));
-  const start = firstActual < minimumWindowStart ? firstActual : minimumWindowStart;
+  const start = monthStart < minimumWindowStart ? monthStart : minimumWindowStart;
   const days: MovementDay[] = [];
 
   for (let cursor = start; cursor <= latest; cursor = addDays(cursor, 1)) {
