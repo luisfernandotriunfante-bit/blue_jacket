@@ -44,7 +44,7 @@ function App() {
   ) : null
 
   return (
-    <BlueJacketShell animateBackdrop={false} sidebar={sidebar} topNavigation={topNavigation}>
+    <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
       {activeTab === 'estoque' ? (
         activeTopTab === 'lancamentos' ? <LancamentosPage /> : <EstoquePage />
       ) : activeTab === 'sellout' ? (
