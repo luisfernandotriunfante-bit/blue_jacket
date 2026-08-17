@@ -1,5 +1,4 @@
 export { BlueJacketShell } from './BlueJacketShell'
-export { ScrollTriunfanteBackdrop } from './animation/ScrollTriunfanteBackdrop'
 export { HoverSidebar } from './navigation/HoverSidebar'
 export type { SidebarItem } from './navigation/HoverSidebar'
 export { TopTabs } from './navigation/TopTabs'
