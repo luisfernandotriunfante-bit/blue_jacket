@@ -1,4 +1,4 @@
-import type { PropsWithChildren, ReactNode } from 'react'
+import type { CSSProperties, PropsWithChildren, ReactNode } from 'react'
 
 type PanelPageProps = PropsWithChildren<{
   title: string
@@ -35,10 +35,11 @@ export function PanelPage({
 
 type PanelCardProps = PropsWithChildren<{
   className?: string
+  style?: CSSProperties
 }>
 
-export function PanelCard({ className = '', children }: PanelCardProps) {
-  return <section className={`panel-card ${className}`.trim()}>{children}</section>
+export function PanelCard({ className = '', style, children }: PanelCardProps) {
+  return <section className={`panel-card ${className}`.trim()} style={style}>{children}</section>
 }
 
 type PanelKpiProps = {
