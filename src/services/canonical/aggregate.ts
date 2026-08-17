@@ -50,9 +50,11 @@ export function buildVendorResults(transactions: SalesTransaction[], rcaByNew: M
   });
   const targetByOld=new Map(targets.map(t=>[t.oldCode,t])); const codes=new Set<string>(activity.keys()); targets.forEach(t=>{const rca=rcaByOld.get(t.oldCode);codes.add(rca?.newCode||t.oldCode)});
   const rows: CanonicalVendorResult[]=[];
+  const cleanPersonName=(value:string)=>normalizeText(value).replace(/^(CLT|PJ)\s*-\s*/,'').trim();
   codes.forEach(newCode=>{
     const a=activity.get(newCode)||{invoiced:0,toInvoice:0,invClients:new Set<string>(),pendingClients:new Set<string>(),name:'',supCode:'',supName:''};
-    const nameMatch = a.name ? Array.from(rcaByNew.values()).find(item => normalizeText(item.name) === normalizeText(a.name)) : undefined;
+    const activityName=cleanPersonName(a.name);
+    const nameMatch = activityName ? Array.from(rcaByNew.values()).find(item=>{const referenceName=cleanPersonName(item.name);return referenceName===activityName||referenceName.startsWith(activityName)||activityName.startsWith(referenceName)}) : undefined;
     const rca=rcaByNew.get(newCode)||rcaByOld.get(newCode)||nameMatch;
     const oldCode=rca?.oldCode||newCode; const target=targetByOld.get(oldCode);
     const salesTarget=target?.salesTarget||0; const positivityTarget=target?.positivityTarget||0; const total=a.invoiced+a.toInvoice;
