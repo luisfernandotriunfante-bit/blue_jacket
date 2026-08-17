@@ -62,7 +62,9 @@ export function buildVendorResults(transactions: SalesTransaction[], rcaByNew: M
     const idealSalesToday=business.total>0?salesTarget*(business.elapsed/business.total):0; const idealPositivationToday=business.total>0?positivityTarget*(business.elapsed/business.total):0;
     rows.push({ newCode, oldCode, name:rca?.name||a.name||target?.name||`Vendedor ${newCode}`, coordinatorCode:rca?.coordinatorCode||a.supCode, coordinatorName:rca?.coordinatorName||a.supName||target?.supervisorName||'', salesTarget, positivityTarget, invoiced:a.invoiced, toInvoice:a.toInvoice, total, attainment:salesTarget>0?total/salesTarget:0, invoicedPositivation:a.invClients.size, futurePositivation:futurePos, totalPositivation:totalPos, positivityAttainment:positivityTarget>0?totalPos/positivityTarget:0, idealSalesToday, salesGapToIdeal:Math.max(idealSalesToday-total,0), salesGapToTarget:Math.max(salesTarget-total,0), idealPositivationToday, positivityGapToIdeal:Math.max(idealPositivationToday-totalPos,0), positivityGapToTarget:Math.max(positivityTarget-totalPos,0), positivityDailyTarget:business.remaining>0?Math.max(positivityTarget-totalPos,0)/business.remaining:Math.max(positivityTarget-totalPos,0) });
   });
-  return rows.sort((a,b)=>b.salesTarget-a.salesTarget||b.total-a.total);
+  const byTargetCode=new Map<string,CanonicalVendorResult>();
+  rows.forEach(row=>{const key=row.oldCode||row.newCode;const current=byTargetCode.get(key);if(!current||row.total>current.total||(row.total===current.total&&row.newCode!==row.oldCode))byTargetCode.set(key,row)});
+  return Array.from(byTargetCode.values()).sort((a,b)=>b.salesTarget-a.salesTarget||b.total-a.total);
 }
 
 export function buildCoordinators(vendors: CanonicalVendorResult[]): CanonicalCoordinatorResult[] {
