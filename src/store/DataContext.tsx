@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useMemo, useState, ReactNode } from 'react';
 import { applyManualConfiguration, CanonicalState, CanonicalVendorResult, DEFAULT_MANUAL_CONFIGURATION, ManualConfiguration } from '../domain/canonical';
 
-export interface ProdutoEstoque { codigo:string; descricao:string; ean:string; quantidade:number; saldoMinimo:number; custoUnitario:number; vendaUnitario:number; entradas:number; saidas:number; saldoPedido:number; saldoPedidoValorCusto?:number; saldoPedidoValorVenda?:number; isLancamento?:boolean; hasWinthor?:boolean; }
+export interface ProdutoEstoque { codigo:string; descricao:string; ean:string; quantidade:number; saldoMinimo:number; custoUnitario:number; vendaUnitario:number; entradas:number; saidas:number; saldoPedido:number; saldoPedidoValorCusto?:number; saldoPedidoValorVenda?:number; isLancamento?:boolean; hasWinthor?:boolean; factoryCode?:string; physicalCases?:number; physicalUnits?:number; grossKg?:number; }
 export interface VendedorSellOut { codVendedor:string; nomeVendedor:string; codCoord:string; nomeCoord:string; faturado:number; aFaturar:number; positivacao:number; }
 export interface CoordenadorSellOut { codCoord:string; nomeCoord:string; faturado:number; aFaturar:number; positivacao:number; vendedores:VendedorSellOut[]; }
 export interface DiaVenda { data:string; diaSemana:string; venda:number; faturado:number; positivacao:number; }
