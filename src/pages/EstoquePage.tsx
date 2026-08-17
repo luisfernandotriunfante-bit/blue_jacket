@@ -92,14 +92,13 @@ export function EstoquePage() {
     estoqueMaisSaldoVal: number,
     cobEstoqueMaisSaldo: number,
     meta: number,
-    tone: 'red' | 'blue'
+    portfolioNote: string
   ) => {
     const variacao = coberturaEstoque - meta;
     const isNegative = variacao < 0;
-    const accent = tone === 'red' ? 'var(--panel-red)' : 'var(--panel-blue)';
 
     return (
-      <PanelCard style={{ borderLeft: `4px solid ${accent}` }}>
+      <PanelCard style={{ borderLeft: '4px solid var(--panel-red)' }}>
         <PanelSectionHeader
           eyebrow={title}
           title={estoqueAtualLabel}
@@ -114,14 +113,15 @@ export function EstoquePage() {
           <div className="panel-mini-stat">
             <div className="panel-mini-label">Cobertura Atual</div>
             <div className="panel-mini-value">{coberturaEstoque} dias</div>
-            <div className="panel-mini-note" style={{ color: isNegative ? '#f87171' : '#22c55e' }}>
+            <div className="panel-mini-note" style={{ color: isNegative ? '#f87171' : 'var(--panel-red)' }}>
               {isNegative ? '↓' : '↑'} {Math.abs(variacao)} dias {isNegative ? 'abaixo' : 'acima'} da meta
             </div>
           </div>
 
           <div className="panel-mini-stat">
             <div className="panel-mini-label">Saldo Pedido · Em Trânsito</div>
-            <div className="panel-mini-value" style={{ color: 'var(--panel-amber)' }}>{formatCurrency(saldoPedidoVal)}</div>
+            <div className="panel-mini-value" style={{ color: 'var(--panel-red)' }}>{formatCurrency(saldoPedidoVal)}</div>
+            <div className="panel-mini-note">{portfolioNote}</div>
           </div>
 
           <div className="panel-mini-stat">
@@ -151,7 +151,7 @@ export function EstoquePage() {
             metricas.valorEstoqueVenda + metricas.saldoPedidoVenda,
             metricas.coberturaEstoqueMaisSaldo,
             metricas.metaCobertura,
-            'red'
+            'Somente itens da carteira com preço de venda registrado no sistema.'
           )}
 
           {renderKpiSection(
@@ -163,7 +163,7 @@ export function EstoquePage() {
             metricas.valorEstoqueCompra + metricas.saldoPedidoCusto,
             metricas.coberturaEstoqueMaisSaldo,
             metricas.metaCobertura,
-            'blue'
+            'Valor integral informado na carteira.'
           )}
         </div>
 
