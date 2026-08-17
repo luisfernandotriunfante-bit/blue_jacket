@@ -125,8 +125,8 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
 /**
  * A CARTEIRA vem da Colgate e é a única origem do status SEM WINTHOR.
  * Um item só é Sem Winthor quando existe na carteira pendente e não encontra
- * correspondência nos relatórios do Winthor. Itens externos do 8013 ou da lista
- * de lançamentos não recebem esse status sozinhos.
+ * correspondência nos relatórios do Winthor. A conciliação procura código interno,
+ * código de fábrica e EAN do Cadastro 286 antes de considerar o item sem cadastro.
  */
 export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>): { cost: number; sale: number; unresolved: number } {
   let totalCost = 0;
@@ -134,12 +134,17 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
   let unresolved = 0;
   const productsByEan = new Map<string, StockProduct>();
   const productsByFactory = new Map<string, StockProduct>();
+  const cadastroByEan = new Map<string, string>();
 
   products.forEach(product => {
     const ean = cleanDigits(product.ean);
     const factory = cleanCode(product.factoryCode);
     if (ean) productsByEan.set(ean, product);
     if (factory) productsByFactory.set(factory, product);
+  });
+  cadastro.byInternal.forEach((item, internalCode) => {
+    const ean = cleanDigits(item.ean);
+    if (ean && !cadastroByEan.has(ean)) cadastroByEan.set(ean, internalCode);
   });
 
   for (let i = 1; i < rows.length; i++) {
@@ -151,25 +156,39 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
 
     totalCost += portfolioCost;
     if (!rawMaterial) {
-      if (portfolioCost > 0 || portfolioQty > 0) unresolved += 1;
+      unresolved += 1;
       continue;
     }
 
-    const mappedInternal = cadastro.factoryToInternal.get(rawMaterial);
+    const directInternal = cadastro.byInternal.has(rawMaterial) ? rawMaterial : '';
+    const factoryInternal = cadastro.factoryToInternal.get(rawMaterial) || '';
+    const preliminaryInternal = directInternal || factoryInternal;
+    const preliminaryCad = preliminaryInternal ? cadastro.byInternal.get(preliminaryInternal) : undefined;
+    const preliminaryMaster = priceList.bySku.get(rawMaterial)
+      || (preliminaryCad?.ean ? priceList.byEan.get(cleanDigits(preliminaryCad.ean)) : undefined);
+    const candidateEan = cleanDigits(preliminaryCad?.ean || preliminaryMaster?.ean || '');
+    const eanInternal = candidateEan ? (cadastroByEan.get(candidateEan) || '') : '';
+    const mappedInternal = preliminaryInternal || eanInternal;
     const cad = mappedInternal ? cadastro.byInternal.get(mappedInternal) : undefined;
-    const master = priceList.bySku.get(rawMaterial) || (cad?.ean ? priceList.byEan.get(cleanDigits(cad.ean)) : undefined);
-    const candidateEan = cleanDigits(cad?.ean || master?.ean || '');
+    const master = priceList.bySku.get(rawMaterial)
+      || (cad?.ean ? priceList.byEan.get(cleanDigits(cad.ean)) : undefined)
+      || (candidateEan ? priceList.byEan.get(candidateEan) : undefined);
+    const resolvedEan = cleanDigits(cad?.ean || master?.ean || candidateEan || '');
+
     let product = (mappedInternal ? products.get(mappedInternal) : undefined)
       || products.get(rawMaterial)
       || productsByFactory.get(rawMaterial)
-      || (candidateEan ? productsByEan.get(candidateEan) : undefined);
+      || (resolvedEan ? productsByEan.get(resolvedEan) : undefined);
 
-    // Se o material está no Cadastro 286, ele existe no Winthor. Isso prevalece
-    // mesmo quando o objeto foi criado antes por uma fonte física/externa.
-    if (product && mappedInternal) product.hasWinthor = true;
+    // Qualquer correspondência real no Cadastro 286 confirma cadastro Winthor,
+    // ainda que o item não esteja na posição 105 naquele momento.
+    if (product && mappedInternal) {
+      product.hasWinthor = true;
+      if (!product.ean && cad?.ean) product.ean = cleanDigits(cad.ean);
+      if (!product.factoryCode && cad?.factoryCode) product.factoryCode = cad.factoryCode;
+    }
 
-    // Sem correspondência no Winthor: mantemos o item da carteira visível no
-    // catálogo para auditoria, mas com estoque e preços Winthor zerados.
+    let semWinthorCounted = false;
     if (!product && !mappedInternal) {
       const code = `PORTFOLIO-${rawMaterial}`;
       product = products.get(code);
@@ -196,14 +215,16 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
         if (product.ean) productsByEan.set(cleanDigits(product.ean), product);
       }
       unresolved += 1;
+      semWinthorCounted = true;
     }
 
     if (!product) {
-      // Existe no Cadastro 286, porém não veio na posição de estoque. Não é Sem
-      // Winthor; apenas não pode ser valorizado a venda sem custo/preço reais.
+      // O item existe no 286, porém não há objeto com estoque/preço para valorização.
       unresolved += 1;
       continue;
     }
+
+    if (product.hasWinthor === false && !semWinthorCounted) unresolved += 1;
 
     let portfolioSale = 0;
     if (product.hasWinthor !== false && product.custoUnitario > 0 && product.vendaUnitario > 0 && portfolioCost > 0) {
