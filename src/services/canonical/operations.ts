@@ -21,7 +21,7 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
     const existing = Array.from(products.values()).find(p => cleanDigits(p.ean) === ean);
     if (existing) { existing.physicalCases = parseNumber(row[12]); existing.physicalUnits = parseNumber(row[11]); existing.grossKg = parseNumber(row[13]); if (!existing.ean) existing.ean = ean; continue; }
     const master = priceList.byEan.get(ean); const code = master?.sku || ean;
-    products.set(code, { codigo: code, descricao: String(row[6] ?? '').trim() || master?.description || '', ean, quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: master?.isLaunch || false, hasWinthor: false, physicalCases: parseNumber(row[12]), physicalUnits: parseNumber(row[11]), grossKg: parseNumber(row[13]), factoryCode: master?.sku });
+    products.set(code, { codigo: code, descricao: String(row[6] ?? '').trim() || master?.description || '', ean, quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: false, hasWinthor: false, physicalCases: parseNumber(row[12]), physicalUnits: parseNumber(row[11]), grossKg: parseNumber(row[13]), factoryCode: master?.sku });
   }
 }
 
@@ -76,7 +76,7 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
         saldoPedido: 0,
         saldoPedidoValorCusto: 0,
         saldoPedidoValorVenda: 0,
-        isLancamento: master?.isLaunch || false,
+        isLancamento: false,
         hasWinthor: false,
         factoryCode: rawMaterial,
       };
@@ -99,9 +99,21 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
   return { cost: totalCost, sale: totalSale, unresolved };
 }
 
-export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>, priceList: ReturnType<typeof parsePriceList>): { matched: number; unresolved: number } {
+/**
+ * A lista oficial carregada é a única autoridade para o status LANÇAMENTO.
+ * Antes de aplicá-la, apagamos flags antigas do estoque e do cadastro mestre,
+ * evitando que lançamentos de cargas anteriores permaneçam somados no catálogo.
+ * Linhas duplicadas na própria lista também contam apenas uma vez.
+ */
+export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>, priceList: ReturnType<typeof parsePriceList>): { matched: number; unresolved: number; unique: number } {
+  products.forEach(product => { product.isLancamento = false; });
+  const masters = new Set([...priceList.bySku.values(), ...priceList.byEan.values()]);
+  masters.forEach(master => { master.isLaunch = false; });
+
   let matched = 0; let unresolved = 0;
+  const seen = new Set<string>();
   const productsByEan = new Map(Array.from(products.values()).filter(p => p.ean).map(p => [cleanDigits(p.ean), p]));
+
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     const status = normalizeText(row[4]);
@@ -109,6 +121,10 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
     const code = cleanCode(row[0]);
     const ean = cleanDigits(row[3]);
     if (!code && !ean) continue;
+
+    const uniqueKey = ean ? `EAN:${ean}` : `COD:${code}`;
+    if (seen.has(uniqueKey)) continue;
+    seen.add(uniqueKey);
 
     let product = (code && products.get(code)) || (ean && productsByEan.get(ean));
     const master = (ean && priceList.byEan.get(ean)) || (code && priceList.bySku.get(code));
@@ -141,7 +157,7 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
     if (master) { master.isLaunch = true; found = true; }
     if (found) matched += 1; else unresolved += 1;
   }
-  return { matched, unresolved };
+  return { matched, unresolved, unique: seen.size };
 }
 
 export function parseSales(rows: Row[], priceList: ReturnType<typeof parsePriceList>): SalesTransaction[] {
