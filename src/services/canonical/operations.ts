@@ -3,84 +3,172 @@ import type { Row, SalesTransaction, StockProduct } from './runtime';
 import { cleanCode, cleanDigits, classifyLine, normalizeText, parseNumber, toIsoDate } from './utils';
 import { parseCadastro286, parsePriceList } from './support';
 
+function stockHeaderColumns(rows: Row[]) {
+  const headerIndex = rows.findIndex(row => {
+    const cells = row.map(normalizeText);
+    return cells.some(cell => cell === 'CODIGO' || cell === 'COD')
+      && cells.some(cell => cell.includes('DESCR'))
+      && cells.some(cell => cell.includes('VENDA'));
+  });
+  if (headerIndex < 0) throw new Error('Posição 105: cabeçalho de estoque não reconhecido. O arquivo não foi aplicado.');
+
+  const header = rows[headerIndex].map(normalizeText);
+  const find = (predicate: (value: string) => boolean, fallback: number) => {
+    const index = header.findIndex(predicate);
+    return index >= 0 ? index : fallback;
+  };
+
+  return {
+    headerIndex,
+    code: find(value => value === 'CODIGO' || value === 'COD', 0),
+    description: find(value => value.includes('DESCR'), 1),
+    quantity: find(value => value === 'ESTOQUE' || value.includes('QTD ESTOQUE') || value.includes('QTDE ESTOQUE') || value === 'SALDO' || value.includes('QTD DISPON') || value.includes('QTDE DISPON'), 8),
+    cost: find(value => value.includes('CUSTO') && !value.includes('TOTAL'), 10),
+    sale: find(value => value.includes('VENDA') && !value.includes('TOTAL'), 14),
+  };
+}
+
 export function parseStock105(rows: Row[], cadastro: ReturnType<typeof parseCadastro286>): Map<string, StockProduct> {
   const products = new Map<string, StockProduct>();
-  const header = rows.findIndex(row => normalizeText(row[0]) === 'CODIGO' && normalizeText(row[1]) === 'DESCRICAO' && normalizeText(row[14]).includes('P. VENDA'));
-  const start = header >= 0 ? header + 1 : 13;
-  for (let i = start; i < rows.length; i++) {
-    const row = rows[i]; const code = cleanCode(row[0]); if (!code || !/^\d+$/.test(code)) continue;
-    const cad = cadastro.byInternal.get(code); const qty = parseNumber(row[8]);
-    products.set(code, { codigo: code, descricao: String(row[1] ?? '').trim() || cad?.description || '', ean: cad?.ean || '', quantidade: qty, saldoMinimo: 0, custoUnitario: parseNumber(row[10]), vendaUnitario: parseNumber(row[14]), entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: false, hasWinthor: true, factoryCode: cad?.factoryCode });
+  const columns = stockHeaderColumns(rows);
+
+  for (let i = columns.headerIndex + 1; i < rows.length; i++) {
+    const row = rows[i];
+    const code = cleanCode(row[columns.code]);
+    if (!code || !/^\d+$/.test(code)) continue;
+    const cad = cadastro.byInternal.get(code);
+    products.set(code, {
+      codigo: code,
+      descricao: String(row[columns.description] ?? '').trim() || cad?.description || '',
+      ean: cad?.ean || '',
+      quantidade: parseNumber(row[columns.quantity]),
+      saldoMinimo: 0,
+      custoUnitario: parseNumber(row[columns.cost]),
+      vendaUnitario: parseNumber(row[columns.sale]),
+      entradas: 0,
+      saidas: 0,
+      saldoPedido: 0,
+      saldoPedidoValorCusto: 0,
+      saldoPedidoValorVenda: 0,
+      isLancamento: false,
+      hasWinthor: true,
+      factoryCode: cad?.factoryCode,
+    });
   }
+
+  const items = Array.from(products.values());
+  const costValue = items.reduce((sum, item) => sum + item.quantidade * item.custoUnitario, 0);
+  const saleValue = items.reduce((sum, item) => sum + item.quantidade * item.vendaUnitario, 0);
+  const ratio = costValue > 0 ? saleValue / costValue : 0;
+
+  // Trava de integridade: um erro de coluna não pode mais substituir um estoque
+  // válido por números absurdos. A faixa é propositalmente larga; serve apenas
+  // para bloquear leituras estruturalmente impossíveis.
+  if (products.size < 50 || !Number.isFinite(costValue) || !Number.isFinite(saleValue) || costValue <= 0 || saleValue <= 0 || ratio < 0.5 || ratio > 5) {
+    throw new Error(`Posição 105 rejeitada por inconsistência estrutural: ${products.size} item(ns), custo ${costValue.toFixed(2)}, venda ${saleValue.toFixed(2)}. Nenhum valor foi salvo.`);
+  }
+
   return products;
 }
 
 export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>, priceList: ReturnType<typeof parsePriceList>) {
+  const productsByEan = new Map<string, StockProduct>();
+  const productsByFactory = new Map<string, StockProduct>();
+  products.forEach(product => {
+    const ean = cleanDigits(product.ean);
+    const factory = cleanCode(product.factoryCode);
+    if (ean) productsByEan.set(ean, product);
+    if (factory) productsByFactory.set(factory, product);
+  });
+
   for (let i = 1; i < rows.length; i++) {
-    const row = rows[i]; const ean = cleanDigits(row[4]); if (!ean) continue;
-    const existing = Array.from(products.values()).find(p => cleanDigits(p.ean) === ean);
-    if (existing) { existing.physicalCases = parseNumber(row[12]); existing.physicalUnits = parseNumber(row[11]); existing.grossKg = parseNumber(row[13]); if (!existing.ean) existing.ean = ean; continue; }
-    const master = priceList.byEan.get(ean); const code = master?.sku || ean;
-    products.set(code, { codigo: code, descricao: String(row[6] ?? '').trim() || master?.description || '', ean, quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: false, hasWinthor: false, physicalCases: parseNumber(row[12]), physicalUnits: parseNumber(row[11]), grossKg: parseNumber(row[13]), factoryCode: master?.sku });
+    const row = rows[i];
+    const ean = cleanDigits(row[4]);
+    if (!ean) continue;
+    const master = priceList.byEan.get(ean);
+    const existing = productsByEan.get(ean) || (master?.sku ? productsByFactory.get(cleanCode(master.sku)) : undefined);
+
+    if (existing) {
+      existing.physicalCases = parseNumber(row[12]);
+      existing.physicalUnits = parseNumber(row[11]);
+      existing.grossKg = parseNumber(row[13]);
+      if (!existing.ean) existing.ean = ean;
+      productsByEan.set(ean, existing);
+      continue;
+    }
+
+    let code = master?.sku || `EAN-${ean}`;
+    if (products.has(code)) code = `EAN-${ean}`;
+    const product: StockProduct = {
+      codigo: code,
+      descricao: String(row[6] ?? '').trim() || master?.description || '',
+      ean,
+      quantidade: 0,
+      saldoMinimo: 0,
+      custoUnitario: 0,
+      vendaUnitario: 0,
+      entradas: 0,
+      saidas: 0,
+      saldoPedido: 0,
+      saldoPedidoValorCusto: 0,
+      saldoPedidoValorVenda: 0,
+      isLancamento: false,
+      hasWinthor: false,
+      physicalCases: parseNumber(row[12]),
+      physicalUnits: parseNumber(row[11]),
+      grossKg: parseNumber(row[13]),
+      factoryCode: master?.sku,
+    };
+    products.set(code, product);
+    productsByEan.set(ean, product);
+    if (master?.sku) productsByFactory.set(cleanCode(master.sku), product);
   }
 }
 
 /**
  * A CARTEIRA representa tudo o que continua pendente junto à indústria.
- *
- * Regra fechada para o Blue Jacket:
- * - CUSTO: soma 100% do valor informado na carteira. Não descartamos valor
- *   só porque o SKU ainda não foi conciliado com o cadastro interno.
- * - VENDA: calculamos somente quando existe preço de custo e preço de venda
- *   registrados no estoque do sistema (posição 105). Não usamos Lista de Preço
- *   Colgate, preço de caixa ou qualquer estimativa como substituto do preço de
- *   venda da Milênio.
- * - CATÁLOGO: quando a carteira conhece um material que ainda não existe na
- *   posição 105, ele entra no catálogo como SEM WINTHOR, com custo/venda unitários
- *   zerados. Lista de Preço/Cadastro 286 são usados apenas para identificação.
+ * Custo soma 100% do arquivo. Venda só é valorizada quando o item foi conciliado
+ * com a posição 105 e possui custo/venda reais. A carteira, sozinha, nunca cria
+ * um produto no catálogo: linhas não conciliadas viram pendência de auditoria.
  */
 export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>): { cost: number; sale: number; unresolved: number } {
-  let totalCost = 0; let totalSale = 0; let unresolved = 0;
+  let totalCost = 0;
+  let totalSale = 0;
+  let unresolved = 0;
+  const productsByEan = new Map<string, StockProduct>();
+  const productsByFactory = new Map<string, StockProduct>();
+  products.forEach(product => {
+    const ean = cleanDigits(product.ean);
+    const factory = cleanCode(product.factoryCode);
+    if (ean) productsByEan.set(ean, product);
+    if (factory) productsByFactory.set(factory, product);
+  });
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     const portfolioCost = Math.max(parseNumber(row[8]), 0);
     const portfolioQty = Math.max(parseNumber(row[6]), 0);
     const rawMaterial = cleanCode(row[4]);
-
     if (portfolioQty <= 0 && portfolioCost <= 0) continue;
 
     totalCost += portfolioCost;
-
     if (!rawMaterial) {
       if (portfolioCost > 0) unresolved += 1;
       continue;
     }
 
-    const internal = cadastro.factoryToInternal.get(rawMaterial) || rawMaterial;
-    const cad = cadastro.byInternal.get(internal);
+    const mappedInternal = cadastro.factoryToInternal.get(rawMaterial);
+    const cad = mappedInternal ? cadastro.byInternal.get(mappedInternal) : undefined;
     const master = priceList.bySku.get(rawMaterial) || (cad?.ean ? priceList.byEan.get(cleanDigits(cad.ean)) : undefined);
-    let product = products.get(internal);
+    const candidateEan = cleanDigits(cad?.ean || master?.ean || '');
+    const product = (mappedInternal ? products.get(mappedInternal) : undefined)
+      || products.get(rawMaterial)
+      || productsByFactory.get(rawMaterial)
+      || (candidateEan ? productsByEan.get(candidateEan) : undefined);
 
     if (!product) {
-      product = {
-        codigo: internal,
-        descricao: cad?.description || master?.description || `Material ${rawMaterial}`,
-        ean: cad?.ean || master?.ean || '',
-        quantidade: 0,
-        saldoMinimo: 0,
-        custoUnitario: 0,
-        vendaUnitario: 0,
-        entradas: 0,
-        saidas: 0,
-        saldoPedido: 0,
-        saldoPedidoValorCusto: 0,
-        saldoPedidoValorVenda: 0,
-        isLancamento: false,
-        hasWinthor: false,
-        factoryCode: rawMaterial,
-      };
-      products.set(internal, product);
+      unresolved += 1;
+      continue;
     }
 
     let portfolioSale = 0;
@@ -94,6 +182,7 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
     product.saldoPedido += portfolioQty;
     product.saldoPedidoValorCusto = (product.saldoPedidoValorCusto || 0) + portfolioCost;
     product.saldoPedidoValorVenda = (product.saldoPedidoValorVenda || 0) + portfolioSale;
+    if (!product.factoryCode) product.factoryCode = rawMaterial;
   }
 
   return { cost: totalCost, sale: totalSale, unresolved };
@@ -141,7 +230,8 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
     const sourceDescription = descriptionColumn >= 0 ? String(row[descriptionColumn] ?? '').trim() : '';
 
     if (!product && master) {
-      const catalogCode = master.sku || `EAN-${ean}`;
+      let catalogCode = master.sku || `EAN-${ean}`;
+      if (products.has(catalogCode)) catalogCode = `EAN-${ean}`;
       product = {
         codigo: catalogCode,
         descricao: master.description || sourceDescription || `Lançamento ${ean}`,
