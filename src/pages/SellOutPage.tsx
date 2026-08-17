@@ -45,6 +45,16 @@ function BigInfoCard({ eyebrow, title, mainLabel, mainValue, rows, note }: { eye
   );
 }
 
+function CompactMetric({ label, value, detail, accent = false }: { label: string; value: string; detail?: string; accent?: boolean }) {
+  return (
+    <div style={{ padding: '11px 12px', border: '1px solid rgba(255,255,255,0.075)', borderRadius: '12px', background: 'rgba(255,255,255,0.018)', minWidth: 0 }}>
+      <div style={{ color: 'var(--panel-muted)', fontSize: '0.63rem', fontWeight: 800, letterSpacing: '0.055em', textTransform: 'uppercase', marginBottom: '5px' }}>{label}</div>
+      <div style={{ color: accent ? 'var(--panel-red)' : 'var(--panel-text)', fontSize: '0.98rem', fontWeight: 820, lineHeight: 1.15, overflowWrap: 'anywhere' }}>{value}</div>
+      {detail ? <div style={{ color: 'var(--panel-muted)', fontSize: '0.66rem', marginTop: '4px', lineHeight: 1.3 }}>{detail}</div> : null}
+    </div>
+  );
+}
+
 export function SellOutPage() {
   const { canonical, sellOut } = useData();
   const [activeTab, setActiveTab] = useState<TabId>('resumo');
@@ -117,6 +127,8 @@ function Resumo() {
         <PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Gráficos e planilha usam a mesma janela móvel e o mesmo controle de datas." />
         <DailyMovementWindow data={daily} />
       </PanelCard>
+
+      {canonical ? <LineSummary /> : null}
     </div>
   );
 }
@@ -132,61 +144,49 @@ function ManagerialSellOutCards() {
   const positivityDailyNeeded = s.businessDaysRemaining > 0 ? Math.max(s.industryPositivityTarget - s.totalPositivation, 0) / s.businessDaysRemaining : Math.max(s.industryPositivityTarget - s.totalPositivation, 0);
 
   return (
-    <>
-      <div className="panel-grid panel-grid-2">
-        <BigInfoCard
-          eyebrow="SELL OUT DIÁRIO"
-          title="Ritmo diário"
-          mainLabel="Venda média diária"
-          mainValue={fmtBRL(s.totalDailyAverage)}
-          rows={[
-            { label: 'Meta · venda média diária', value: fmtBRL(dailyTarget), detail: 'Meta T&C ÷ dias úteis do mês' },
-            { label: 'Cobertura da meta diária', value: fmtPct(dailyCoverage), accent: dailyCoverage < 1 },
-            { label: 'Venda média diária necessária', value: fmtBRL(s.neededDailyAverage), detail: `${s.businessDaysRemaining} dias úteis restantes` },
-          ]}
-        />
-        <BigInfoCard
-          eyebrow="SELL OUT MÊS"
-          title="Resultado e tendência"
-          mainLabel="Acumulado mês · venda"
-          mainValue={fmtBRL(s.total)}
-          rows={[
-            { label: 'Meta mês', value: fmtBRL(s.sellOutTarget) },
-            { label: 'Acum. mês faturado', value: fmtBRL(s.invoiced), detail: s.sellOutTarget > 0 ? `${fmtPct(s.invoiced / s.sellOutTarget)} da meta` : 'Meta T&C não informada' },
-            { label: 'Tendência faturado', value: fmtBRL(s.invoicedTrend), detail: s.sellOutTarget > 0 ? `${fmtPct(s.invoicedTrend / s.sellOutTarget)} da meta` : undefined },
-            { label: 'Acum. mês venda', value: fmtBRL(s.total), detail: s.sellOutTarget > 0 ? `${fmtPct(s.attainment)} da meta` : 'Meta T&C não informada' },
-            { label: 'Tendência venda', value: fmtBRL(s.totalTrend), detail: s.sellOutTarget > 0 ? `${fmtPct(s.totalTrend / s.sellOutTarget)} da meta` : undefined, accent: s.sellOutTarget > 0 && s.totalTrend < s.sellOutTarget },
-          ]}
-        />
-      </div>
+    <div className="panel-grid panel-grid-2">
+      <PanelCard style={{ borderLeft: '4px solid var(--panel-red)' }}>
+        <PanelSectionHeader eyebrow="SELL OUT" title="Ritmo diário e resultado do mês" description="Mesmas informações do acompanhamento gerencial, concentradas em um único bloco." />
 
-      <div className="panel-grid panel-grid-2">
-        <BigInfoCard
-          eyebrow="POSITIVAÇÃO"
-          title="Ritmo e fechamento"
-          mainLabel="Positivação total"
-          mainValue={fmtInt(s.totalPositivation)}
-          rows={[
-            { label: 'Meta positivação', value: fmtInt(s.industryPositivityTarget) },
-            { label: 'Atingimento', value: fmtPct(s.positivityAttainment), accent: s.positivityAttainment < 1 },
-            { label: 'Meta média diária', value: positivityDailyTarget.toFixed(1) },
-            { label: 'Média diária atual', value: positivityDailyCurrent.toFixed(1) },
-            { label: 'Necessário por dia', value: positivityDailyNeeded.toFixed(1), detail: `${s.businessDaysRemaining} dias úteis restantes` },
-          ]}
-        />
-        <BigInfoCard
-          eyebrow="HISTÓRICO"
-          title="Comparativos do painel original"
-          rows={[
-            { label: 'Sell Out mesmo mês do ano anterior', value: 'Dados não carregados' },
-            { label: 'Vs. tendência faturada', value: '—' },
-            { label: 'Sell Out médio dos 3 meses', value: 'Dados não carregados' },
-            { label: 'Vs. tendência faturada', value: '—' },
-          ]}
-          note="O motor atual ainda não recebeu uma base histórica validada. Esses campos ficam vazios de propósito; nenhum valor é estimado."
-        />
-      </div>
-    </>
+        <div style={{ color: 'var(--panel-red)', fontSize: '0.66rem', fontWeight: 850, letterSpacing: '0.09em', margin: '14px 0 8px' }}>DIÁRIO</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
+          <CompactMetric label="Meta média/dia" value={fmtBRL(dailyTarget)} detail="Meta T&C ÷ dias úteis" />
+          <CompactMetric label="Venda média/dia" value={fmtBRL(s.totalDailyAverage)} detail={`${fmtPct(dailyCoverage)} da meta diária`} accent={dailyCoverage < 1} />
+          <CompactMetric label="Necessário/dia" value={fmtBRL(s.neededDailyAverage)} detail={`${s.businessDaysRemaining} dias úteis restantes`} />
+        </div>
+
+        <div style={{ color: 'var(--panel-red)', fontSize: '0.66rem', fontWeight: 850, letterSpacing: '0.09em', margin: '15px 0 8px' }}>MÊS</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
+          <CompactMetric label="Meta mês" value={fmtBRL(s.sellOutTarget)} />
+          <CompactMetric label="Faturado" value={fmtBRL(s.invoiced)} detail={s.sellOutTarget > 0 ? `${fmtPct(s.invoiced / s.sellOutTarget)} da meta` : 'Meta T&C não informada'} />
+          <CompactMetric label="Tend. faturado" value={fmtBRL(s.invoicedTrend)} detail={s.sellOutTarget > 0 ? `${fmtPct(s.invoicedTrend / s.sellOutTarget)} da meta` : undefined} />
+          <CompactMetric label="Sell Out" value={fmtBRL(s.total)} detail={s.sellOutTarget > 0 ? `${fmtPct(s.attainment)} da meta` : 'Meta T&C não informada'} />
+          <CompactMetric label="Tend. Sell Out" value={fmtBRL(s.totalTrend)} detail={s.sellOutTarget > 0 ? `${fmtPct(s.totalTrend / s.sellOutTarget)} da meta` : undefined} accent={s.sellOutTarget > 0 && s.totalTrend < s.sellOutTarget} />
+          <CompactMetric label="Dias úteis" value={`${s.businessDaysElapsed}/${s.businessDaysTotal}`} detail={`${s.businessDaysRemaining} restantes`} />
+        </div>
+      </PanelCard>
+
+      <PanelCard style={{ borderLeft: '4px solid var(--panel-red)' }}>
+        <PanelSectionHeader eyebrow="POSITIVAÇÃO + HISTÓRICO" title="Fechamento e comparativos" description="Positivação atual e referências históricas do painel original." />
+
+        <div style={{ color: 'var(--panel-red)', fontSize: '0.66rem', fontWeight: 850, letterSpacing: '0.09em', margin: '14px 0 8px' }}>POSITIVAÇÃO</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px' }}>
+          <CompactMetric label="Meta" value={fmtInt(s.industryPositivityTarget)} />
+          <CompactMetric label="Realizado total" value={fmtInt(s.totalPositivation)} detail={`${fmtPct(s.positivityAttainment)} da meta`} accent={s.positivityAttainment < 1} />
+          <CompactMetric label="Necessário/dia" value={positivityDailyNeeded.toFixed(1)} detail={`${s.businessDaysRemaining} dias úteis restantes`} />
+          <CompactMetric label="Meta média/dia" value={positivityDailyTarget.toFixed(1)} />
+          <CompactMetric label="Média atual/dia" value={positivityDailyCurrent.toFixed(1)} />
+          <CompactMetric label="Faturada" value={fmtInt(s.invoicedPositivation)} />
+        </div>
+
+        <div style={{ color: 'var(--panel-red)', fontSize: '0.66rem', fontWeight: 850, letterSpacing: '0.09em', margin: '15px 0 8px' }}>HISTÓRICO</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '8px' }}>
+          <CompactMetric label="Mesmo mês ano anterior" value="Dados não carregados" detail="Vs. tendência faturada: —" />
+          <CompactMetric label="Média dos 3 meses" value="Dados não carregados" detail="Vs. tendência faturada: —" />
+        </div>
+        <div style={{ color: 'var(--panel-muted)', fontSize: '0.68rem', marginTop: '10px', lineHeight: 1.35 }}>Histórico permanece vazio até recebermos uma fonte validada; nenhum valor é estimado.</div>
+      </PanelCard>
+    </div>
   );
 }
 
@@ -224,7 +224,6 @@ function Gerencial() {
   return (
     <div style={{ display: 'grid', gap: '22px' }}>
       {canonical ? <ManagerialSellOutCards /> : null}
-      {canonical ? <LineSummary /> : null}
 
       <PanelCard>
         <PanelSectionHeader eyebrow="COORDENAÇÃO" title="Resultado gerencial" description="Consolidação das equipes usando metas da Bússola e movimentos do 8022." />
