@@ -11,6 +11,7 @@ type MovementDay = {
   totalPositivation: number;
 };
 
+const WINDOW_DAYS = 10;
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtInt = (value: number) => Math.round(value || 0).toLocaleString('pt-BR');
 const fmtDate = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR');
@@ -28,8 +29,8 @@ function buildCalendar(data: MovementDay[]) {
   const byDate = new Map(ordered.map(item => [item.date, item]));
   const firstActual = ordered[0].date;
   const latest = ordered[ordered.length - 1].date;
-  const minimumWeekStart = addDays(latest, -6);
-  const start = firstActual < minimumWeekStart ? firstActual : minimumWeekStart;
+  const minimumWindowStart = addDays(latest, -(WINDOW_DAYS - 1));
+  const start = firstActual < minimumWindowStart ? firstActual : minimumWindowStart;
   const days: MovementDay[] = [];
 
   for (let cursor = start; cursor <= latest; cursor = addDays(cursor, 1)) {
@@ -50,7 +51,7 @@ export function DailyMovementWindow({ data }: { data: MovementDay[] }) {
   const calendar = useMemo(() => buildCalendar(data), [data]);
   const latestDate = calendar.length ? calendar[calendar.length - 1].date : '';
   const maxEnd = Math.max(calendar.length - 1, 0);
-  const minEnd = Math.min(6, maxEnd);
+  const minEnd = Math.min(WINDOW_DAYS - 1, maxEnd);
   const [endIndex, setEndIndex] = useState(maxEnd);
 
   useEffect(() => {
@@ -60,7 +61,7 @@ export function DailyMovementWindow({ data }: { data: MovementDay[] }) {
   if (!calendar.length) return null;
 
   const safeEnd = Math.min(Math.max(endIndex, minEnd), maxEnd);
-  const startIndex = Math.max(0, safeEnd - 6);
+  const startIndex = Math.max(0, safeEnd - (WINDOW_DAYS - 1));
   const visible = calendar.slice(startIndex, safeEnd + 1);
   const isLatest = safeEnd === maxEnd;
   const isEarliest = safeEnd === minEnd;
@@ -73,7 +74,7 @@ export function DailyMovementWindow({ data }: { data: MovementDay[] }) {
     <div style={{ marginTop: '16px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '18px', padding: '11px 14px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '13px', background: 'rgba(0,0,0,0.14)', marginBottom: '14px' }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ color: 'var(--panel-muted)', fontSize: '0.62rem', fontWeight: 850, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Janela sincronizada · 7 dias</div>
+          <div style={{ color: 'var(--panel-muted)', fontSize: '0.62rem', fontWeight: 850, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Janela sincronizada · {WINDOW_DAYS} dias</div>
           <div style={{ color: 'white', fontSize: '0.9rem', fontWeight: 780, marginTop: '3px' }}>{fmtDate(periodStart)} — {fmtDate(periodEnd)}</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexShrink: 0 }}>
@@ -94,15 +95,15 @@ export function DailyMovementWindow({ data }: { data: MovementDay[] }) {
           </MovementPanel>
         </div>
 
-        <div style={{ minWidth: '560px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', background: 'rgba(255,255,255,0.025)', overflow: 'hidden' }}>
-          <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+        <div style={{ minWidth: '560px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', background: 'rgba(255,255,255,0.025)', overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%' }}>
+          <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0 }}>
             <div style={{ color: '#ef3340', fontSize: '0.62rem', fontWeight: 900, letterSpacing: '0.11em', textTransform: 'uppercase' }}>PLANILHA DIÁRIA</div>
             <div style={{ color: 'white', fontSize: '0.94rem', fontWeight: 760, marginTop: '4px' }}>Financeiro + positivação</div>
             <div style={{ color: 'var(--panel-muted)', fontSize: '0.68rem', marginTop: '3px' }}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div>
           </div>
 
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', tableLayout: 'fixed' }}>
+          <div style={{ overflowX: 'auto', flex: 1, minHeight: 0 }}>
+            <table style={{ width: '100%', height: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', tableLayout: 'fixed' }}>
               <colgroup>
                 <col style={{ width: '16%' }} />
                 <col style={{ width: '19%' }} />
@@ -119,19 +120,19 @@ export function DailyMovementWindow({ data }: { data: MovementDay[] }) {
               <tbody>
                 {visible.map((day, index) => (
                   <tr key={day.date} style={{ borderBottom: index === visible.length - 1 ? 'none' : '1px solid rgba(255,255,255,0.055)', background: index === visible.length - 1 ? 'rgba(239,51,64,0.045)' : 'transparent' }}>
-                    <td style={{ padding: '14px 8px', color: 'white', fontWeight: 720, whiteSpace: 'nowrap' }}>{fmtShortDate(day.date)}</td>
-                    <td style={{ padding: '14px 8px', textAlign: 'right', color: 'white', fontWeight: 800, whiteSpace: 'nowrap' }}>{fmtBRL(day.total)}</td>
-                    <td style={{ padding: '14px 8px', textAlign: 'right', color: '#93c5fd', whiteSpace: 'nowrap' }}>{fmtBRL(day.invoiced)}</td>
-                    <td style={{ padding: '14px 8px', textAlign: 'right', color: '#4ade80', whiteSpace: 'nowrap' }}>{fmtBRL(day.toInvoice)}</td>
-                    <td style={{ padding: '14px 8px', textAlign: 'right', color: '#93c5fd', fontWeight: 720 }}>{fmtInt(day.invoicedPositivation)}</td>
-                    <td style={{ padding: '14px 8px', textAlign: 'right', color: '#c4b5fd', fontWeight: 800 }}>{fmtInt(day.totalPositivation)}</td>
+                    <td style={{ padding: '9px 8px', color: 'white', fontWeight: 720, whiteSpace: 'nowrap' }}>{fmtShortDate(day.date)}</td>
+                    <td style={{ padding: '9px 8px', textAlign: 'right', color: 'white', fontWeight: 800, whiteSpace: 'nowrap' }}>{fmtBRL(day.total)}</td>
+                    <td style={{ padding: '9px 8px', textAlign: 'right', color: '#93c5fd', whiteSpace: 'nowrap' }}>{fmtBRL(day.invoiced)}</td>
+                    <td style={{ padding: '9px 8px', textAlign: 'right', color: '#4ade80', whiteSpace: 'nowrap' }}>{fmtBRL(day.toInvoice)}</td>
+                    <td style={{ padding: '9px 8px', textAlign: 'right', color: '#93c5fd', fontWeight: 720 }}>{fmtInt(day.invoicedPositivation)}</td>
+                    <td style={{ padding: '9px 8px', textAlign: 'right', color: '#c4b5fd', fontWeight: 800 }}>{fmtInt(day.totalPositivation)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderTop: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.12)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderTop: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.12)', flexShrink: 0 }}>
             <WeekTotal label="Sell Out da janela" value={fmtBRL(visible.reduce((sum, day) => sum + day.total, 0))} />
             <WeekTotal label="Positivações da janela" value={fmtInt(visible.reduce((sum, day) => sum + day.totalPositivation, 0))} />
           </div>
