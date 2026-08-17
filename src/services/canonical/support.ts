@@ -170,7 +170,7 @@ export function parsePriceList(rows: Row[]): { bySku: Map<string, ProductMaster>
     const description = String(row[9] ?? '').trim();
     const category = String(row[39] ?? '').trim();
     const subcategory = String(row[40] ?? '').trim();
-    const item: ProductMaster = { sku, ean, description, category, subcategory, brand: String(row[41] ?? '').trim(), isLaunch: false, boxPrice: parseNumber(row[65]) || parseNumber(row[56]), unitPrice: parseNumber(row[66]) || parseNumber(row[57]), line: classifyLine(description, category, subcategory) };
+    const item: ProductMaster = { sku, ean, description, category, subcategory, brand: String(row[41] ?? '').trim(), isLaunch: false, boxPrice: parseNumber(row[65]) || parseNumber(row[56]), unitPrice: parseNumber(row[66]) || parseNumber(row[57]), unitsPerCase: Math.max(parseNumber(row[17]), 0), line: classifyLine(description, category, subcategory) };
     if (sku) bySku.set(sku, item);
     if (ean) byEan.set(ean, item);
   }

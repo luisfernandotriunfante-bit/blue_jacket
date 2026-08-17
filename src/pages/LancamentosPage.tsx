@@ -139,6 +139,7 @@ export function LancamentosPage() {
                   <th className="is-sortable" onClick={() => requestSort('ean')}>EAN{getSortIcon('ean')}</th>
                   <th className="is-sortable" onClick={() => requestSort('descricao')}>Descrição{getSortIcon('descricao')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('quantidade')}>Estoque (Un){getSortIcon('quantidade')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedidoCaixas')}>Carteira (Cx){getSortIcon('saldoPedidoCaixas')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('saldoPedido')}>Carteira (Un){getSortIcon('saldoPedido')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('custoUnitario')}>Custo Un.{getSortIcon('custoUnitario')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('vendaUnitario')}>Venda Un.{getSortIcon('vendaUnitario')}</th>
@@ -146,7 +147,7 @@ export function LancamentosPage() {
               </thead>
               <tbody>
                 {sortedProdutos.length === 0 ? (
-                  <tr><td colSpan={7} style={{ textAlign: 'center', padding: '32px' }} className="is-muted">Nenhum lançamento encontrado para o filtro informado.</td></tr>
+                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: '32px' }} className="is-muted">Nenhum lançamento encontrado para o filtro informado.</td></tr>
                 ) : (
                   sortedProdutos.map((p) => {
                     const semWinthor = p.hasWinthor === false && hasPortfolioPending(p);
@@ -164,6 +165,7 @@ export function LancamentosPage() {
                           </div>
                         </td>
                         <td className="is-right is-strong">{p.quantidade.toLocaleString('pt-BR')}</td>
+                        <td className="is-right is-amber">{(p.saldoPedidoCaixas || 0).toLocaleString('pt-BR')}</td>
                         <td className="is-right is-amber">{p.saldoPedido.toLocaleString('pt-BR')}</td>
                         <td className="is-right is-muted">{p.custoUnitario > 0 ? formatCurrency(p.custoUnitario) : '—'}</td>
                         <td className="is-right">

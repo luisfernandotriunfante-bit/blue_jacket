@@ -6,7 +6,7 @@ Painel executivo de Sell Out com uma única base canônica para telas, cálculos
 
 1. Carregue os relatórios em **Configurações**.
 2. Confira a auditoria automática de fontes e totais.
-3. Ajuste Meta T&C, Meta Redes, cobertura e participação das linhas em **Metas**.
+3. Ajuste Meta T&C, Meta Redes, cobertura, acréscimo da carteira, feriados e participação das linhas em **Metas**.
 4. Acompanhe Sell Out, estoque, redes, equipes e lançamentos.
 5. Gere em **Documentos** o Painel Sell Out e o TOP REDES já preenchidos nos modelos oficiais.
 
@@ -23,7 +23,9 @@ Os arquivos gerados são estáticos, sem fórmulas, e preservam o layout, as ima
 - as cinco maiores redes alimentam o resumo, mas o arquivo TOP REDES recebe todas as redes apuradas;
 - alterações manuais de Meta Redes preservam o total e redistribuem o saldo proporcionalmente.
 - a Carteira é integralmente estoque em trânsito até a entrada no CD, mesmo quando a Colgate já faturou a linha;
-- a Lista de Preços representa Colgate → Milênio e não é usada como preço de venda Milênio → cliente;
+- a Lista de Preços representa Colgate → Milênio, fornece o fator Un/CX e não é usada como preço de venda Milênio → cliente;
+- a carteira mantém caixas e unidades separadas; seu valor de venda é o custo integral acrescido da taxa configurada conforme a planilha-modelo;
+- lançamento vem da lista oficial por EAN; Sem Winthor vem da carteira quando o item não possui código no Cadastro 286;
 - Claudio é consolidado em Flavio, e “Thiago da Silva Conegundes” é consolidado em “Thiago”.
 
 Detalhes da auditoria funcional ficam em `docs/AUDITORIA_FUNCIONAL.md`. O padrão visual fica em `docs/VISUAL_STANDARD.md`.

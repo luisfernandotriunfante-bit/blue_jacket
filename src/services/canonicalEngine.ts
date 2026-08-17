@@ -108,8 +108,8 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   if (workbooks.has('stock8013')) mergeStock8013(workbooks.get('stock8013')!.rows, products, priceList);
 
   let portfolio = { cost: previousState?.stock.pendingPurchaseCost || 0, sale: previousState?.stock.pendingPurchaseSale || 0, unresolved: 0 };
-  if (workbooks.has('purchasePortfolio')) { clearPortfolio(products); portfolio = applyPortfolio(workbooks.get('purchasePortfolio')!.rows, products, cadastro, priceList); }
-  if (portfolio.unresolved > 0) warnings.push(`${portfolio.unresolved} linha(s) da carteira não puderam ser valorizadas a preço de venda.`);
+  if (workbooks.has('purchasePortfolio')) { clearPortfolio(products); portfolio = applyPortfolio(workbooks.get('purchasePortfolio')!.rows, products, cadastro, priceList, config.portfolioSaleMarkup); }
+  if (portfolio.unresolved > 0) warnings.push(`${portfolio.unresolved} linha(s) da carteira não possuem fator Un/CX na Lista de Preços e ficaram sem conversão de caixas para unidades.`);
 
   if (launchRows) {
     const launchResult = applyLaunchList(launchRows, products, priceList);
