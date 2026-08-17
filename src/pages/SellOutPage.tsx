@@ -9,19 +9,34 @@ const fmtPct = (value: number) => `${((value || 0) * 100).toFixed(1)}%`;
 const fmtPct2 = (value: number) => `${((value || 0) * 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 const fmtDate = (value: string) => value ? new Date(`${value}T12:00:00`).toLocaleDateString('pt-BR') : '—';
 
+function localIso(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function completedBusinessDays(periodStart: string, updatedAt: string, holidays: string[]) {
+  if (!periodStart || !updatedAt) return 0;
+  const [year, month, day] = periodStart.split('-').map(Number);
+  const start = new Date(year, month - 1, day, 12, 0, 0, 0);
+  const updated = new Date(updatedAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(updated.getTime())) return 0;
+  const end = new Date(updated.getFullYear(), updated.getMonth(), updated.getDate() - 1, 12, 0, 0, 0);
+  const holidaySet = new Set(holidays || []);
+  let count = 0;
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const dow = cursor.getDay();
+    if (dow !== 0 && dow !== 6 && !holidaySet.has(localIso(cursor))) count += 1;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return count;
+}
+
 type TabId = 'resumo' | 'redes' | 'gerencial';
 type MetricRow = { label: string; value: string; detail?: string; accent?: boolean; };
-type NetworkPanelRow = {
-  key: string;
-  name: string;
-  target: number;
-  invoiced: number;
-  toInvoice: number;
-  total: number;
-  invoicedTrend: number;
-  totalTrend: number;
-  clients: number;
-};
+type NetworkPanelRow = { key: string; name: string; target: number; invoiced: number; toInvoice: number; total: number; invoicedTrend: number; totalTrend: number; clients: number; };
 
 function QuickMetric({ label, value, detail, accent = false }: { label: string; value: string; detail?: string; accent?: boolean }) {
   return <div style={{ minWidth: 0, padding: '3px 16px 4px', borderLeft: '2px solid rgba(239,51,64,0.52)' }}><div style={{ color: 'var(--panel-muted)', fontSize: '0.62rem', fontWeight: 800, letterSpacing: '0.07em', textTransform: 'uppercase', marginBottom: '6px' }}>{label}</div><div style={{ color: accent ? 'var(--panel-red)' : 'var(--panel-text)', fontSize: 'clamp(0.98rem, 1.6vw, 1.28rem)', fontWeight: 820, lineHeight: 1.1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>{detail ? <div style={{ color: 'var(--panel-muted)', fontSize: '0.66rem', marginTop: '5px', lineHeight: 1.25 }}>{detail}</div> : null}</div>;
@@ -41,25 +56,8 @@ function NetworkCard({ network, featured = false }: { network: NetworkPanelRow; 
     { label: 'Tendência Venda', value: network.totalTrend, pct: coverage(network.totalTrend) },
   ];
   return <PanelCard style={{ padding: 0, overflow: 'hidden', border: featured ? '1px solid rgba(239,51,64,0.34)' : undefined }}>
-    <div style={{ padding: '14px 18px', background: featured ? 'rgba(239,51,64,0.12)' : 'rgba(255,255,255,0.035)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'center' }}>
-        <strong style={{ color: 'white', fontSize: featured ? '0.9rem' : '0.82rem', letterSpacing: '0.035em', textTransform: 'uppercase' }}>{network.name}</strong>
-        <span style={{ color: 'var(--panel-muted)', fontSize: '0.67rem', whiteSpace: 'nowrap' }}>{network.clients ? `${fmtInt(network.clients)} clientes` : 'Consolidado'}</span>
-      </div>
-    </div>
-    <div style={{ padding: '6px 18px 12px' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(145px, 1fr) minmax(120px, auto) 92px', gap: '12px', padding: '7px 0', color: 'var(--panel-muted)', fontSize: '0.61rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.055em' }}>
-        <span>Indicador</span><span style={{ textAlign: 'right' }}>Valor</span><span style={{ textAlign: 'right' }}>% Cob. Meta</span>
-      </div>
-      {rows.map((row, index) => {
-        const below = row.pct !== null && row.pct < 1;
-        return <div key={row.label} style={{ display: 'grid', gridTemplateColumns: 'minmax(145px, 1fr) minmax(120px, auto) 92px', gap: '12px', alignItems: 'center', padding: '8px 0', borderTop: '1px solid rgba(255,255,255,0.055)' }}>
-          <span style={{ color: index === 0 ? 'white' : 'var(--panel-text-dim)', fontSize: '0.7rem', fontWeight: index === 0 ? 780 : 650 }}>{row.label}</span>
-          <span style={{ color: index === 0 ? '#fde047' : 'white', textAlign: 'right', fontSize: '0.78rem', fontWeight: index === 0 ? 850 : 760, whiteSpace: 'nowrap' }}>{fmtBRL(row.value)}</span>
-          <span style={{ color: row.pct === null ? 'var(--panel-muted)' : below ? '#fca5a5' : '#86efac', textAlign: 'right', fontSize: '0.72rem', fontWeight: 800, whiteSpace: 'nowrap' }}>{row.pct === null ? '—' : fmtPct2(row.pct)}</span>
-        </div>;
-      })}
-    </div>
+    <div style={{ padding: '14px 18px', background: featured ? 'rgba(239,51,64,0.12)' : 'rgba(255,255,255,0.035)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}><div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', alignItems: 'center' }}><strong style={{ color: 'white', fontSize: featured ? '0.9rem' : '0.82rem', letterSpacing: '0.035em', textTransform: 'uppercase' }}>{network.name}</strong><span style={{ color: 'var(--panel-muted)', fontSize: '0.67rem', whiteSpace: 'nowrap' }}>{network.clients ? `${fmtInt(network.clients)} clientes` : 'Consolidado'}</span></div></div>
+    <div style={{ padding: '6px 18px 12px' }}><div style={{ display: 'grid', gridTemplateColumns: 'minmax(145px, 1fr) minmax(120px, auto) 92px', gap: '12px', padding: '7px 0', color: 'var(--panel-muted)', fontSize: '0.61rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.055em' }}><span>Indicador</span><span style={{ textAlign: 'right' }}>Valor</span><span style={{ textAlign: 'right' }}>% Cob. Meta</span></div>{rows.map((row, index) => { const below = row.pct !== null && row.pct < 1; return <div key={row.label} style={{ display: 'grid', gridTemplateColumns: 'minmax(145px, 1fr) minmax(120px, auto) 92px', gap: '12px', alignItems: 'center', padding: '8px 0', borderTop: '1px solid rgba(255,255,255,0.055)' }}><span style={{ color: index === 0 ? 'white' : 'var(--panel-text-dim)', fontSize: '0.7rem', fontWeight: index === 0 ? 780 : 650 }}>{row.label}</span><span style={{ color: index === 0 ? '#fde047' : 'white', textAlign: 'right', fontSize: '0.78rem', fontWeight: index === 0 ? 850 : 760, whiteSpace: 'nowrap' }}>{fmtBRL(row.value)}</span><span style={{ color: row.pct === null ? 'var(--panel-muted)' : below ? '#fca5a5' : '#86efac', textAlign: 'right', fontSize: '0.72rem', fontWeight: 800, whiteSpace: 'nowrap' }}>{row.pct === null ? '—' : fmtPct2(row.pct)}</span></div>; })}</div>
   </PanelCard>;
 }
 
@@ -80,52 +78,17 @@ function Resumo() {
 }
 
 function Redes() {
-  const { canonical } = useData();
+  const { canonical, manualConfig } = useData();
   if (!canonical) return <PanelEmptyState icon="▦" title="Redes indisponíveis" description="Carregue a base canônica com Premissas, TOP REDES e Vendas 8022 para consolidar o resultado por rede." />;
-
   const s = canonical.sellOut;
-  const elapsed = s.businessDaysElapsed;
   const totalDays = s.businessDaysTotal;
-  const trend = (value: number) => elapsed > 0 ? (value / elapsed) * totalDays : 0;
-  const topNetworks = [...canonical.networks]
-    .filter(network => network.networkTarget > 0)
-    .sort((a, b) => b.networkTarget - a.networkTarget || b.total - a.total)
-    .slice(0, 5)
-    .map(network => ({
-      key: network.key,
-      name: network.name,
-      target: network.networkTarget,
-      invoiced: network.invoiced,
-      toInvoice: network.toInvoice,
-      total: network.total,
-      invoicedTrend: trend(network.invoiced),
-      totalTrend: trend(network.total),
-      clients: network.clients,
-    }));
-
+  const calculatedWorkedDays = completedBusinessDays(canonical.periodStart, canonical.generatedAt, manualConfig.holidays);
+  const workedDays = calculatedWorkedDays > 0 ? calculatedWorkedDays : s.businessDaysElapsed;
+  const trend = (value: number) => workedDays > 0 ? (value / workedDays) * totalDays : 0;
+  const topNetworks = [...canonical.networks].filter(network => network.networkTarget > 0).sort((a, b) => b.networkTarget - a.networkTarget || b.total - a.total).slice(0, 5).map(network => ({ key: network.key, name: network.name, target: network.networkTarget, invoiced: network.invoiced, toInvoice: network.toInvoice, total: network.total, invoicedTrend: trend(network.invoiced), totalTrend: trend(network.total), clients: network.clients }));
   if (!topNetworks.length) return <PanelEmptyState icon="▦" title="Metas de redes não encontradas" description="As redes existem na base, mas ainda não há metas operacionais configuradas para montar o Top 5." />;
-
-  const topFive: NetworkPanelRow = topNetworks.reduce<NetworkPanelRow>((acc, network) => ({
-    ...acc,
-    target: acc.target + network.target,
-    invoiced: acc.invoiced + network.invoiced,
-    toInvoice: acc.toInvoice + network.toInvoice,
-    total: acc.total + network.total,
-    invoicedTrend: acc.invoicedTrend + network.invoicedTrend,
-    totalTrend: acc.totalTrend + network.totalTrend,
-    clients: acc.clients + network.clients,
-  }), { key: 'TOP-5', name: 'TOP 5 REDES', target: 0, invoiced: 0, toInvoice: 0, total: 0, invoicedTrend: 0, totalTrend: 0, clients: 0 });
-
-  return <div style={{ display: 'grid', gap: '22px' }}>
-    <PanelCard>
-      <PanelSectionHeader eyebrow="REDES" title="Acompanhamento das Top 5 Redes" description="Meta operacional atual, acumulado e tendência calculados com os mesmos dias úteis do Sell Out. Venda = Faturado + A Faturar." action={<span className="panel-badge">DIAS ÚTEIS · {s.businessDaysElapsed}/{s.businessDaysTotal}</span>} />
-      <div style={{ marginTop: '16px' }}><NetworkCard network={topFive} featured /></div>
-    </PanelCard>
-
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(390px, 1fr))', gap: '14px' }}>
-      {topNetworks.map(network => <NetworkCard key={network.key} network={network} />)}
-    </div>
-  </div>;
+  const topFive: NetworkPanelRow = topNetworks.reduce<NetworkPanelRow>((acc, network) => ({ ...acc, target: acc.target + network.target, invoiced: acc.invoiced + network.invoiced, toInvoice: acc.toInvoice + network.toInvoice, total: acc.total + network.total, invoicedTrend: acc.invoicedTrend + network.invoicedTrend, totalTrend: acc.totalTrend + network.totalTrend, clients: acc.clients + network.clients }), { key: 'TOP-5', name: 'TOP 5 REDES', target: 0, invoiced: 0, toInvoice: 0, total: 0, invoicedTrend: 0, totalTrend: 0, clients: 0 });
+  return <div style={{ display: 'grid', gap: '22px' }}><PanelCard><PanelSectionHeader eyebrow="REDES" title="Acompanhamento das Top 5 Redes" description="Tendência conforme a planilha padrão: acumulado ÷ dias trabalhados × dias úteis do mês. Venda = Faturado + A Faturar." action={<span className="panel-badge">DIAS ÚTEIS · {totalDays} · TRABALHADOS · {workedDays}</span>} /><div style={{ marginTop: '16px' }}><NetworkCard network={topFive} featured /></div></PanelCard><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(390px, 1fr))', gap: '14px' }}>{topNetworks.map(network => <NetworkCard key={network.key} network={network} />)}</div></div>;
 }
 
 function ManagerialSummary() {
@@ -133,8 +96,7 @@ function ManagerialSummary() {
   const s = canonical.sellOut; const h = canonical.history;
   const dailyTarget = s.businessDaysTotal > 0 ? s.sellOutTarget / s.businessDaysTotal : 0; const dailyCoverage = dailyTarget > 0 ? s.totalDailyAverage / dailyTarget : 0;
   const positivityDailyTarget = s.businessDaysTotal > 0 ? s.industryPositivityTarget / s.businessDaysTotal : 0; const positivityDailyCurrent = s.businessDaysElapsed > 0 ? s.totalPositivation / s.businessDaysElapsed : 0; const positivityDailyNeeded = s.businessDaysRemaining > 0 ? Math.max(s.industryPositivityTarget - s.totalPositivation, 0) / s.businessDaysRemaining : Math.max(s.industryPositivityTarget - s.totalPositivation, 0);
-  const lastYear = h?.sameMonthLastYear ?? null; const avg3 = h?.average3ClosedMonths ?? null;
-  const compare = (base:number|null) => base && base > 0 ? fmtPct((s.invoicedTrend / base) - 1) : '—';
+  const lastYear = h?.sameMonthLastYear ?? null; const avg3 = h?.average3ClosedMonths ?? null; const compare = (base:number|null) => base && base > 0 ? fmtPct((s.invoicedTrend / base) - 1) : '—';
   return <PanelCard><PanelSectionHeader eyebrow="GERENCIAL" title="Acompanhamento do mês" description="Leitura concentrada do diário, fechamento mensal e positivação, sem repetir cards grandes." /><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(275px, 1fr))', gap: '12px', marginTop: '16px' }}><MetricColumn title="Sell Out diário" rows={[{ label: 'Meta · venda média diária', value: fmtBRL(dailyTarget), detail: 'Meta T&C ÷ dias úteis do mês' },{ label: 'Venda média diária', value: fmtBRL(s.totalDailyAverage), detail: `${fmtPct(dailyCoverage)} da meta diária`, accent: dailyCoverage < 1 },{ label: 'Venda média diária necessária', value: fmtBRL(s.neededDailyAverage), detail: `${s.businessDaysRemaining} dias úteis restantes` }]}/><MetricColumn title="Sell Out mês" rows={[{ label: 'Meta mês', value: fmtBRL(s.sellOutTarget) },{ label: 'Acum. mês faturado', value: fmtBRL(s.invoiced), detail: s.sellOutTarget > 0 ? `${fmtPct(s.invoiced / s.sellOutTarget)} da meta` : 'Meta T&C não informada' },{ label: 'Tendência faturado', value: fmtBRL(s.invoicedTrend), detail: s.sellOutTarget > 0 ? `${fmtPct(s.invoicedTrend / s.sellOutTarget)} da meta` : undefined },{ label: 'Acum. mês venda', value: fmtBRL(s.total), detail: s.sellOutTarget > 0 ? `${fmtPct(s.attainment)} da meta` : 'Meta T&C não informada' },{ label: 'Tendência venda', value: fmtBRL(s.totalTrend), detail: s.sellOutTarget > 0 ? `${fmtPct(s.totalTrend / s.sellOutTarget)} da meta` : undefined, accent: s.sellOutTarget > 0 && s.totalTrend < s.sellOutTarget },{ label: 'Dias úteis', value: `${s.businessDaysElapsed}/${s.businessDaysTotal}`, detail: `${s.businessDaysRemaining} restantes` }]}/><MetricColumn title="Positivação" rows={[{ label: 'Meta', value: fmtInt(s.industryPositivityTarget) },{ label: 'Realizado total', value: fmtInt(s.totalPositivation), detail: `${fmtPct(s.positivityAttainment)} da meta`, accent: s.positivityAttainment < 1 },{ label: 'Positivação faturada', value: fmtInt(s.invoicedPositivation) },{ label: 'Meta média diária', value: positivityDailyTarget.toFixed(1) },{ label: 'Média diária atual', value: positivityDailyCurrent.toFixed(1) },{ label: 'Necessário por dia', value: positivityDailyNeeded.toFixed(1), detail: `${s.businessDaysRemaining} dias úteis restantes` }]}/></div><div style={{ marginTop: '18px', paddingTop: '14px', borderTop: '1px solid rgba(255,255,255,0.075)' }}><div style={{ color: 'var(--panel-red)', fontSize: '0.66rem', fontWeight: 850, letterSpacing: '0.09em', textTransform: 'uppercase', marginBottom: '8px' }}>Comparativos históricos</div><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '8px' }}><QuickMetric label="Mesmo mês ano anterior" value={lastYear !== null ? fmtBRL(lastYear) : 'Histórico não carregado'} detail={`Vs. tendência faturada: ${compare(lastYear)}`} /><QuickMetric label="Média dos 3 meses" value={avg3 !== null ? fmtBRL(avg3) : 'Histórico não carregado'} detail={`Vs. tendência faturada: ${compare(avg3)}`} /></div>{h?.average3MonthKeys?.length ? <div style={{ color: 'var(--panel-muted)', fontSize: '0.67rem', marginTop: '9px' }}>Média móvel baseada em {h.average3MonthKeys.join(' · ')}.</div> : null}</div></PanelCard>;
 }
 
