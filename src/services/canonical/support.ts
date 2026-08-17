@@ -2,6 +2,11 @@ import type * as XLSX from 'xlsx';
 import type { Row, RcaMap, CompassTarget, PremiseClient, RouteStore, ProductMaster } from './runtime';
 import { cleanCode, cleanDigits, classifyLine, displayNetwork, networkKey, normalizeText, parseNumber, sheetRows } from './utils';
 
+function validEan(value: unknown): string {
+  const digits = cleanDigits(value);
+  return digits.length >= 8 && digits.length <= 14 ? digits : '';
+}
+
 export function parseRcaMap(rows: Row[]): RcaMap[] {
   const result = new Map<string, RcaMap>();
   const add = (newCode: unknown, name: unknown, coordCode: unknown, coordName: unknown, oldCode: unknown) => {
@@ -72,7 +77,7 @@ export function parseLegacyNetworkTargets(workbook: XLSX.WorkBook): Map<string, 
 export function parsePriceList(rows: Row[]): { bySku: Map<string, ProductMaster>; byEan: Map<string, ProductMaster> } {
   const bySku = new Map<string, ProductMaster>(); const byEan = new Map<string, ProductMaster>();
   for (let i = 1; i < rows.length; i++) {
-    const row = rows[i]; const sku = cleanCode(row[8]); const ean = cleanDigits(row[10]);
+    const row = rows[i]; const sku = cleanCode(row[8]); const ean = validEan(row[10]);
     if (!sku && !ean) continue;
     const description = String(row[9] ?? '').trim(); const category = String(row[39] ?? '').trim(); const subcategory = String(row[40] ?? '').trim();
     const item: ProductMaster = { sku, ean, description, category, subcategory, brand: String(row[41] ?? '').trim(), isLaunch: false, boxPrice: parseNumber(row[65]) || parseNumber(row[56]), unitPrice: parseNumber(row[66]) || parseNumber(row[57]), line: classifyLine(description, category, subcategory) };
@@ -87,7 +92,10 @@ export function parseCadastro286(rows: Row[]) {
   for (const row of rows) {
     if (String(row[0] ?? '').trim() !== '11') continue;
     const code = cleanCode(row[1]); if (!code || !/^\d+$/.test(code)) continue;
-    const factoryCode = cleanCode(row[23]); const ean = cleanDigits(row[20] || row[21]);
+    const factoryCode = cleanCode(row[23]);
+    // O relatório 286 possui células mescladas e a coluna visual "Barras" pode
+    // chegar em 20 ou 21. Nunca aceitamos códigos curtos como EAN.
+    const ean = validEan(row[20]) || validEan(row[21]) || validEan(row[22]);
     byInternal.set(code, { description: String(row[2] ?? '').trim(), ean, factoryCode });
     if (factoryCode) factoryToInternal.set(factoryCode, code);
   }
