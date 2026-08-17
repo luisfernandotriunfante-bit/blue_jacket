@@ -128,7 +128,7 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
  * correspondência nos relatórios do Winthor. A conciliação procura código interno,
  * código de fábrica e EAN do Cadastro 286 antes de considerar o item sem cadastro.
  */
-export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>): { cost: number; sale: number; unresolved: number } {
+export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>, saleMarkup: number): { cost: number; sale: number; unresolved: number } {
   let totalCost = 0;
   let totalSale = 0;
   let unresolved = 0;
@@ -153,10 +153,10 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
     const billedQty = Math.max(parseNumber(row[7]), 0);
     // A carteira é integralmente estoque em trânsito até a entrada física no CD.
     // Linhas abertas usam Order Qty; linhas já faturadas usam Bill Qty.
-    const portfolioQty = orderedQty > 0 ? orderedQty : billedQty;
+    const portfolioCases = orderedQty > 0 ? orderedQty : billedQty;
     const portfolioCost = Math.max(parseNumber(row[8]), 0);
     const rawMaterial = cleanCode(row[4]);
-    if (portfolioQty <= 0 && portfolioCost <= 0) continue;
+    if (portfolioCases <= 0 && portfolioCost <= 0) continue;
 
     totalCost += portfolioCost;
     if (!rawMaterial) {
@@ -227,18 +227,19 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
       continue;
     }
 
-    let portfolioSale = 0;
-    // A Lista de Preços representa Colgate → Milênio e não pode ser usada
-    // como preço Milênio → cliente. A valorização de venda usa somente a
-    // relação custo/venda efetivamente registrada na posição 105 do Winthor.
-    if (product.hasWinthor !== false && product.custoUnitario > 0 && product.vendaUnitario > 0 && portfolioCost > 0) {
-      portfolioSale = portfolioCost * (product.vendaUnitario / product.custoUnitario);
-      totalSale += portfolioSale;
-    } else if (portfolioCost > 0 || portfolioQty > 0) {
-      unresolved += 1;
-    }
+    // Order Qty/Bill Qty são caixas. A Lista de Preços Colgate → Milênio é usada
+    // somente como cadastro do fator Un/CX; nunca como preço Milênio → cliente.
+    const unitsPerCase = Math.max(master?.unitsPerCase || 0, 0);
+    const portfolioUnits = unitsPerCase > 0 ? portfolioCases * unitsPerCase : 0;
+    if (portfolioCases > 0 && unitsPerCase <= 0) unresolved += 1;
 
-    product.saldoPedido += portfolioQty;
+    // A planilha-modelo valoriza a carteira inteira pelo acréscimo configurado,
+    // inclusive produtos ainda sem código Winthor.
+    const portfolioSale = portfolioCost * (1 + Math.max(Number(saleMarkup) || 0, 0));
+    totalSale += portfolioSale;
+
+    product.saldoPedidoCaixas = (product.saldoPedidoCaixas || 0) + portfolioCases;
+    product.saldoPedido += portfolioUnits;
     product.saldoPedidoValorCusto = (product.saldoPedidoValorCusto || 0) + portfolioCost;
     product.saldoPedidoValorVenda = (product.saldoPedidoValorVenda || 0) + portfolioSale;
     if (!product.factoryCode) product.factoryCode = rawMaterial;
@@ -386,6 +387,7 @@ export function inventoryToCanonical(products: Map<string, StockProduct>): Canon
     costUnit: product.custoUnitario,
     saleUnit: product.vendaUnitario,
     pendingQty: product.saldoPedido,
+    pendingCases: product.saldoPedidoCaixas || 0,
     pendingCost: product.saldoPedidoValorCusto || 0,
     pendingSale: product.saldoPedidoValorVenda || 0,
     isLaunch: Boolean(product.isLancamento),
@@ -410,6 +412,7 @@ export function canonicalToInventory(items: CanonicalInventoryProduct[] | undefi
     entradas: 0,
     saidas: 0,
     saldoPedido: item.pendingQty,
+    saldoPedidoCaixas: item.pendingCases || 0,
     saldoPedidoValorCusto: item.pendingCost,
     saldoPedidoValorVenda: item.pendingSale,
     isLancamento: item.isLaunch,
@@ -446,7 +449,7 @@ export function mergePriorPhysical(products: Map<string, StockProduct>, prior: M
   prior.forEach((old, code) => {
     if (products.has(code)) return;
     if (!(old.physicalUnits || old.physicalCases || old.grossKg || old.isLancamento) && old.hasWinthor !== false) return;
-    products.set(code, { ...old, quantidade: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0 });
+    products.set(code, { ...old, quantidade: 0, saldoPedido: 0, saldoPedidoCaixas: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0 });
   });
 }
 
@@ -457,6 +460,7 @@ export function clearPortfolio(products: Map<string, StockProduct>) {
       continue;
     }
     product.saldoPedido = 0;
+    product.saldoPedidoCaixas = 0;
     product.saldoPedidoValorCusto = 0;
     product.saldoPedidoValorVenda = 0;
   }

@@ -20,10 +20,12 @@
 10. A meta global usa a Meta PNA Colgate da Bússola quando não existe uma Meta T&C manual.
 11. CNPJs são preservados com 14 dígitos, inclusive quando o Excel remove zeros iniciais.
 12. A carteira é lida integralmente: linhas abertas e faturadas continuam em trânsito até a entrada física no CD.
-13. A Lista de Preços é uma referência Colgate → Milênio e nunca é tratada como preço Milênio → cliente. A carteira a venda usa somente custo e preço de venda registrados no Winthor.
+13. A Lista de Preços é uma referência Colgate → Milênio e nunca é tratada como preço Milênio → cliente. Ela fornece o fator Un/CX para converter as caixas da carteira em unidades.
 14. A rede e o responsável por CNPJ do TOP REDES anterior são preservados. Isso permite conciliar o Roteiro Ativo atual com Meta Redes, Meta Tops, equipe e RCA.
 15. Sem um TOP REDES anterior, a Meta Redes recebe provisoriamente a Meta Tops e o painel exibe um aviso de conferência.
 16. Tudo que pertence a Claudio é consolidado em Flavio; “Thiago da Silva Conegundes” e “Thiago” formam uma única coordenação.
+17. A carteira a venda usa o custo integral acrescido da taxa da planilha-modelo (31,530488350705% por padrão), inclusive para produtos ainda sem código Winthor.
+18. Lançamento vem exclusivamente da planilha oficial de lançamentos; “Sem Winthor” vem exclusivamente da carteira quando não há código correspondente no Cadastro 286.
 
 ## Saídas do modelo
 
@@ -60,8 +62,11 @@ Os 15 arquivos fornecidos em `AAAAAA.zip` foram processados com o motor canônic
 | Estoque 105 a custo | R$ 12.577.531,96 |
 | Estoque 105 a venda | R$ 17.648.185,74 |
 | Carteira integral em trânsito a custo | R$ 3.252.344,97 |
-| Carteira em trânsito a venda, somente itens valorizáveis no Winthor | R$ 3.189.529,29 |
+| Carteira integral em trânsito a venda | R$ 4.277.825,22 |
+| Carteira | 27.676 cx / 549.496 un. |
+| Itens da carteira sem Winthor | 4 itens / 608 cx / 17.088 un. |
+| Lançamentos oficiais conciliados | 41 de 41 EANs |
 | Estoque físico 8013 | 2.227.244 un. / 73.450 cx / 424.624,57 kg |
 | Meta Tops do roteiro | R$ 1.175.428,19 |
 
-As somas acima foram refeitas diretamente nas colunas das fontes e coincidem com o estado canônico. Permanecem sinalizadas 77 linhas da carteira sem preço de venda Winthor suficiente para valorização; a Lista de Preços Colgate → Milênio não é usada para preencher artificialmente esse valor.
+As somas acima foram refeitas diretamente nas colunas das fontes e coincidem com o estado canônico. As 207 linhas da carteira encontraram fator Un/CX, portanto não ficou nenhuma linha sem conversão. A média correta dos três meses fechados (maio, junho e julho) é R$ 4.298.725,59; com ela, a cobertura resulta em 123 dias no estoque atual e 153 dias com a carteira.

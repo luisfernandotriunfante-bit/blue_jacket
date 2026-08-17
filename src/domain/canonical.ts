@@ -11,6 +11,7 @@ export type LineName = (typeof LINE_NAMES)[number];
 export interface ManualConfiguration {
   sellOutTarget: number;
   coverageTargetDays: number;
+  portfolioSaleMarkup: number;
   networkTargets: Record<string, number>;
   holidays: string[];
   lineShares: Record<LineName, number>;
@@ -19,8 +20,14 @@ export interface ManualConfiguration {
 export const DEFAULT_MANUAL_CONFIGURATION: ManualConfiguration = {
   sellOutTarget: 0,
   coverageTargetDays: 60,
+  portfolioSaleMarkup: 0.31530488350705,
   networkTargets: {},
-  holidays: [],
+  holidays: [
+    '2026-01-01', '2026-04-03', '2026-04-21', '2026-05-01',
+    '2026-06-04', '2026-06-13', '2026-08-26', '2026-09-07',
+    '2026-10-11', '2026-10-12', '2026-11-02', '2026-11-15',
+    '2026-11-20', '2026-12-25',
+  ],
   lineShares: {
     'Creme Dental': 0.525,
     'Esc + Enx + Fio': 0.095,
@@ -77,6 +84,7 @@ export interface CanonicalInventoryProduct {
   costUnit: number;
   saleUnit: number;
   pendingQty: number;
+  pendingCases: number;
   pendingCost: number;
   pendingSale: number;
   isLaunch: boolean;
@@ -91,7 +99,7 @@ export interface CanonicalRcaSupport { newCode:string; oldCode:string; name:stri
 export interface CanonicalVendorTargetSupport { oldCode:string; name:string; supervisorName:string; salesTarget:number; positivityTarget:number; }
 export interface CanonicalClientSupport { cnpj:string; name:string; city:string; network:string; profile:string; isTop:boolean; }
 export interface CanonicalRouteStoreSupport { cnpj:string; name:string; fantasyName:string; city:string; networkRaw:string; managerCnpj:string; groupingCode:string; tier:string; storeType:string; target:number; }
-export interface CanonicalProductSupport { sku:string; ean:string; description:string; category:string; subcategory:string; brand:string; isLaunch:boolean; boxPrice:number; unitPrice:number; line:LineName|''; }
+export interface CanonicalProductSupport { sku:string; ean:string; description:string; category:string; subcategory:string; brand:string; isLaunch:boolean; boxPrice:number; unitPrice:number; unitsPerCase:number; line:LineName|''; }
 export interface CanonicalItemCodeSupport { internalCode:string; description:string; ean:string; factoryCode:string; }
 
 export interface CanonicalSupportData {
@@ -185,11 +193,17 @@ const positiveGap=(target:number,value:number)=>Math.max(target-value,0);
 
 export function applyManualConfiguration(base:CanonicalState|null,config:ManualConfiguration):CanonicalState|null{
   if(!base)return null;
-  const sellOutTarget=Math.max(config.sellOutTarget||0,0);
+  const sellOutTarget=config.sellOutTarget>0?Math.max(config.sellOutTarget,0):Math.max(base.sellOut.sellOutTarget,0);
   const coverageTargetDays=Math.max(config.coverageTargetDays||0,0);
+  const portfolioSaleMarkup=Math.max(Number(config.portfolioSaleMarkup)||0,0);
   const businessDaysRemaining=base.sellOut.businessDaysRemaining;
   const neededDailyAverage=businessDaysRemaining>0?positiveGap(sellOutTarget,base.sellOut.total)/businessDaysRemaining:positiveGap(sellOutTarget,base.sellOut.total);
   const networks=base.networks.map(network=>{const configured=config.networkTargets[network.key];const networkTarget=Number.isFinite(configured)?Math.max(configured,0):network.detectedNetworkTarget;return{...network,networkTarget,networkAttainment:ratio(network.total,networkTarget),topAttainment:ratio(network.total,network.topTarget),gapToNetworkTarget:positiveGap(networkTarget,network.total),gapToTopTarget:positiveGap(network.topTarget,network.total)}});
   const lines=base.lines.map(line=>{const share=config.lineShares[line.name]??line.share;const target=sellOutTarget*share;return{...line,share,target,attainment:ratio(line.total,target)}});
-  return{...base,sellOut:{...base.sellOut,sellOutTarget,attainment:ratio(base.sellOut.total,sellOutTarget),neededDailyAverage},stock:{...base.stock,coverageTargetDays},networks,lines};
+  const inventory=base.inventory.map(item=>({...item,pendingSale:item.pendingCost*(1+portfolioSaleMarkup)}));
+  const pendingPurchaseSale=inventory.reduce((sum,item)=>sum+item.pendingSale,0);
+  const projectedSaleValue=base.stock.saleValue+pendingPurchaseSale;
+  const historyAverage=base.history.average3ClosedMonths||0;
+  const coverageProjectedDays=historyAverage>0?Math.round(projectedSaleValue/historyAverage*30):0;
+  return{...base,inventory,sellOut:{...base.sellOut,sellOutTarget,attainment:ratio(base.sellOut.total,sellOutTarget),neededDailyAverage},stock:{...base.stock,pendingPurchaseSale,projectedSaleValue,coverageProjectedDays,coverageTargetDays},networks,lines};
 }

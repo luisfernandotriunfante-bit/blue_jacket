@@ -51,6 +51,7 @@ type ColumnFilters = {
   quantidade: string;
   soldUnits: string;
   coverageDays: string;
+  saldoPedidoCaixas: string;
   saldoPedido: string;
   custoUnitario: string;
   vendaUnitario: string;
@@ -65,6 +66,7 @@ const EMPTY_COLUMN_FILTERS: ColumnFilters = {
   quantidade: '',
   soldUnits: '',
   coverageDays: '',
+  saldoPedidoCaixas: '',
   saldoPedido: '',
   custoUnitario: '',
   vendaUnitario: '',
@@ -152,6 +154,7 @@ export function EstoquePage() {
       return matchesNumericFilter(p.quantidade, columnFilters.quantidade)
         && matchesNumericFilter(p.soldUnits, columnFilters.soldUnits)
         && matchesNumericFilter(p.coverageDays, columnFilters.coverageDays)
+        && matchesNumericFilter(p.saldoPedidoCaixas || 0, columnFilters.saldoPedidoCaixas)
         && matchesNumericFilter(p.saldoPedido, columnFilters.saldoPedido)
         && matchesNumericFilter(p.custoUnitario > 0 ? p.custoUnitario : null, columnFilters.custoUnitario)
         && matchesNumericFilter(p.vendaUnitario > 0 ? p.vendaUnitario : null, columnFilters.vendaUnitario)
@@ -282,7 +285,7 @@ export function EstoquePage() {
     <PanelPage title="Estoque" metricLabel="Valor potencial de venda" metricValue={formatCurrency(metricas.valorEstoqueVenda)}>
       <div className="panel-stack">
         <div className="panel-grid panel-grid-2">
-          {renderKpiSection('VLR VENDA', 'Faturamento Potencial do Estoque Atual', metricas.valorEstoqueVenda, metricas.coberturaDiasAtual, metricas.saldoPedidoVenda, metricas.valorEstoqueVenda + metricas.saldoPedidoVenda, metricas.coberturaEstoqueMaisSaldo, metricas.metaCobertura, 'Somente itens da carteira com preço de venda registrado no sistema.')}
+          {renderKpiSection('VLR VENDA', 'Faturamento Potencial do Estoque Atual', metricas.valorEstoqueVenda, metricas.coberturaDiasAtual, metricas.saldoPedidoVenda, metricas.valorEstoqueVenda + metricas.saldoPedidoVenda, metricas.coberturaEstoqueMaisSaldo, metricas.metaCobertura, 'Carteira integral valorizada pelo acréscimo de venda configurado.')}
           {renderKpiSection('VLR CUSTO', 'Custo de Aquisição do Estoque Atual', metricas.valorEstoqueCompra, costCoverageCurrent, metricas.saldoPedidoCusto, metricas.valorEstoqueCompra + metricas.saldoPedidoCusto, costCoverageProjected, metricas.metaCobertura, 'Valor integral informado na carteira.')}
         </div>
 
@@ -317,6 +320,7 @@ export function EstoquePage() {
                   <th className="is-sortable is-right" onClick={() => requestSort('quantidade')}>Estoque (Un){getSortIcon('quantidade')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('soldUnits')}>Venda mês (Un){getSortIcon('soldUnits')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('coverageDays')}>Cobertura ritmo{getSortIcon('coverageDays')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedidoCaixas')}>Carteira (Cx){getSortIcon('saldoPedidoCaixas')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('saldoPedido')}>Carteira (Un){getSortIcon('saldoPedido')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('custoUnitario')}>Custo Un.{getSortIcon('custoUnitario')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('vendaUnitario')}>Venda Un.{getSortIcon('vendaUnitario')}</th>
@@ -330,6 +334,7 @@ export function EstoquePage() {
                   <th>{renderFilterInput('quantidade', '>1000', { numeric: true })}</th>
                   <th>{renderFilterInput('soldUnits', '>100', { numeric: true })}</th>
                   <th>{renderFilterInput('coverageDays', '<5', { numeric: true })}</th>
+                  <th>{renderFilterInput('saldoPedidoCaixas', '>0', { numeric: true })}</th>
                   <th>{renderFilterInput('saldoPedido', '>0', { numeric: true })}</th>
                   <th>{renderFilterInput('custoUnitario', '<5,00', { numeric: true })}</th>
                   <th>{renderFilterInput('vendaUnitario', '>10,00', { numeric: true })}</th>
@@ -354,6 +359,7 @@ export function EstoquePage() {
                     <td className="is-right">
                       {p.coverageDays === null ? '—' : <span style={{ color: 'var(--panel-text-dim)', fontWeight: 500 }}>{p.coverageDays.toFixed(1)} dias</span>}
                     </td>
+                    <td className="is-right">{(p.saldoPedidoCaixas || 0).toLocaleString('pt-BR')}</td>
                     <td className="is-right">{p.saldoPedido.toLocaleString('pt-BR')}</td>
                     <td className="is-right is-muted">{p.custoUnitario > 0 ? formatCurrency(p.custoUnitario) : '—'}</td>
                     <td className="is-right">{p.vendaUnitario > 0 ? <span className="is-strong">{formatCurrency(p.vendaUnitario)}</span> : '—'}</td>
