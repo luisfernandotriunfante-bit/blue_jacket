@@ -36,20 +36,13 @@ function matchesNumericFilter(value: number | null | undefined, expression: stri
 
 type CatalogItem = ProdutoEstoque & {
   soldUnits: number;
-  toInvoiceUnits: number;
   averageDailyUnits: number;
   coverageDays: number | null;
-  requiredRemainingUnits: number;
-  projectedSupplyUnits: number;
-  remainingDemandUnits: number;
-  isActualRupture: boolean;
-  isProjectedRisk: boolean;
-  isRuptureRisk: boolean;
   isNoWinthor: boolean;
 };
 
 type SortKey = keyof ProdutoEstoque | 'totalCusto' | 'totalVenda' | 'soldUnits' | 'coverageDays';
-type CatalogFilter = 'todos' | 'lancamento' | 'ruptura-risco' | 'sem-winthor';
+type CatalogFilter = 'todos' | 'lancamento' | 'sem-winthor';
 
 type ColumnFilters = {
   codigo: string;
@@ -87,75 +80,41 @@ export function EstoquePage() {
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>(EMPTY_COLUMN_FILTERS);
 
   const catalog = useMemo<CatalogItem[]>(() => {
-    const invoicedByInternal = new Map<string, number>();
-    const invoicedByFactory = new Map<string, number>();
-    const invoicedByEan = new Map<string, number>();
-    const toInvoiceByInternal = new Map<string, number>();
-    const toInvoiceByFactory = new Map<string, number>();
-    const toInvoiceByEan = new Map<string, number>();
+    const soldByInternal = new Map<string, number>();
+    const soldByFactory = new Map<string, number>();
+    const soldByEan = new Map<string, number>();
 
     (canonical?.transactions || []).forEach(tx => {
+      if (tx.status !== 'FATURADO') return;
       const units = Math.max(Number(tx.units) || 0, 0);
       if (units <= 0) return;
 
-      const byInternal = tx.status === 'A FATURAR' ? toInvoiceByInternal : invoicedByInternal;
-      const byFactory = tx.status === 'A FATURAR' ? toInvoiceByFactory : invoicedByFactory;
-      const byEan = tx.status === 'A FATURAR' ? toInvoiceByEan : invoicedByEan;
-
-      if (tx.internalProductCode) byInternal.set(tx.internalProductCode, (byInternal.get(tx.internalProductCode) || 0) + units);
-      if (tx.manufacturerCode) byFactory.set(tx.manufacturerCode, (byFactory.get(tx.manufacturerCode) || 0) + units);
+      if (tx.internalProductCode) soldByInternal.set(tx.internalProductCode, (soldByInternal.get(tx.internalProductCode) || 0) + units);
+      if (tx.manufacturerCode) soldByFactory.set(tx.manufacturerCode, (soldByFactory.get(tx.manufacturerCode) || 0) + units);
       const ean = digits(tx.ean);
-      if (ean) byEan.set(ean, (byEan.get(ean) || 0) + units);
+      if (ean) soldByEan.set(ean, (soldByEan.get(ean) || 0) + units);
     });
 
     const elapsed = canonical?.sellOut.businessDaysElapsed || 0;
-    const remaining = canonical?.sellOut.businessDaysRemaining || 0;
 
     return produtos.map(product => {
       const productEan = digits(product.ean);
-      const soldUnits = invoicedByInternal.get(product.codigo)
-        ?? (product.factoryCode ? invoicedByFactory.get(product.factoryCode) : undefined)
-        ?? (productEan ? invoicedByEan.get(productEan) : undefined)
+      const soldUnits = soldByInternal.get(product.codigo)
+        ?? (product.factoryCode ? soldByFactory.get(product.factoryCode) : undefined)
+        ?? (productEan ? soldByEan.get(productEan) : undefined)
         ?? 0;
-      const toInvoiceUnits = toInvoiceByInternal.get(product.codigo)
-        ?? (product.factoryCode ? toInvoiceByFactory.get(product.factoryCode) : undefined)
-        ?? (productEan ? toInvoiceByEan.get(productEan) : undefined)
-        ?? 0;
-
       const averageDailyUnits = elapsed > 0 ? soldUnits / elapsed : 0;
       const coverageDays = averageDailyUnits > 0 ? product.quantidade / averageDailyUnits : null;
-      const requiredRemainingUnits = averageDailyUnits * remaining;
-      const projectedSupplyUnits = Math.max(product.quantidade, 0) + Math.max(product.saldoPedido, 0);
-      const remainingDemandUnits = Math.max(toInvoiceUnits, requiredRemainingUnits);
 
-      // SEM WINTHOR nasce exclusivamente da CARTEIRA Colgate. A quantidade pode
-      // vir zerada em algumas linhas; por isso o valor pendente também prova que
-      // o item está na carteira.
+      // SEM WINTHOR nasce exclusivamente da CARTEIRA Colgate.
       const hasPortfolioPending = product.saldoPedido > 0 || (product.saldoPedidoValorCusto || 0) > 0;
       const isNoWinthor = product.hasWinthor === false && hasPortfolioPending;
-
-      // Ruptura atual: item Winthor sem estoque disponível, independentemente de
-      // ter faturado no mês. Risco projetado: estoque + carteira não cobre a maior
-      // demanda restante entre pedidos A FATURAR e ritmo faturado projetado.
-      const isActualRupture = product.hasWinthor !== false && product.quantidade <= 0;
-      const isProjectedRisk = product.hasWinthor !== false
-        && product.quantidade > 0
-        && remainingDemandUnits > 0
-        && projectedSupplyUnits < remainingDemandUnits;
-      const isRuptureRisk = isActualRupture || isProjectedRisk;
 
       return {
         ...product,
         soldUnits,
-        toInvoiceUnits,
         averageDailyUnits,
         coverageDays,
-        requiredRemainingUnits,
-        projectedSupplyUnits,
-        remainingDemandUnits,
-        isActualRupture,
-        isProjectedRisk,
-        isRuptureRisk,
         isNoWinthor,
       };
     });
@@ -164,7 +123,6 @@ export function EstoquePage() {
   const counts = useMemo(() => ({
     todos: catalog.length,
     lancamento: catalog.filter(p => p.isLancamento).length,
-    rupturaRisco: catalog.filter(p => p.isRuptureRisk).length,
     semWinthor: catalog.filter(p => p.isNoWinthor).length,
   }), [catalog]);
 
@@ -178,7 +136,6 @@ export function EstoquePage() {
     }
 
     if (activeFilter === 'lancamento') sortableItems = sortableItems.filter(p => p.isLancamento);
-    else if (activeFilter === 'ruptura-risco') sortableItems = sortableItems.filter(p => p.isRuptureRisk);
     else if (activeFilter === 'sem-winthor') sortableItems = sortableItems.filter(p => p.isNoWinthor);
 
     const codeFilter = columnFilters.codigo.trim().toLowerCase();
@@ -333,14 +290,13 @@ export function EstoquePage() {
           <PanelSectionHeader
             eyebrow="CATÁLOGO"
             title={`Produtos (${sortedProdutos.length}${sortedProdutos.length !== catalog.length ? ` de ${catalog.length}` : ''})`}
-            description="Lançamento vem da lista oficial por EAN. Sem Winthor aparece somente quando um item da CARTEIRA Colgate não encontra correspondência no Winthor. Ruptura/Risco usa estoque atual + carteira em trânsito contra a maior demanda restante entre A FATURAR e o ritmo faturado projetado até o fim do mês."
+            description="Lançamento vem da lista oficial por EAN. Sem Winthor aparece somente quando um item da CARTEIRA Colgate não encontra correspondência no Winthor."
           />
 
           <div className="panel-toolbar" style={{ marginBottom: '12px' }}>
             <div className="panel-chips">
               <button className={`panel-chip${activeFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setActiveFilter('todos')}>Todos · {counts.todos}</button>
               <button className={`panel-chip${activeFilter === 'lancamento' ? ' is-active' : ''}`} onClick={() => setActiveFilter('lancamento')}>Lançamentos · {counts.lancamento}</button>
-              <button className={`panel-chip is-danger${activeFilter === 'ruptura-risco' ? ' is-active' : ''}`} onClick={() => setActiveFilter('ruptura-risco')}>Ruptura / Risco · {counts.rupturaRisco}</button>
               <button className={`panel-chip is-warning${activeFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setActiveFilter('sem-winthor')}>Sem Winthor · {counts.semWinthor}</button>
             </div>
             <input id="searchInput" className="panel-input" type="text" value={searchTerm} placeholder="Buscar por código, EAN ou descrição..." onChange={event => setSearchTerm(event.target.value)} />
@@ -390,15 +346,13 @@ export function EstoquePage() {
                       <div className="panel-badges">
                         <span className="is-strong">{p.descricao}</span>
                         {p.isLancamento && <span className="panel-badge panel-badge-red">LANÇAMENTO</span>}
-                        {p.isActualRupture && <span className="panel-badge panel-badge-red">RUPTURA</span>}
-                        {!p.isActualRupture && p.isProjectedRisk && <span className="panel-badge panel-badge-red">RISCO DE RUPTURA</span>}
                         {p.isNoWinthor && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}
                       </div>
                     </td>
                     <td className="is-right is-strong">{p.quantidade.toLocaleString('pt-BR')}</td>
                     <td className="is-right">{Math.round(p.soldUnits).toLocaleString('pt-BR')}</td>
                     <td className="is-right">
-                      {p.coverageDays === null ? '—' : <span style={{ color: p.isRuptureRisk ? 'var(--panel-red)' : 'var(--panel-text-dim)', fontWeight: p.isRuptureRisk ? 800 : 500 }}>{p.coverageDays.toFixed(1)} dias</span>}
+                      {p.coverageDays === null ? '—' : <span style={{ color: 'var(--panel-text-dim)', fontWeight: 500 }}>{p.coverageDays.toFixed(1)} dias</span>}
                     </td>
                     <td className="is-right">{p.saldoPedido.toLocaleString('pt-BR')}</td>
                     <td className="is-right is-muted">{p.custoUnitario > 0 ? formatCurrency(p.custoUnitario) : '—'}</td>
