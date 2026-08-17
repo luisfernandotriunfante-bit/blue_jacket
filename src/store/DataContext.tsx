@@ -25,22 +25,59 @@ function readStored<T>(key:string,fallback:T):T{try{const raw=localStorage.getIt
 function normalizePerson(value:string){return (value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase()}
 function canonicalCoordinatorName(value:string){const normalized=normalizePerson(value);if(normalized.includes('CLAUDIO FERREIRA DA SILVA')||normalized==='CLAUDIO')return 'FLAVIO';if(normalized.includes('THIAGO DA SILVA CONEGUNDES')||normalized==='THIAGO')return 'THIAGO';if(normalized==='FLAVIO')return 'FLAVIO';return value||'SEM COORDENADOR'}
 
-function normalizeCanonicalTeam(state:CanonicalState|null):CanonicalState|null{
+/**
+ * A planilha padrão usa DIAS TRABALHADOS como a quantidade de dias úteis
+ * concluídos desde o início da competência até o dia anterior à atualização.
+ * Esse contador pode ultrapassar os dias úteis do mês depois do fechamento
+ * (ex.: julho/26: 23 dias úteis e 25 dias trabalhados em 05/08).
+ */
+function standardWorkedDays(periodStart:string,updatedAt:string,holidays:string[]){
+  if(!periodStart||!updatedAt)return 0;
+  const start=new Date(`${periodStart}T12:00:00Z`);const updated=new Date(updatedAt);
+  if(Number.isNaN(start.getTime())||Number.isNaN(updated.getTime()))return 0;
+  const end=new Date(Date.UTC(updated.getUTCFullYear(),updated.getUTCMonth(),updated.getUTCDate()-1,12));
+  const holidaySet=new Set(holidays||[]);let count=0;const cursor=new Date(start);
+  while(cursor<=end){const iso=cursor.toISOString().slice(0,10);const dow=cursor.getUTCDay();if(dow!==0&&dow!==6&&!holidaySet.has(iso))count+=1;cursor.setUTCDate(cursor.getUTCDate()+1)}
+  return count;
+}
+
+function normalizeCanonicalTeam(state:CanonicalState|null,config:ManualConfiguration):CanonicalState|null{
   if(!state)return null;
+
+  // Recalcula em um único ponto todas as métricas dependentes de tempo para que
+  // Resumo, Redes, Gerencial, Equipes e Documentos usem exatamente a mesma regra.
+  const totalDays=state.sellOut.businessDaysTotal;
+  const calculatedWorked=standardWorkedDays(state.periodStart,state.generatedAt,config.holidays);
+  const workedDays=calculatedWorked>0?calculatedWorked:state.sellOut.businessDaysElapsed;
+  const remainingDays=totalDays-workedDays;
+  const invoicedDailyAverage=workedDays>0?state.sellOut.invoiced/workedDays:0;
+  const totalDailyAverage=workedDays>0?state.sellOut.total/workedDays:0;
+  const invoicedTrend=workedDays>0?invoicedDailyAverage*totalDays:0;
+  const totalTrend=workedDays>0?totalDailyAverage*totalDays:0;
+  const sellOutGap=state.sellOut.sellOutTarget-state.sellOut.total;
+  const neededDailyAverage=remainingDays!==0?sellOutGap/remainingDays:sellOutGap;
+  const sellOut={...state.sellOut,businessDaysElapsed:workedDays,businessDaysRemaining:remainingDays,invoicedDailyAverage,totalDailyAverage,neededDailyAverage,invoicedTrend,totalTrend};
+
   const canonicalCode=new Map<string,string>();
   state.vendors.forEach(v=>{const canonicalName=canonicalCoordinatorName(v.coordinatorName);const original=normalizePerson(v.coordinatorName);if(canonicalName===original&&v.coordinatorCode&&!canonicalCode.has(canonicalName))canonicalCode.set(canonicalName,v.coordinatorCode)});
   state.vendors.forEach(v=>{const canonicalName=canonicalCoordinatorName(v.coordinatorName);if(v.coordinatorCode&&!canonicalCode.has(canonicalName))canonicalCode.set(canonicalName,v.coordinatorCode)});
-  const vendors:CanonicalVendorResult[]=state.vendors.map(v=>{const coordinatorName=canonicalCoordinatorName(v.coordinatorName);return{...v,coordinatorName,coordinatorCode:canonicalCode.get(coordinatorName)||v.coordinatorCode}});
+  const vendors:CanonicalVendorResult[]=state.vendors.map(v=>{
+    const coordinatorName=canonicalCoordinatorName(v.coordinatorName);
+    const idealSalesToday=totalDays>0?v.salesTarget*(workedDays/totalDays):0;
+    const idealPositivationToday=totalDays>0?v.positivityTarget*(workedDays/totalDays):0;
+    const positivityGapToTarget=Math.max(v.positivityTarget-v.totalPositivation,0);
+    return{...v,coordinatorName,coordinatorCode:canonicalCode.get(coordinatorName)||v.coordinatorCode,idealSalesToday,salesGapToIdeal:Math.max(idealSalesToday-v.total,0),idealPositivationToday,positivityGapToIdeal:Math.max(idealPositivationToday-v.totalPositivation,0),positivityGapToTarget,positivityDailyTarget:remainingDays>0?positivityGapToTarget/remainingDays:positivityGapToTarget}
+  });
   const groups=new Map<string,CanonicalVendorResult[]>();
   vendors.forEach(v=>{const key=v.coordinatorName||'SEM COORDENADOR';if(!groups.has(key))groups.set(key,[]);groups.get(key)!.push(v)});
   const coordinators=Array.from(groups.entries()).map(([name,members])=>{const salesTarget=members.reduce((s,v)=>s+v.salesTarget,0);const positivityTarget=members.reduce((s,v)=>s+v.positivityTarget,0);const invoiced=members.reduce((s,v)=>s+v.invoiced,0);const toInvoice=members.reduce((s,v)=>s+v.toInvoice,0);const total=invoiced+toInvoice;const invoicedPositivation=members.reduce((s,v)=>s+v.invoicedPositivation,0);const futurePositivation=members.reduce((s,v)=>s+v.futurePositivation,0);const totalPositivation=invoicedPositivation+futurePositivation;return{code:canonicalCode.get(name)||members[0]?.coordinatorCode||name,name,salesTarget,positivityTarget,invoiced,toInvoice,total,attainment:salesTarget>0?total/salesTarget:0,invoicedPositivation,futurePositivation,totalPositivation,positivityAttainment:positivityTarget>0?totalPositivation/positivityTarget:0,vendors:members.sort((a,b)=>b.total-a.total)}}).sort((a,b)=>b.salesTarget-a.salesTarget||b.total-a.total);
-  return{...state,vendors,coordinators};
+  return{...state,sellOut,vendors,coordinators};
 }
 
 export const DataProvider=({children}:{children:ReactNode})=>{
   const[produtos,setProdutosState]=useState<ProdutoEstoque[]>([]);const[metricas,setMetricasState]=useState<MetricasEstoque>(defaultMetricas);const[sellOut,setSellOutState]=useState<SellOutData|null>(null);const[canonicalBase,setCanonicalBase]=useState<CanonicalState|null>(null);const[manualConfig,setManualConfigState]=useState<ManualConfiguration>(DEFAULT_MANUAL_CONFIGURATION);const[isLoaded,setIsLoaded]=useState(false);
   React.useEffect(()=>{const storedProdutos=readStored<ProdutoEstoque[]>('bj_produtos',[]);const storedMetricas=readStored<MetricasEstoque>('bj_metricas',defaultMetricas);const storedSellOut=readStored<SellOutData|null>('bj_sellout',null);const storedCanonical=readStored<CanonicalState|null>('bj_canonical',null);const storedManual=readStored<ManualConfiguration>('bj_manual_config',DEFAULT_MANUAL_CONFIGURATION);setProdutosState(storedProdutos);setMetricasState({...defaultMetricas,...storedMetricas});setSellOutState(storedSellOut);setCanonicalBase(storedCanonical);setManualConfigState({...DEFAULT_MANUAL_CONFIGURATION,...storedManual,networkTargets:storedManual.networkTargets||{},lineShares:{...DEFAULT_MANUAL_CONFIGURATION.lineShares,...(storedManual.lineShares||{})},holidays:storedManual.holidays||[]});setIsLoaded(Boolean(storedCanonical||storedSellOut||storedProdutos.length))},[]);
-  const canonical=useMemo(()=>normalizeCanonicalTeam(applyManualConfiguration(canonicalBase,manualConfig)),[canonicalBase,manualConfig]);
+  const canonical=useMemo(()=>normalizeCanonicalTeam(applyManualConfiguration(canonicalBase,manualConfig),manualConfig),[canonicalBase,manualConfig]);
   const setProdutos=(newProdutos:ProdutoEstoque[])=>{setProdutosState(newProdutos);localStorage.setItem('bj_produtos',JSON.stringify(newProdutos));if(newProdutos.length>0)setIsLoaded(true)};
   const setMetricas=(newMetricas:MetricasEstoque)=>{const normalized={...defaultMetricas,...newMetricas,metaCobertura:manualConfig.coverageTargetDays};setMetricasState(normalized);localStorage.setItem('bj_metricas',JSON.stringify(normalized))};
   const setSellOut=(data:SellOutData|null)=>{setSellOutState(data);if(data){localStorage.setItem('bj_sellout',JSON.stringify(data));setIsLoaded(true)}else localStorage.removeItem('bj_sellout')};
