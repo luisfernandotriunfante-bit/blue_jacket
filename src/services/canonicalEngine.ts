@@ -87,7 +87,11 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
 
   const priorInventory = canonicalToInventory(previousState?.inventory);
   let products = workbooks.has('stock105') ? parseStock105(workbooks.get('stock105')!.rows, cadastro) : canonicalToInventory(previousState?.inventory);
-  if (workbooks.has('stock105')) mergePriorPhysical(products, priorInventory);
+
+  // Uma carga conjunta 105 + 8013 é um snapshot novo do estoque. Nesse cenário
+  // não podemos recolocar produtos antigos do localStorage depois de reconstruir a
+  // base, pois isso perpetua duplicidades e classificações corrompidas.
+  if (workbooks.has('stock105') && !workbooks.has('stock8013')) mergePriorPhysical(products, priorInventory);
   if (workbooks.has('stock8013')) mergeStock8013(workbooks.get('stock8013')!.rows, products, priceList);
 
   let portfolio = { cost: previousState?.stock.pendingPurchaseCost || 0, sale: previousState?.stock.pendingPurchaseSale || 0, unresolved: 0 };
@@ -96,9 +100,9 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
 
   if (launchRows) {
     const launchResult = applyLaunchList(launchRows, products, priceList);
-    if (launchResult.unresolved > 0) warnings.push(`${launchResult.unresolved} EAN(s) da lista oficial de lançamentos não foram encontrados no estoque nem na Lista de Preço.`);
+    if (launchResult.unresolved > 0) warnings.push(`${launchResult.unresolved} EAN(s) da lista oficial de lançamentos ainda não possuem conciliação completa no Winthor/estoque.`);
     const launchSource = currentSources.find(source => source.kind === 'launchList');
-    if (launchSource) launchSource.note = `Lista oficial por EAN: ${launchResult.unique} EAN(s) único(s), ${launchResult.matched} conciliado(s).`;
+    if (launchSource) launchSource.note = `Lista oficial por EAN: ${launchResult.unique} EAN(s) único(s), ${launchResult.matched} conciliado(s), ${launchResult.unresolved} pendente(s).`;
   }
 
   const historyMonths = mergeHistoryMonths(previousState?.history?.months || [], incomingHistory);
@@ -132,6 +136,6 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   };
 
   const legacy = legacySellOut(transactions, vendors, clients);
-  const metricas: MetricasEstoque = { valorEstoqueCompra: stockCost, valorEstoqueVenda: stockSale, saldoPedidoCusto: portfolio.cost, saldoPedidoVenda: portfolio.sale, coberturaDiasAtual: canonical.stock.coverageCurrentDays, coberturaEstoqueMaisSaldo: canonical.stock.coverageProjectedDays, coberturaDiasAtualCusto: canonical.stock.coverageCostCurrentDays, coberturaEstoqueMaisSaldoCusto: canonical.stock.coverageCostProjectedDays, produtosRuptura: productArray.filter(p => p.quantidade <= 0).length, metaCobertura: config.coverageTargetDays };
+  const metricas: MetricasEstoque = { valorEstoqueCompra: stockCost, valorEstoqueVenda: stockSale, saldoPedidoCusto: portfolio.cost, saldoPedidoVenda: portfolio.sale, coberturaDiasAtual: canonical.stock.coverageCurrentDays, coberturaEstoqueMaisSaldo: canonical.stock.coverageProjectedDays, coberturaDiasAtualCusto: canonical.stock.coverageCostCurrentDays, coberturaEstoqueMaisSaldoCusto: canonical.stock.coverageCostProjectedDays, produtosRuptura: productArray.filter(p => p.hasWinthor !== false && p.quantidade <= 0).length, metaCobertura: config.coverageTargetDays };
   return { canonical, sellOut: legacy, produtos: productArray, metricas };
 }
