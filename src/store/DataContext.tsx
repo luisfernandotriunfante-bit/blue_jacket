@@ -22,20 +22,20 @@ const defaultMetricas:MetricasEstoque={valorEstoqueCompra:0,valorEstoqueVenda:0,
 const DataContext=createContext<DataContextType>({produtos:[],setProdutos:()=>{},metricas:defaultMetricas,setMetricas:()=>{},sellOut:null,setSellOut:()=>{},canonical:null,setCanonical:()=>{},manualConfig:DEFAULT_MANUAL_CONFIGURATION,setManualConfig:()=>{},isLoaded:false});
 
 function readStored<T>(key:string,fallback:T):T{try{const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback}catch{return fallback}}
-function normalizePerson(value:string){return (value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase()}
-function canonicalCoordinatorName(value:string){const normalized=normalizePerson(value);if(normalized.includes('CLAUDIO FERREIRA DA SILVA')||normalized==='CLAUDIO')return 'FLAVIO';if(normalized.includes('THIAGO DA SILVA CONEGUNDES')||normalized==='THIAGO')return 'THIAGO';if(normalized==='FLAVIO')return 'FLAVIO';return value||'SEM COORDENADOR'}
+function canonicalCoordinatorName(value:string){
+  const original=value?.trim()||'SEM COORDENADOR';
+  const normalized=original.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
+  if(normalized.includes('CLAUDIO'))return'FLAVIO';
+  if(normalized==='THIAGO'||normalized.includes('THIAGO DA SILVA CONEGUNDES'))return'THIAGO';
+  return original;
+}
 
-/**
- * A planilha padrão usa DIAS TRABALHADOS como a quantidade de dias úteis
- * concluídos desde o início da competência até o dia anterior à atualização.
- * Esse contador pode ultrapassar os dias úteis do mês depois do fechamento
- * (ex.: julho/26: 23 dias úteis e 25 dias trabalhados em 05/08).
- */
-function standardWorkedDays(periodStart:string,updatedAt:string,holidays:string[]){
-  if(!periodStart||!updatedAt)return 0;
-  const start=new Date(`${periodStart}T12:00:00Z`);const updated=new Date(updatedAt);
-  if(Number.isNaN(start.getTime())||Number.isNaN(updated.getTime()))return 0;
-  const end=new Date(Date.UTC(updated.getUTCFullYear(),updated.getUTCMonth(),updated.getUTCDate()-1,12));
+/** Dias trabalhados pertencem sempre à competência apurada. */
+function standardWorkedDays(periodStart:string,periodEnd:string,referenceDate:string,holidays:string[]){
+  if(!periodStart||!periodEnd||!referenceDate)return 0;
+  const start=new Date(`${periodStart}T12:00:00Z`);const periodLimit=new Date(`${periodEnd}T12:00:00Z`);const reference=new Date(`${referenceDate}T12:00:00Z`);
+  if(Number.isNaN(start.getTime())||Number.isNaN(periodLimit.getTime())||Number.isNaN(reference.getTime()))return 0;
+  const end=reference<periodLimit?reference:periodLimit;
   const holidaySet=new Set(holidays||[]);let count=0;const cursor=new Date(start);
   while(cursor<=end){const iso=cursor.toISOString().slice(0,10);const dow=cursor.getUTCDay();if(dow!==0&&dow!==6&&!holidaySet.has(iso))count+=1;cursor.setUTCDate(cursor.getUTCDate()+1)}
   return count;
@@ -47,19 +47,18 @@ function normalizeCanonicalTeam(state:CanonicalState|null,config:ManualConfigura
   // Recalcula em um único ponto todas as métricas dependentes de tempo para que
   // Resumo, Redes, Gerencial, Equipes e Documentos usem exatamente a mesma regra.
   const totalDays=state.sellOut.businessDaysTotal;
-  const calculatedWorked=standardWorkedDays(state.periodStart,state.generatedAt,config.holidays);
+  const calculatedWorked=standardWorkedDays(state.periodStart,state.periodEnd,state.referenceDate,config.holidays);
   const workedDays=calculatedWorked>0?calculatedWorked:state.sellOut.businessDaysElapsed;
-  const remainingDays=totalDays-workedDays;
+  const remainingDays=Math.max(totalDays-workedDays,0);
   const invoicedDailyAverage=workedDays>0?state.sellOut.invoiced/workedDays:0;
   const totalDailyAverage=workedDays>0?state.sellOut.total/workedDays:0;
   const invoicedTrend=workedDays>0?invoicedDailyAverage*totalDays:0;
   const totalTrend=workedDays>0?totalDailyAverage*totalDays:0;
-  const sellOutGap=state.sellOut.sellOutTarget-state.sellOut.total;
-  const neededDailyAverage=remainingDays!==0?sellOutGap/remainingDays:sellOutGap;
+  const sellOutGap=Math.max(state.sellOut.sellOutTarget-state.sellOut.total,0);
+  const neededDailyAverage=remainingDays>0?sellOutGap/remainingDays:sellOutGap;
   const sellOut={...state.sellOut,businessDaysElapsed:workedDays,businessDaysRemaining:remainingDays,invoicedDailyAverage,totalDailyAverage,neededDailyAverage,invoicedTrend,totalTrend};
 
   const canonicalCode=new Map<string,string>();
-  state.vendors.forEach(v=>{const canonicalName=canonicalCoordinatorName(v.coordinatorName);const original=normalizePerson(v.coordinatorName);if(canonicalName===original&&v.coordinatorCode&&!canonicalCode.has(canonicalName))canonicalCode.set(canonicalName,v.coordinatorCode)});
   state.vendors.forEach(v=>{const canonicalName=canonicalCoordinatorName(v.coordinatorName);if(v.coordinatorCode&&!canonicalCode.has(canonicalName))canonicalCode.set(canonicalName,v.coordinatorCode)});
   const vendors:CanonicalVendorResult[]=state.vendors.map(v=>{
     const coordinatorName=canonicalCoordinatorName(v.coordinatorName);

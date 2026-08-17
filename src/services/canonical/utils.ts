@@ -8,6 +8,22 @@ export function normalizeText(value: unknown): string {
 
 export function cleanDigits(value: unknown): string { return String(value ?? '').replace(/\D/g, '').replace(/^0+/, ''); }
 export function cleanCode(value: unknown): string { return String(value ?? '').trim().replace(/^0+/, ''); }
+export function cleanCnpj(value: unknown): string {
+  let digits = String(value ?? '').replace(/\D/g, '');
+  while (digits.length > 14 && digits.startsWith('0')) digits = digits.slice(1);
+  // CNPJ pode chegar como número do Excel e perder um ou dois zeros iniciais.
+  // CPF (11 dígitos) é mantido como CPF, sem preenchimento artificial.
+  if (digits.length >= 12 && digits.length < 14) digits = digits.padStart(14, '0');
+  return digits;
+}
+
+export function canonicalCoordinatorName(value: unknown): string {
+  const original = String(value ?? '').trim();
+  const normalized = normalizeText(original);
+  if (normalized.includes('CLAUDIO')) return 'FLAVIO';
+  if (normalized === 'THIAGO' || normalized.includes('THIAGO DA SILVA CONEGUNDES')) return 'THIAGO';
+  return original;
+}
 
 export function parseNumber(value: unknown): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -22,7 +38,13 @@ export function parseNumber(value: unknown): number {
 
 export function toIsoDate(value: unknown): string {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
-  if (typeof value === 'number' && Number.isFinite(value)) { const decoded = XLSX.SSF.parse_date_code(value); if (decoded) return `${decoded.y}-${String(decoded.m).padStart(2, '0')}-${String(decoded.d).padStart(2, '0')}`; }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    // Serial do Excel no sistema de datas 1900. Fazer a conversão diretamente
+    // evita depender de XLSX.SSF, que não existe em alguns modos ESM/SSR do Vite.
+    // 1899-12-30 também absorve corretamente o dia fictício 29/02/1900.
+    const date = new Date(Date.UTC(1899, 11, 30) + Math.floor(value) * 86_400_000);
+    if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+  }
   const raw = String(value ?? '').trim(); if (!raw) return '';
   const br = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if (br) { const year = br[3].length === 2 ? 2000 + Number(br[3]) : Number(br[3]); return `${year}-${br[2].padStart(2, '0')}-${br[1].padStart(2, '0')}`; }
   const date = new Date(raw); return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
@@ -163,7 +185,7 @@ function normalizeCompactCadastro286(workbook: XLSX.WorkBook): XLSX.WorkBook {
 
 export async function readWorkbook(file: File, kind: SourceKind): Promise<XLSX.WorkBook> {
   const data = await file.arrayBuffer();
-  const preferredSheets: Partial<Record<SourceKind, string[]>> = { compassTargets: ['Metas'], activeRoute: ['Roteiro Ativo'], legacyTopNetworks: ['Top Redes'] };
+  const preferredSheets: Partial<Record<SourceKind, string[]>> = { compassTargets: ['Metas'], activeRoute: ['Roteiro Ativo'], legacyTopNetworks: ['Top Redes', 'redes', '319', 'Equipe'] };
   const sheets = preferredSheets[kind];
   let workbook = XLSX.read(data, { type: 'array', cellDates: false, ...(sheets ? { sheets } : {}) });
   if (kind === 'stock105') workbook = normalizeCompactStock105(workbook);

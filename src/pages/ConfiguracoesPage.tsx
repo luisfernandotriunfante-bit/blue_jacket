@@ -13,7 +13,7 @@ const SOURCES:SourceUi[]=[
  {kind:'purchasePortfolio',label:'Carteira Colgate',description:'Todo o valor ainda em carteira / estoque em trânsito.',group:'Rotina diária',required:true},
  {kind:'stock8013',label:'Estoque 8013',description:'Caixas, unidades e peso para conferência física.',group:'Rotina diária'},
  {kind:'items286',label:'Cadastro 286',description:'Código Winthor, EAN e vínculos operacionais dos itens.',group:'Cadastros de apoio'},
- {kind:'priceList',label:'Lista de Preço',description:'Cadastro mestre Colgate, preços e classificação comercial.',group:'Cadastros de apoio'},
+ {kind:'priceList',label:'Lista de Preço',description:'Referência Colgate → Milênio, EANs e classificação; não é preço de venda ao cliente.',group:'Cadastros de apoio'},
  {kind:'launchList',label:'Lista de Lançamentos',description:'Lista oficial: lançamento é identificado exclusivamente pelo EAN.',group:'Cadastros de apoio'},
  {kind:'rcaMap',label:'De-Para RCAs',description:'Código atual, código anterior, vendedor e coordenação.',group:'Cadastros de apoio'},
  {kind:'compassTargets',label:'Bússola de Metas',description:'Metas oficiais de indústria, vendedores e positivação.',group:'Cadastros de apoio'},
@@ -26,7 +26,7 @@ const SOURCES:SourceUi[]=[
 const fmtDateTime=(value?:string)=>value?new Date(value).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'Nunca carregado';
 const fmtSize=(bytes:number)=>bytes<1024?`${bytes} B`:bytes<1024*1024?`${(bytes/1024).toFixed(1)} KB`:`${(bytes/1024/1024).toFixed(1)} MB`;
 const brl=(value:number)=>value.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
-const cnpjKey=(value:string)=>String(value||'').replace(/\D/g,'').replace(/^0+/,'');
+const cnpjKey=(value:string)=>{let digits=String(value||'').replace(/\D/g,'');while(digits.length>14&&digits.startsWith('0'))digits=digits.slice(1);return digits.length>=12&&digits.length<14?digits.padStart(14,'0'):digits};
 const closeEnough=(a:number,b:number,tolerance=.02)=>Math.abs(a-b)<=tolerance;
 
 export function ConfiguracoesPage(){
@@ -51,7 +51,7 @@ export function ConfiguracoesPage(){
   const pendingCost=canonical.inventory.reduce((sum,p)=>sum+p.pendingCost,0);add('Carteira · custo',closeEnough(pendingCost,canonical.stock.pendingPurchaseCost),`Produtos ${brl(pendingCost)} · resumo ${brl(canonical.stock.pendingPurchaseCost)}.`);
   const supportCnpj=new Set([...canonical.support.clients.map(c=>cnpjKey(c.cnpj)),...canonical.support.activeRoute.map(c=>cnpjKey(c.cnpj))].filter(Boolean));const txCnpj=new Set(canonical.transactions.map(tx=>cnpjKey(tx.cnpj)).filter(Boolean));const unmapped=[...txCnpj].filter(cnpj=>!supportCnpj.has(cnpj));add('CNPJ × bases de rede',unmapped.length===0,unmapped.length===0?`${txCnpj.size} CNPJs movimentados possuem correspondência em Premissas ou Roteiro.`:`${unmapped.length} de ${txCnpj.size} CNPJs movimentados não aparecem em Premissas nem Roteiro.`);
   const non14=new Set(canonical.transactions.map(tx=>String(tx.cnpj||'').replace(/\D/g,'')).filter(cnpj=>cnpj&&cnpj.length!==14));add('Formato dos CNPJs',non14.size===0,non14.size===0?'Todos os CNPJs das transações estão armazenados com 14 dígitos.':`${non14.size} CNPJs estão armazenados sem 14 dígitos. O cruzamento tolera zeros à esquerda, mas o cadastro deve ser padronizado.`);
-  const officialNetworks=canonical.networks.filter(network=>network.detectedNetworkTarget>0);add('Top Redes oficial',officialNetworks.length===5,`${officialNetworks.length} rede(s) possuem meta detectada no arquivo TOP REDES; o modelo padrão espera 5.`);
+  const officialNetworks=canonical.networks.filter(network=>network.detectedNetworkTarget>0);add('Top Redes oficial',officialNetworks.length>0,`${officialNetworks.length} rede(s) possuem meta detectada no TOP REDES anterior ou consolidada pelo Roteiro Ativo; as cinco maiores alimentam o resumo e todas seguem para o arquivo detalhado.`);
   const noWinthor=canonical.inventory.filter(p=>p.hasWinthor===false&&(p.pendingQty>0||p.pendingCost>0)).length;add('Sem Winthor originado da Carteira',true,`${noWinthor} item(ns) da CARTEIRA sem conciliação Winthor. Esse número é informativo e deve ser auditado item a item quando for maior que zero.`);
   return checks;
  },[canonical]);
