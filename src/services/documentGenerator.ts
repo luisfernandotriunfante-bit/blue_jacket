@@ -3,8 +3,10 @@ import { TemplateWorkbook, type TemplateCellValue } from './templateWorkbook';
 
 const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 const DAY_NAMES = ['Domingo','Segunda-Feira','Terça-Feira','Quarta-Feira','Quinta-Feira','Sexta-Feira','Sábado'];
-const PANEL_TEMPLATE = '/templates/painel-sell-out-padrao.xlsx';
-const NETWORK_TEMPLATE = '/templates/top-redes-padrao.xlsx';
+// Caminhos relativos acompanham a pasta-base do app: / no desenvolvimento e
+// /blue_jacket/ no GitHub Pages.
+const PANEL_TEMPLATE = './templates/painel-sell-out-padrao.xlsx';
+const NETWORK_TEMPLATE = './templates/top-redes-padrao.xlsx';
 
 const ratio = (value:number,target:number) => target > 0 ? value / target : 0;
 const gap = (target:number,value:number) => Math.max(target - value, 0);
