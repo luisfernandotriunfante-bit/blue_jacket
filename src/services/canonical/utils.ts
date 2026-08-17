@@ -50,15 +50,129 @@ export function detectSource(fileName: string): SourceKind {
   return 'unknown';
 }
 
+function firstSheetName(workbook: XLSX.WorkBook): string | undefined {
+  return workbook.SheetNames.find(candidate => Boolean(workbook.Sheets[candidate])) || Object.keys(workbook.Sheets)[0];
+}
+
+function rawSheetRows(workbook: XLSX.WorkBook): Row[] {
+  const name = firstSheetName(workbook);
+  if (!name) return [];
+  return XLSX.utils.sheet_to_json<Row>(workbook.Sheets[name], { header: 1, defval: '' });
+}
+
+function hasStock105Header(rows: Row[]): boolean {
+  return rows.some(row => {
+    const cells = row.map(normalizeText);
+    return cells.some(cell => cell === 'CODIGO' || cell === 'COD')
+      && cells.some(cell => cell.includes('DESCR'))
+      && cells.some(cell => cell.includes('VENDA'));
+  });
+}
+
+/**
+ * O Winthor passou a exportar a Posição 105 em dois formatos:
+ * 1) relatório completo, com capa/cabeçalho e 25 colunas;
+ * 2) relatório compacto, já começando nos produtos e com 16 colunas úteis.
+ *
+ * No formato compacto observado em 17/08/2026:
+ * código=0, descrição=1, estoque=4, custo unitário Real+ICMS=6 e P.Venda=9.
+ * Inserimos apenas um cabeçalho sintético em memória para que o restante do motor
+ * continue trabalhando com uma única regra, sem alterar o arquivo do usuário.
+ */
+function normalizeCompactStock105(workbook: XLSX.WorkBook): XLSX.WorkBook {
+  const name = firstSheetName(workbook);
+  if (!name) return workbook;
+  const rows = rawSheetRows(workbook);
+  if (!rows.length || hasStock105Header(rows)) return workbook;
+
+  const sample = rows.find(row => {
+    const code = cleanCode(row[0]);
+    return /^\d+$/.test(code)
+      && String(row[1] ?? '').trim().length > 0
+      && row.length >= 15
+      && Number.isFinite(parseNumber(row[4]))
+      && Number.isFinite(parseNumber(row[6]))
+      && Number.isFinite(parseNumber(row[9]));
+  });
+  if (!sample) return workbook;
+
+  const header: Row = [
+    'CODIGO', 'DESCRICAO', 'EMB', 'FL', 'ESTOQUE', 'MASTER',
+    'CUSTO REAL+ICMS', 'CUSTO REAL', 'CUSTO FINANC', 'P VENDA', 'PR COMP',
+    'TOTAL CUSTO REAL+ICMS', 'TOTAL CUSTO REAL', 'TOTAL CUSTO FINANC', 'TOTAL P VENDA', 'TOTAL PR COMP',
+  ];
+  workbook.Sheets[name] = XLSX.utils.aoa_to_sheet([header, ...rows]);
+  return workbook;
+}
+
+/**
+ * O Cadastro 286 também passou a ser exportado sem a capa do relatório e com as
+ * colunas vazias removidas. No formato compacto atual há 21 colunas e os campos
+ * fundamentais estão em: filial=0, código Winthor=1, descrição=2, EAN=17,
+ * código de fábrica=18, master=19 e principal=20.
+ *
+ * Expandimos essas linhas para as posições do formato antigo (26 colunas), que é
+ * o contrato já usado pelo parser de cadastro. Assim aceitamos os dois formatos.
+ */
+function normalizeCompactCadastro286(workbook: XLSX.WorkBook): XLSX.WorkBook {
+  const name = firstSheetName(workbook);
+  if (!name) return workbook;
+  const rows = rawSheetRows(workbook);
+  if (!rows.length) return workbook;
+
+  const looksCompact = rows.slice(0, Math.min(rows.length, 30)).some(row => {
+    const ean = cleanDigits(row[17]);
+    return String(row[0] ?? '').trim() === '11'
+      && /^\d+$/.test(cleanCode(row[1]))
+      && String(row[2] ?? '').trim().length > 0
+      && [8, 12, 13, 14].includes(ean.length)
+      && cleanCode(row[18]).length > 0
+      && row.length <= 21;
+  });
+  if (!looksCompact) return workbook;
+
+  const expanded = rows.map(row => {
+    if (String(row[0] ?? '').trim() !== '11' || !/^\d+$/.test(cleanCode(row[1]))) return row;
+    const out: Row = Array(26).fill('');
+    out[0] = row[0];
+    out[1] = row[1];
+    out[2] = row[2];
+    out[5] = row[3];
+    out[7] = row[4];
+    out[8] = row[5];
+    out[9] = row[6];
+    out[10] = row[7];
+    out[11] = row[8];
+    out[12] = row[9];
+    out[13] = row[10];
+    out[14] = row[11];
+    out[15] = row[12];
+    out[16] = row[13];
+    out[17] = row[14];
+    out[18] = row[15];
+    out[19] = row[16];
+    out[20] = row[17];
+    out[23] = row[18];
+    out[24] = row[19];
+    out[25] = row[20];
+    return out;
+  });
+  workbook.Sheets[name] = XLSX.utils.aoa_to_sheet(expanded);
+  return workbook;
+}
+
 export async function readWorkbook(file: File, kind: SourceKind): Promise<XLSX.WorkBook> {
   const data = await file.arrayBuffer();
   const preferredSheets: Partial<Record<SourceKind, string[]>> = { compassTargets: ['Metas'], activeRoute: ['Roteiro Ativo'], legacyTopNetworks: ['Top Redes'] };
   const sheets = preferredSheets[kind];
-  return XLSX.read(data, { type: 'array', cellDates: false, ...(sheets ? { sheets } : {}) });
+  let workbook = XLSX.read(data, { type: 'array', cellDates: false, ...(sheets ? { sheets } : {}) });
+  if (kind === 'stock105') workbook = normalizeCompactStock105(workbook);
+  if (kind === 'items286') workbook = normalizeCompactCadastro286(workbook);
+  return workbook;
 }
 
 export function sheetRows(workbook: XLSX.WorkBook, sheetName?: string): Row[] {
-  const name = sheetName && workbook.Sheets[sheetName] ? sheetName : workbook.SheetNames.find(candidate => Boolean(workbook.Sheets[candidate])) || Object.keys(workbook.Sheets)[0];
+  const name = sheetName && workbook.Sheets[sheetName] ? sheetName : firstSheetName(workbook);
   if (!name) return [];
   return XLSX.utils.sheet_to_json<Row>(workbook.Sheets[name], { header: 1, defval: '' });
 }
