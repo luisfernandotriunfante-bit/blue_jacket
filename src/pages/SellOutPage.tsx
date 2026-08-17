@@ -66,7 +66,7 @@ function Resumo() {
       ) : null}
 
       <PanelCard>
-        <PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Janela móvel de sete dias. O mesmo controle movimenta gráfico e planilha; ao abrir, o dia mais atual fica no limite direito da visualização." />
+        <PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Janela móvel de dez dias. O mesmo controle movimenta os dois gráficos e a planilha; ao abrir, o dia mais atual fica no limite direito da visualização." />
         <DailyMovementWindow data={daily} />
       </PanelCard>
 
