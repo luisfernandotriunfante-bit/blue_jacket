@@ -14,6 +14,18 @@ function formatCurrency(val: number) {
 
 type SortKey = keyof ProdutoEstoque | 'totalCusto' | 'totalVenda';
 
+function hasPortfolioPending(product: ProdutoEstoque) {
+  return product.saldoPedido > 0 || (product.saldoPedidoValorCusto || 0) > 0;
+}
+
+function isUnresolvedLaunch(product: ProdutoEstoque) {
+  return product.hasWinthor === false
+    && !hasPortfolioPending(product)
+    && product.custoUnitario === 0
+    && product.vendaUnitario === 0
+    && product.quantidade === 0;
+}
+
 export function LancamentosPage() {
   const { isLoaded, produtos } = useData();
   const [searchTerm, setSearchTerm] = useState('');
@@ -68,7 +80,7 @@ export function LancamentosPage() {
   }, [todosLancamentos]);
 
   const pendingCount = useMemo(
-    () => todosLancamentos.filter(p => p.hasWinthor === false && p.custoUnitario === 0 && p.vendaUnitario === 0 && p.quantidade === 0 && p.saldoPedido === 0).length,
+    () => todosLancamentos.filter(isUnresolvedLaunch).length,
     [todosLancamentos],
   );
 
@@ -106,12 +118,13 @@ export function LancamentosPage() {
             eyebrow="PORTFÓLIO"
             title={`Catálogo de Lançamentos (${todosLancamentos.length})`}
             description={pendingCount > 0
-              ? `${pendingCount} EAN(s) da lista oficial ainda não possuem conciliação completa no Winthor/estoque. Eles permanecem no catálogo e não entram nos valores enquanto não houver dado real.`
-              : 'Monitoramento dos EANs presentes na lista oficial de lançamentos.'}
+              ? `${pendingCount} EAN(s) da lista oficial ainda não possuem conciliação completa com os dados operacionais. Eles permanecem no catálogo e não entram nos valores enquanto não houver dado real.`
+              : 'Lançamento é definido exclusivamente pela lista oficial de EANs.'}
             action={(
               <input
                 className="panel-input"
                 type="text"
+                value={searchTerm}
                 placeholder="Buscar por código, EAN ou descrição..."
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -126,7 +139,7 @@ export function LancamentosPage() {
                   <th className="is-sortable" onClick={() => requestSort('ean')}>EAN{getSortIcon('ean')}</th>
                   <th className="is-sortable" onClick={() => requestSort('descricao')}>Descrição{getSortIcon('descricao')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('quantidade')}>Estoque (Un){getSortIcon('quantidade')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedido')}>Pedido (Un){getSortIcon('saldoPedido')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedido')}>Carteira (Un){getSortIcon('saldoPedido')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('custoUnitario')}>Custo Un.{getSortIcon('custoUnitario')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('vendaUnitario')}>Venda Un.{getSortIcon('vendaUnitario')}</th>
                 </tr>
@@ -136,9 +149,8 @@ export function LancamentosPage() {
                   <tr><td colSpan={7} style={{ textAlign: 'center', padding: '32px' }} className="is-muted">Nenhum lançamento encontrado para o filtro informado.</td></tr>
                 ) : (
                   sortedProdutos.map((p) => {
-                    const unresolved = p.hasWinthor === false && p.custoUnitario === 0 && p.vendaUnitario === 0 && p.quantidade === 0 && p.saldoPedido === 0;
-                    const isRupture = p.hasWinthor !== false && p.quantidade === 0;
-                    const isNew = p.hasWinthor === false && p.saldoPedido > 0;
+                    const semWinthor = p.hasWinthor === false && hasPortfolioPending(p);
+                    const unresolved = isUnresolvedLaunch(p);
                     return (
                       <tr key={`${p.ean}-${p.codigo}`}>
                         <td className="is-strong">{p.codigo.startsWith('EAN-') ? '—' : p.codigo}</td>
@@ -147,9 +159,7 @@ export function LancamentosPage() {
                           <div className="panel-badges">
                             <span className="is-strong">{p.descricao}</span>
                             <span className="panel-badge panel-badge-purple">LANÇAMENTO</span>
-                            {isNew && <span className="panel-badge panel-badge-green">NOVO</span>}
-                            {isRupture && <span className="panel-badge panel-badge-red">RUPTURA</span>}
-                            {p.hasWinthor === false && <span className="panel-badge panel-badge-amber">SEM CADASTRO WINTHOR</span>}
+                            {semWinthor && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}
                             {unresolved && <span className="panel-badge">PENDENTE DE CONCILIAÇÃO</span>}
                           </div>
                         </td>
