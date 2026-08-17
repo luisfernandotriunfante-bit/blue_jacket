@@ -103,6 +103,10 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
  * A lista oficial carregada é a única autoridade para o status LANÇAMENTO.
  * A conciliação é EXCLUSIVAMENTE por EAN: código interno, SKU e código fabricante
  * nunca são usados como fallback para decidir se um produto é lançamento.
+ *
+ * Todo EAN único da lista oficial deve permanecer no catálogo, mesmo quando ainda
+ * não existir no Winthor, no estoque ou na Lista de Preço. Nesses casos criamos um
+ * registro de pendência com valores zerados, sem inventar preço ou código interno.
  */
 export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>, priceList: ReturnType<typeof parsePriceList>): { matched: number; unresolved: number; unique: number } {
   products.forEach(product => { product.isLancamento = false; });
@@ -116,6 +120,10 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
   const headerIndex = rows.findIndex(row => row.some(cell => normalizeText(cell).includes('EAN')));
   const header = headerIndex >= 0 ? rows[headerIndex] : [];
   const eanColumn = header.findIndex(cell => normalizeText(cell).includes('EAN'));
+  const descriptionColumn = header.findIndex(cell => {
+    const value = normalizeText(cell);
+    return value.includes('DESCR') || value === 'PRODUTO' || value === 'ITEM';
+  });
   const statusColumn = header.findIndex(cell => {
     const value = normalizeText(cell);
     return value === 'STATUS' || value === 'ATIVO' || value === 'ATIVA' || value === 'UTILIZAR';
@@ -130,18 +138,18 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
     }
 
     const ean = cleanDigits(eanColumn >= 0 ? row[eanColumn] : row[3]);
-    if (!ean) continue;
-    if (seen.has(ean)) continue;
+    if (!ean || seen.has(ean)) continue;
     seen.add(ean);
 
     let product = productsByEan.get(ean);
     const master = priceList.byEan.get(ean);
+    const sourceDescription = descriptionColumn >= 0 ? String(row[descriptionColumn] ?? '').trim() : '';
 
     if (!product && master) {
-      const catalogCode = master.sku || ean;
+      const catalogCode = master.sku || `EAN-${ean}`;
       product = {
         codigo: catalogCode,
-        descricao: master.description || `Lançamento ${ean}`,
+        descricao: master.description || sourceDescription || `Lançamento ${ean}`,
         ean,
         quantidade: 0,
         saldoMinimo: 0,
@@ -160,10 +168,34 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
       productsByEan.set(ean, product);
     }
 
-    let found = false;
-    if (product) { product.isLancamento = true; found = true; }
-    if (master) { master.isLaunch = true; found = true; }
-    if (found) matched += 1; else unresolved += 1;
+    if (!product) {
+      const catalogCode = `EAN-${ean}`;
+      product = {
+        codigo: catalogCode,
+        descricao: sourceDescription || `Lançamento sem cadastro · ${ean}`,
+        ean,
+        quantidade: 0,
+        saldoMinimo: 0,
+        custoUnitario: 0,
+        vendaUnitario: 0,
+        entradas: 0,
+        saidas: 0,
+        saldoPedido: 0,
+        saldoPedidoValorCusto: 0,
+        saldoPedidoValorVenda: 0,
+        isLancamento: true,
+        hasWinthor: false,
+        factoryCode: '',
+      };
+      products.set(catalogCode, product);
+      productsByEan.set(ean, product);
+      unresolved += 1;
+    } else {
+      product.isLancamento = true;
+      matched += 1;
+    }
+
+    if (master) master.isLaunch = true;
   }
 
   return { matched, unresolved, unique: seen.size };
