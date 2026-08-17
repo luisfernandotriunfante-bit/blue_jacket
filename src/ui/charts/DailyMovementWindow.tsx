@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DailyMovementChart } from './DailyMovementChart';
+import { DailyPositivityChart } from './DailyPositivityChart';
 
 type MovementDay = {
   date: string;
@@ -30,6 +31,7 @@ function buildCalendar(data: MovementDay[]) {
   const minimumWeekStart = addDays(latest, -6);
   const start = firstActual < minimumWeekStart ? firstActual : minimumWeekStart;
   const days: MovementDay[] = [];
+
   for (let cursor = start; cursor <= latest; cursor = addDays(cursor, 1)) {
     days.push(byDate.get(cursor) || {
       date: cursor,
@@ -40,6 +42,7 @@ function buildCalendar(data: MovementDay[]) {
       totalPositivation: 0,
     });
   }
+
   return days;
 }
 
@@ -68,55 +71,123 @@ export function DailyMovementWindow({ data }: { data: MovementDay[] }) {
 
   return (
     <div style={{ marginTop: '16px' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(220px, 1fr) auto', gap: '12px', alignItems: 'center', padding: '12px 14px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', background: 'rgba(0,0,0,0.12)' }}>
-        <button type="button" onClick={() => move(-1)} disabled={isEarliest} aria-label="Mover período um dia para trás" style={navButtonStyle(isEarliest)}>‹</button>
-        <div style={{ display: 'grid', gap: '7px', minWidth: 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <div style={{ color: 'white', fontSize: '0.82rem', fontWeight: 750 }}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div>
-            <button type="button" onClick={() => setEndIndex(maxEnd)} disabled={isLatest} style={{ border: 0, background: 'transparent', color: isLatest ? 'var(--panel-muted)' : '#ef3340', cursor: isLatest ? 'default' : 'pointer', fontSize: '0.7rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', padding: 0 }}>Mais atual</button>
-          </div>
-          <input
-            aria-label="Mover janela de sete dias"
-            type="range"
-            min={minEnd}
-            max={maxEnd}
-            step={1}
-            value={safeEnd}
-            onChange={event => setEndIndex(Number(event.target.value))}
-            style={{ width: '100%', accentColor: '#ef3340', cursor: maxEnd > minEnd ? 'ew-resize' : 'default' }}
-          />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '18px', padding: '11px 14px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '13px', background: 'rgba(0,0,0,0.14)', marginBottom: '14px' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: 'var(--panel-muted)', fontSize: '0.62rem', fontWeight: 850, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Janela sincronizada · 7 dias</div>
+          <div style={{ color: 'white', fontSize: '0.9rem', fontWeight: 780, marginTop: '3px' }}>{fmtDate(periodStart)} — {fmtDate(periodEnd)}</div>
         </div>
-        <button type="button" onClick={() => move(1)} disabled={isLatest} aria-label="Mover período um dia para frente" style={navButtonStyle(isLatest)}>›</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexShrink: 0 }}>
+          <button type="button" onClick={() => move(-1)} disabled={isEarliest} aria-label="Voltar um dia" title="Voltar um dia" style={navButtonStyle(isEarliest)}>‹</button>
+          <button type="button" onClick={() => setEndIndex(maxEnd)} disabled={isLatest} style={currentButtonStyle(isLatest)}>Atual</button>
+          <button type="button" onClick={() => move(1)} disabled={isLatest} aria-label="Avançar um dia" title="Avançar um dia" style={navButtonStyle(isLatest)}>›</button>
+        </div>
       </div>
 
-      <DailyMovementChart data={visible} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.18fr) minmax(560px, 0.82fr)', gap: '14px', alignItems: 'stretch', overflowX: 'auto' }}>
+        <div style={{ display: 'grid', gap: '12px', minWidth: '650px' }}>
+          <MovementPanel eyebrow="MOVIMENTO FINANCEIRO" title="Sell Out diário">
+            <DailyMovementChart data={visible} />
+          </MovementPanel>
 
-      <div style={{ marginTop: '22px', paddingTop: '18px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
-          <div style={{ color: 'var(--panel-muted)', fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Planilha diária · mesma semana</div>
-          <div style={{ color: 'var(--panel-muted)', fontSize: '0.7rem' }}>{fmtDate(periodStart)} até {fmtDate(periodEnd)}</div>
+          <MovementPanel eyebrow="MOVIMENTO DE POSITIVAÇÃO" title="Clientes positivados por dia">
+            <DailyPositivityChart data={visible} />
+          </MovementPanel>
         </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
-            <thead><tr>{['Data','Faturado','A Faturar','Sell Out','Pos. Fat.','Pos. Total'].map((heading, index) => <th key={heading} style={{ padding: '10px 12px', textAlign: index === 0 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.68rem', letterSpacing: '0.08em', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>{heading}</th>)}</tr></thead>
-            <tbody>{visible.map(day => <tr key={day.date} style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}><td style={{ padding: '10px 12px', color: 'white', fontWeight: 650 }}>{fmtDate(day.date)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'white' }}>{fmtBRL(day.invoiced)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: '#4ade80' }}>{fmtBRL(day.toInvoice)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'white', fontWeight: 750 }}>{fmtBRL(day.total)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--panel-muted)' }}>{fmtInt(day.invoicedPositivation)}</td><td style={{ padding: '10px 12px', textAlign: 'right', color: '#c4b5fd' }}>{fmtInt(day.totalPositivation)}</td></tr>)}</tbody>
-          </table>
+
+        <div style={{ minWidth: '560px', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', background: 'rgba(255,255,255,0.025)', overflow: 'hidden' }}>
+          <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            <div style={{ color: '#ef3340', fontSize: '0.62rem', fontWeight: 900, letterSpacing: '0.11em', textTransform: 'uppercase' }}>PLANILHA DIÁRIA</div>
+            <div style={{ color: 'white', fontSize: '0.94rem', fontWeight: 760, marginTop: '4px' }}>Financeiro + positivação</div>
+            <div style={{ color: 'var(--panel-muted)', fontSize: '0.68rem', marginTop: '3px' }}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div>
+          </div>
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', tableLayout: 'fixed' }}>
+              <colgroup>
+                <col style={{ width: '16%' }} />
+                <col style={{ width: '19%' }} />
+                <col style={{ width: '18%' }} />
+                <col style={{ width: '18%' }} />
+                <col style={{ width: '14.5%' }} />
+                <col style={{ width: '14.5%' }} />
+              </colgroup>
+              <thead>
+                <tr>{['Data','Sell Out','Faturado','A Faturar','Pos. Fat.','Pos. Total'].map((heading, index) => (
+                  <th key={heading} style={{ padding: '10px 8px', textAlign: index === 0 ? 'left' : 'right', color: 'var(--panel-muted)', fontSize: '0.61rem', letterSpacing: '0.05em', textTransform: 'uppercase', borderBottom: '1px solid rgba(255,255,255,0.08)', whiteSpace: 'nowrap' }}>{heading}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {visible.map((day, index) => (
+                  <tr key={day.date} style={{ borderBottom: index === visible.length - 1 ? 'none' : '1px solid rgba(255,255,255,0.055)', background: index === visible.length - 1 ? 'rgba(239,51,64,0.045)' : 'transparent' }}>
+                    <td style={{ padding: '14px 8px', color: 'white', fontWeight: 720, whiteSpace: 'nowrap' }}>{fmtShortDate(day.date)}</td>
+                    <td style={{ padding: '14px 8px', textAlign: 'right', color: 'white', fontWeight: 800, whiteSpace: 'nowrap' }}>{fmtBRL(day.total)}</td>
+                    <td style={{ padding: '14px 8px', textAlign: 'right', color: '#93c5fd', whiteSpace: 'nowrap' }}>{fmtBRL(day.invoiced)}</td>
+                    <td style={{ padding: '14px 8px', textAlign: 'right', color: '#4ade80', whiteSpace: 'nowrap' }}>{fmtBRL(day.toInvoice)}</td>
+                    <td style={{ padding: '14px 8px', textAlign: 'right', color: '#93c5fd', fontWeight: 720 }}>{fmtInt(day.invoicedPositivation)}</td>
+                    <td style={{ padding: '14px 8px', textAlign: 'right', color: '#c4b5fd', fontWeight: 800 }}>{fmtInt(day.totalPositivation)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderTop: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.12)' }}>
+            <WeekTotal label="Sell Out da janela" value={fmtBRL(visible.reduce((sum, day) => sum + day.total, 0))} />
+            <WeekTotal label="Positivações da janela" value={fmtInt(visible.reduce((sum, day) => sum + day.totalPositivation, 0))} />
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
+function MovementPanel({ eyebrow, title, children }: { eyebrow: string; title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: '14px', background: 'rgba(255,255,255,0.025)', padding: '14px 14px 8px', overflow: 'hidden' }}>
+      <div style={{ marginBottom: '2px' }}>
+        <div style={{ color: '#ef3340', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '0.1em', textTransform: 'uppercase' }}>{eyebrow}</div>
+        <div style={{ color: 'white', fontSize: '0.88rem', fontWeight: 760, marginTop: '3px' }}>{title}</div>
+      </div>
+      <div style={{ overflowX: 'auto' }}>{children}</div>
+    </div>
+  );
+}
+
+function WeekTotal({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ padding: '12px 14px', minWidth: 0 }}>
+      <div style={{ color: 'var(--panel-muted)', fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 800 }}>{label}</div>
+      <div style={{ color: 'white', fontSize: '0.86rem', fontWeight: 800, marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</div>
+    </div>
+  );
+}
+
 function navButtonStyle(disabled: boolean) {
   return {
-    width: '38px',
-    height: '38px',
-    borderRadius: '10px',
+    width: '34px',
+    height: '34px',
+    borderRadius: '9px',
     border: '1px solid rgba(255,255,255,0.1)',
-    background: disabled ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.06)',
-    color: disabled ? 'rgba(255,255,255,0.22)' : 'white',
+    background: disabled ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.065)',
+    color: disabled ? 'rgba(255,255,255,0.2)' : 'white',
     cursor: disabled ? 'default' : 'pointer',
-    fontSize: '1.5rem',
+    fontSize: '1.35rem',
     lineHeight: 1,
+  } as const;
+}
+
+function currentButtonStyle(disabled: boolean) {
+  return {
+    height: '34px',
+    padding: '0 12px',
+    borderRadius: '9px',
+    border: `1px solid ${disabled ? 'rgba(255,255,255,0.08)' : 'rgba(239,51,64,0.35)'}`,
+    background: disabled ? 'rgba(255,255,255,0.025)' : 'rgba(239,51,64,0.08)',
+    color: disabled ? 'var(--panel-muted)' : '#ef3340',
+    cursor: disabled ? 'default' : 'pointer',
+    fontSize: '0.68rem',
+    fontWeight: 850,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.05em',
   } as const;
 }
