@@ -101,9 +101,8 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
 
 /**
  * A lista oficial carregada é a única autoridade para o status LANÇAMENTO.
- * Antes de aplicá-la, apagamos flags antigas do estoque e do cadastro mestre,
- * evitando que lançamentos de cargas anteriores permaneçam somados no catálogo.
- * Linhas duplicadas na própria lista também contam apenas uma vez.
+ * A conciliação é EXCLUSIVAMENTE por EAN: código interno, SKU e código fabricante
+ * nunca são usados como fallback para decidir se um produto é lançamento.
  */
 export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>, priceList: ReturnType<typeof parsePriceList>): { matched: number; unresolved: number; unique: number } {
   products.forEach(product => { product.isLancamento = false; });
@@ -112,29 +111,38 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
 
   let matched = 0; let unresolved = 0;
   const seen = new Set<string>();
-  const productsByEan = new Map(Array.from(products.values()).filter(p => p.ean).map(p => [cleanDigits(p.ean), p]));
+  const productsByEan = new Map(Array.from(products.values()).filter(p => cleanDigits(p.ean)).map(p => [cleanDigits(p.ean), p]));
 
-  for (let i = 1; i < rows.length; i++) {
+  const headerIndex = rows.findIndex(row => row.some(cell => normalizeText(cell).includes('EAN')));
+  const header = headerIndex >= 0 ? rows[headerIndex] : [];
+  const eanColumn = header.findIndex(cell => normalizeText(cell).includes('EAN'));
+  const statusColumn = header.findIndex(cell => {
+    const value = normalizeText(cell);
+    return value === 'STATUS' || value === 'ATIVO' || value === 'ATIVA' || value === 'UTILIZAR';
+  });
+  const start = headerIndex >= 0 ? headerIndex + 1 : 1;
+
+  for (let i = start; i < rows.length; i++) {
     const row = rows[i];
-    const status = normalizeText(row[4]);
-    if (status && status !== 'X' && status !== 'SIM' && status !== 'ATIVO') continue;
-    const code = cleanCode(row[0]);
-    const ean = cleanDigits(row[3]);
-    if (!code && !ean) continue;
+    if (statusColumn >= 0) {
+      const status = normalizeText(row[statusColumn]);
+      if (status && status !== 'X' && status !== 'SIM' && status !== 'ATIVO' && status !== 'ATIVA') continue;
+    }
 
-    const uniqueKey = ean ? `EAN:${ean}` : `COD:${code}`;
-    if (seen.has(uniqueKey)) continue;
-    seen.add(uniqueKey);
+    const ean = cleanDigits(eanColumn >= 0 ? row[eanColumn] : row[3]);
+    if (!ean) continue;
+    if (seen.has(ean)) continue;
+    seen.add(ean);
 
-    let product = (code && products.get(code)) || (ean && productsByEan.get(ean));
-    const master = (ean && priceList.byEan.get(ean)) || (code && priceList.bySku.get(code));
+    let product = productsByEan.get(ean);
+    const master = priceList.byEan.get(ean);
 
     if (!product && master) {
-      const catalogCode = code || master.sku || ean;
+      const catalogCode = master.sku || ean;
       product = {
         codigo: catalogCode,
-        descricao: master.description || `Lançamento ${catalogCode}`,
-        ean: ean || master.ean || '',
+        descricao: master.description || `Lançamento ${ean}`,
+        ean,
         quantidade: 0,
         saldoMinimo: 0,
         custoUnitario: 0,
@@ -146,10 +154,10 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
         saldoPedidoValorVenda: 0,
         isLancamento: true,
         hasWinthor: false,
-        factoryCode: master.sku || code,
+        factoryCode: master.sku,
       };
       products.set(catalogCode, product);
-      if (product.ean) productsByEan.set(cleanDigits(product.ean), product);
+      productsByEan.set(ean, product);
     }
 
     let found = false;
@@ -157,6 +165,7 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
     if (master) { master.isLaunch = true; found = true; }
     if (found) matched += 1; else unresolved += 1;
   }
+
   return { matched, unresolved, unique: seen.size };
 }
 
