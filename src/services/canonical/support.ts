@@ -1,6 +1,6 @@
 import type * as XLSX from 'xlsx';
-import type { Row, RcaMap, CompassTarget, PremiseClient, RouteStore, ProductMaster } from './runtime';
-import { canonicalCoordinatorName, cleanCnpj, cleanCode, cleanDigits, classifyLine, displayNetwork, networkKey, normalizeText, parseNumber, sheetRows } from './utils';
+import type { Row, RcaMap, CompassTarget, PremiseClient, RouteStore, ProductMaster, ReferenceClientNetwork } from './runtime';
+import { canonicalCoordinatorName, cleanCnpj, cleanCode, cleanDigits, classifyLine, displayNetwork, networkKey, normalizeCnpj, normalizeText, parseNumber, sheetRows } from './utils';
 
 /**
  * Não basta um campo ter 8-14 dígitos para ele ser EAN/GTIN. O Cadastro 286
@@ -60,13 +60,14 @@ export function parsePremises(rows: Row[]): PremiseClient[] {
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     if (normalizeText(row[10]) && normalizeText(row[10]) !== 'MILENIO') continue;
-    const cnpj = cleanCnpj(row[2]);
+    const normalizedCnpj = normalizeCnpj(row[2],{declaredCnpj:normalizeText(row[13])==='CNPJ'});
+    const cnpj = normalizedCnpj.canonical;
     if (!cnpj) continue;
     const profile = String(row[12] ?? '').trim();
     const rawNetwork = String(row[15] ?? '').trim();
     // Rede vazia na base de premissas não significa "SEM REDE" de forma
     // definitiva: o Roteiro Ativo pode trazer a rede oficial dessa loja.
-    result.push({ cnpj, name: String(row[3] ?? '').trim(), city: String(row[6] ?? '').trim(), network: rawNetwork ? displayNetwork(rawNetwork) : '', profile, isTop: normalizeText(profile).includes('TOP VAREJISTA') });
+    result.push({ cnpj, cnpjRaw:normalizedCnpj.raw, cnpjNormalizationStatus:normalizedCnpj.status, name: String(row[3] ?? '').trim(), city: String(row[6] ?? '').trim(), network: rawNetwork ? displayNetwork(rawNetwork) : '', profile, isTop: normalizeText(profile).includes('TOP VAREJISTA') });
   }
   return result;
 }
@@ -77,9 +78,11 @@ export function parseActiveRoute(workbook: XLSX.WorkBook): RouteStore[] {
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     if (normalizeText(row[1]) !== 'MILENIO') continue;
-    const cnpj = cleanCnpj(row[2]);
+    const normalizedCnpj = normalizeCnpj(row[2]);
+    const cnpj = normalizedCnpj.canonical;
     if (!cnpj) continue;
-    result.push({ cnpj, name: String(row[3] ?? '').trim(), fantasyName: String(row[15] ?? '').trim(), city: String(row[16] ?? '').trim(), networkRaw: String(row[5] ?? '').trim(), managerCnpj: cleanCnpj(row[8]), groupingCode: String(row[9] ?? '').trim(), tier: String(row[10] ?? '').trim(), storeType: String(row[11] ?? '').trim(), target: parseNumber(row[18]) });
+    const normalizedManager=normalizeCnpj(row[8]);
+    result.push({ cnpj, cnpjRaw:normalizedCnpj.raw, cnpjNormalizationStatus:normalizedCnpj.status, name: String(row[3] ?? '').trim(), fantasyName: String(row[15] ?? '').trim(), city: String(row[16] ?? '').trim(), networkRaw: String(row[5] ?? '').trim(), managerCnpj: normalizedManager.canonical, managerCnpjRaw:normalizedManager.raw, managerCnpjNormalizationStatus:normalizedManager.status, groupingCode: String(row[9] ?? '').trim(), tier: String(row[10] ?? '').trim(), storeType: String(row[11] ?? '').trim(), target: parseNumber(row[18]) });
   }
   return result;
 }
@@ -113,20 +116,25 @@ export function parseLegacyNetworkOwners(workbook: XLSX.WorkBook): Map<string, {
   return result;
 }
 
-export function parseLegacyClientNetworks(workbook: XLSX.WorkBook): Map<string, string> {
+export function parseLegacyClientNetworkRecords(workbook: XLSX.WorkBook): ReferenceClientNetwork[] {
   const rows = sheetRows(workbook, 'redes');
-  const result = new Map<string, string>();
+  const result:ReferenceClientNetwork[] = [];
   const headerIndex = rows.findIndex(row => row.some(cell => normalizeText(cell) === 'CNPJ') && row.some(cell => normalizeText(cell) === 'REDE'));
   if (headerIndex < 0) return result;
   const header = rows[headerIndex].map(normalizeText);
   const cnpjColumn = header.findIndex(value => value === 'CNPJ');
   const networkColumn = header.findIndex(value => value === 'REDE');
   for (let i = headerIndex + 1; i < rows.length; i++) {
-    const cnpj = cleanCnpj(rows[i][cnpjColumn]);
+    const normalizedCnpj=normalizeCnpj(rows[i][cnpjColumn]);
+    const cnpj = normalizedCnpj.canonical;
     const rawNetwork = String(rows[i][networkColumn] ?? '').trim();
-    if (cnpj && rawNetwork) result.set(cnpj, displayNetwork(rawNetwork));
+    if (cnpj && rawNetwork) result.push({cnpj,cnpjRaw:normalizedCnpj.raw,cnpjNormalizationStatus:normalizedCnpj.status,network:displayNetwork(rawNetwork)});
   }
   return result;
+}
+
+export function parseLegacyClientNetworks(workbook: XLSX.WorkBook): Map<string, string> {
+  return new Map(parseLegacyClientNetworkRecords(workbook).map(row=>[row.cnpj,row.network]));
 }
 
 export function parseLegacyClientOwners(workbook: XLSX.WorkBook): Map<string, { teamCode:string; vendorCode:string }> {

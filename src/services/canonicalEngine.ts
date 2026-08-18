@@ -2,13 +2,14 @@ import type * as XLSX from 'xlsx';
 import type { MetricasEstoque, ProdutoEstoque, SellOutData } from '../store/DataContext';
 import type { CanonicalHistoryMonth, CanonicalState, CanonicalSupportData, ManualConfiguration, SourceAudit, SourceKind } from '../domain/canonical';
 import { DEFAULT_MANUAL_CONFIGURATION, EMPTY_CANONICAL_SUPPORT } from '../domain/canonical';
-import type { CompassTarget, PremiseClient, ProductMaster, RcaMap, RouteStore, Row, SalesTransaction } from './canonical/runtime';
+import type { CompassTarget, PremiseClient, ProductMaster, RcaMap, ReferenceClientNetwork, RouteStore, Row, SalesTransaction } from './canonical/runtime';
 import { detectSource, readWorkbook, sheetRows } from './canonical/utils';
-import { parseActiveRoute, parseCadastro286, parseCompassTargets, parseLegacyClientNetworks, parseLegacyClientOwners, parseLegacyNetworkOwners, parseLegacyNetworkTargets, parsePremises, parsePriceList, parseRcaMap } from './canonical/support';
+import { parseActiveRoute, parseCadastro286, parseCompassTargets, parseLegacyClientNetworkRecords, parseLegacyClientOwners, parseLegacyNetworkOwners, parseLegacyNetworkTargets, parsePremises, parsePriceList, parseRcaMap } from './canonical/support';
 import { applyLaunchList, applyPortfolio, canonicalToInventory, clearPortfolio, inventoryToCanonical, mergePriorPhysical, mergeStock8013, parseSales, parseStock105, refreshTransactionLines } from './canonical/operations';
 import { buildClients, buildCoordinators, buildDaily, buildLines, buildNetworks, buildVendorResults, businessDayStats, legacySellOut, periodBounds } from './canonical/aggregate';
 import { buildHistorySummary, mergeHistoryMonths, parse379History } from './canonical/history';
 import { blockedCheck, numericCheck, reconcileNetworkAssignments, sumRawSales8022 } from './canonical/reconciliation';
+import { buildRelationshipContext } from './canonical/relationships';
 
 export interface CanonicalProcessResult { canonical: CanonicalState; sellOut: SellOutData; produtos: ProdutoEstoque[]; metricas: MetricasEstoque; }
 
@@ -73,22 +74,17 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const routeStores = workbooks.has('activeRoute') ? parseActiveRoute(workbooks.get('activeRoute')!.workbook) : (previousSupport.activeRoute || []) as RouteStore[];
   const detectedNetworkTargets = workbooks.has('legacyTopNetworks') ? parseLegacyNetworkTargets(workbooks.get('legacyTopNetworks')!.workbook) : new Map<string, number>(Object.entries(previousSupport.legacyNetworkTargets || {}));
   const detectedNetworkOwners = workbooks.has('legacyTopNetworks') ? parseLegacyNetworkOwners(workbooks.get('legacyTopNetworks')!.workbook) : new Map<string, {teamCode:string;vendorCode:string}>(Object.entries(previousSupport.legacyNetworkOwners || {}));
-  const detectedClientNetworks = workbooks.has('legacyTopNetworks') ? parseLegacyClientNetworks(workbooks.get('legacyTopNetworks')!.workbook) : new Map<string, string>(Object.entries(previousSupport.legacyClientNetworks || {}));
+  const referenceNetworkRecords:ReferenceClientNetwork[] = workbooks.has('legacyTopNetworks') ? parseLegacyClientNetworkRecords(workbooks.get('legacyTopNetworks')!.workbook) : Object.entries(previousSupport.legacyClientNetworks || {}).map(([cnpj,network])=>({cnpj,cnpjRaw:cnpj,network}));
   const detectedClientOwners = workbooks.has('legacyTopNetworks') ? parseLegacyClientOwners(workbooks.get('legacyTopNetworks')!.workbook) : new Map<string, {teamCode:string;vendorCode:string}>(Object.entries(previousSupport.legacyClientOwners || {}));
-  const premisesByCnpj = new Map(premises.map(p => [p.cnpj, { ...p }]));
-  detectedClientNetworks.forEach((network, cnpj) => {
-    const existing = premisesByCnpj.get(cnpj);
-    if (existing) {
-      if (!existing.network) existing.network = network;
-    } else {
-      premisesByCnpj.set(cnpj, { cnpj, name: '', city: '', network, profile: '', isTop: false });
-    }
-  });
-  const resolvedPremises = Array.from(premisesByCnpj.values());
   if (!detectedNetworkTargets.size && routeStores.some(store => store.target > 0)) warnings.push('TOP REDES de referência não carregado; a Meta Redes foi preenchida provisoriamente com a Meta Tops do Roteiro Ativo.');
 
   const priorTransactions = (previousState?.transactions || []) as SalesTransaction[];
   const transactions = refreshTransactionLines(workbooks.has('sales8022') ? parseSales(workbooks.get('sales8022')!.rows, priceList) : priorTransactions, priceList);
+  const relationships=buildRelationshipContext(transactions,premises,routeStores,referenceNetworkRecords);
+  const premisesByCnpj=relationships.premisesByCnpj;
+  const resolvedRouteStores=Array.from(relationships.routeByCnpj.values());
+  const detectedClientNetworks=relationships.referenceNetworks;
+  const resolvedPremises=Array.from(premisesByCnpj.values());
   if (!transactions.length) warnings.push('Vendas 8022 não carregadas ou sem movimentos válidos; Sell Out ficará zerado.');
   if (!targets.length) warnings.push('Bússola de Metas não carregada; metas de indústria, vendedores e positivação ficarão zeradas.');
   if (!premises.length) warnings.push('Base de Premissas não carregada; consolidação por rede ficará limitada.');
@@ -97,7 +93,7 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const maxDate = transactions.map(t => t.date).filter(Boolean).sort().at(-1) || previousState?.referenceDate || new Date().toISOString().slice(0, 10);
   const { start: periodStart, end: periodEnd } = periodBounds(maxDate); const business = businessDayStats(maxDate, config.holidays);
   const industryTarget = targets.reduce((s, t) => s + t.salesTarget, 0); const industryPositivityTarget = targets.reduce((s, t) => s + t.positivityTarget, 0);
-  const clients = buildClients(transactions, premisesByCnpj); const vendors = buildVendorResults(transactions, rcaByNew, rcaByOld, targets, business); const coordinators = buildCoordinators(vendors); const networks = buildNetworks(transactions, premisesByCnpj, routeStores, detectedNetworkTargets, detectedNetworkOwners, detectedClientOwners, detectedClientNetworks); const lines = buildLines(transactions); const daily = buildDaily(transactions,periodStart,periodEnd);
+  const clients = buildClients(transactions, premisesByCnpj, resolvedRouteStores, detectedClientNetworks); const vendors = buildVendorResults(transactions, rcaByNew, rcaByOld, targets, business); const coordinators = buildCoordinators(vendors); const networks = buildNetworks(transactions, premisesByCnpj, resolvedRouteStores, detectedNetworkTargets, detectedNetworkOwners, detectedClientOwners, detectedClientNetworks); const lines = buildLines(transactions); const daily = buildDaily(transactions,periodStart,periodEnd);
 
   const priorInventory = canonicalToInventory(previousState?.inventory);
   let products = workbooks.has('stock105') ? parseStock105(workbooks.get('stock105')!.rows, cadastro) : canonicalToInventory(previousState?.inventory);
@@ -129,7 +125,7 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const invClients = new Set(transactions.filter(t => t.status === 'FATURADO').map(t => t.cnpj)); const allClients = new Set(transactions.map(t => t.cnpj)); const futurePositivation = Math.max(allClients.size - invClients.size, 0);
   const invDailyAverage = business.elapsed > 0 ? invoiced / business.elapsed : 0; const totalDailyAverage = business.elapsed > 0 ? total / business.elapsed : 0;
 
-  const networkAssignments = reconcileNetworkAssignments(transactions,premisesByCnpj,routeStores,detectedClientNetworks);
+  const networkAssignments = reconcileNetworkAssignments(transactions,premisesByCnpj,resolvedRouteStores,detectedClientNetworks,relationships.referenceByCnpj);
   const sourceSales = workbooks.has('sales8022') ? sumRawSales8022(workbooks.get('sales8022')!.rows) : null;
   const networkTotal = networks.reduce((sum,network)=>sum+network.total,0);
   const vendorTotal = vendors.reduce((sum,vendor)=>sum+vendor.total,0);
@@ -143,6 +139,9 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
       numericCheck({id:'sellout.source.total',level:'SOURCE',label:'Sell Out 8022 → motor',expected:sourceSales.total,calculated:total,source:'Vendas 8022',tolerance:0.005}),
     ] : []),
     numericCheck({id:'sellout.networks',level:'INTERNAL',label:'Sell Out = soma das redes + Sem Rede',expected:total,calculated:networkTotal,source:'Atribuição CNPJ → rede',tolerance:0.005}),
+    numericCheck({id:'relationships.sales-cnpjs',level:'SOURCE',label:'CNPJs únicos do 8022 = CNPJs auditados no relacionamento',expected:allClients.size,calculated:networkAssignments.length,source:'8022 × Premissas × Roteiro × referência',tolerance:0}),
+    numericCheck({id:'relationships.ambiguous-cnpjs',level:'SOURCE',label:'CNPJs inválidos ou ambíguos nas fontes de relacionamento',expected:0,calculated:relationships.audit.sourceSummaries.reduce((sum,item)=>sum+item.cpfOrAmbiguous+item.invalidLength,0),source:'8022 / Premissas / Roteiro / referência',tolerance:0}),
+    numericCheck({id:'relationships.network-conflicts',level:'SOURCE',label:'Conflitos de rede dentro da mesma fonte',expected:0,calculated:relationships.audit.networkConflicts.length,source:'Premissas / Roteiro / referência',tolerance:0}),
     numericCheck({id:'sellout.vendors',level:'INTERNAL',label:'Sell Out = soma dos vendedores',expected:total,calculated:vendorTotal,source:'Vendas por RCA',tolerance:0.005}),
     numericCheck({id:'sellout.coordinators',level:'INTERNAL',label:'Vendedores = soma das coordenações',expected:vendorTotal,calculated:coordinatorTotal,source:'De-para RCA',tolerance:0.005}),
     numericCheck({id:'sellout.lines',level:'INTERNAL',label:'Sell Out = linhas classificadas + não classificado',expected:total,calculated:classifiedLineTotal,source:'Classificação de produtos',tolerance:0.005,note:classifiedLineTotal===total?'Todas as vendas foram classificadas.':'A diferença deve permanecer visível como venda não classificada.'}),
@@ -156,6 +155,9 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   if(divergentNetworks.length)warnings.push(`${divergentNetworks.length} CNPJ(s) possuem divergência de rede entre Premissas, Roteiro ou referência; Premissas foi mantida como fonte principal.`);
   const withoutNetwork=networkAssignments.filter(item=>item.source==='SEM_REDE');
   if(withoutNetwork.length){const value=withoutNetwork.reduce((sum,item)=>sum+item.value,0);warnings.push(`${withoutNetwork.length} CNPJ(s), somando R$ ${value.toFixed(2)}, permanecem explicitamente em SEM REDE; nenhuma venda foi descartada.`)}
+  const paddedCnpjs=relationships.audit.sourceSummaries.reduce((sum,item)=>sum+item.paddedExcel,0);
+  if(paddedCnpjs)warnings.push(`${paddedCnpjs} ocorrência(s) de CNPJ perderam zero inicial no Excel e foram recompostas para 14 dígitos com o valor original preservado na auditoria.`);
+  if(relationships.audit.networkConflicts.length)warnings.push(`${relationships.audit.networkConflicts.length} CNPJ(s) possuem mais de uma rede dentro da mesma fonte; o conflito permanece explícito na auditoria.`);
 
   const historyAverage = history.average3ClosedMonths || 0;
   const coverageSaleCurrent = historyAverage > 0 ? (stockSale / historyAverage) * 30 : 0;
@@ -164,7 +166,7 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const coverageCostProjected = historyAverage > 0 ? ((stockCost + portfolio.cost) / historyAverage) * 30 : 0;
   if (!historyAverage && (stockSale > 0 || stockCost > 0)) warnings.push('Cobertura de estoque aguardando os três meses fechados anteriores no histórico 379.');
 
-  const support: CanonicalSupportData = { rcas: rcas.map(r => ({ ...r })), vendorTargets: targets.map(t => ({ ...t })), clients: resolvedPremises.map(p => ({ ...p })), activeRoute: routeStores.map(r => ({ ...r })), legacyNetworkTargets: Object.fromEntries(detectedNetworkTargets.entries()), legacyNetworkOwners: Object.fromEntries(detectedNetworkOwners.entries()), legacyClientNetworks: Object.fromEntries(detectedClientNetworks.entries()), legacyClientOwners: Object.fromEntries(detectedClientOwners.entries()), products: Array.from(priceList.bySku.values()).map(p => ({ ...p })), itemCodes: Array.from(cadastro.byInternal.entries()).map(([internalCode, item]) => ({ internalCode, ...item })) };
+  const support: CanonicalSupportData = { rcas: rcas.map(r => ({ ...r })), vendorTargets: targets.map(t => ({ ...t })), clients: resolvedPremises.map(p => ({ ...p })), activeRoute: resolvedRouteStores.map(r => ({ ...r })), legacyNetworkTargets: Object.fromEntries(detectedNetworkTargets.entries()), legacyNetworkOwners: Object.fromEntries(detectedNetworkOwners.entries()), legacyClientNetworks: Object.fromEntries(detectedClientNetworks.entries()), legacyClientOwners: Object.fromEntries(detectedClientOwners.entries()), products: Array.from(priceList.bySku.values()).map(p => ({ ...p })), itemCodes: Array.from(cadastro.byInternal.entries()).map(([internalCode, item]) => ({ internalCode, ...item })) };
   // Na operação Milênio a meta global do painel é a Meta PNA Colgate da
   // Bússola. A configuração manual continua prevalecendo quando informada.
   const sellOutTarget = config.sellOutTarget > 0 ? config.sellOutTarget : Math.max(industryTarget, 0);
@@ -177,7 +179,7 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
     vendors, coordinators, clients,
     networks: networks.map(n => { const manual = config.networkTargets[n.key]; const target = Number.isFinite(manual) ? Math.max(manual, 0) : n.detectedNetworkTarget; return { ...n, networkTarget: target, networkAttainment: target > 0 ? n.total / target : 0, gapToNetworkTarget: Math.max(target - n.total, 0) }; }),
     lines: lines.map(line => { const share = config.lineShares[line.name] ?? line.share; const target = sellOutTarget * share; return { ...line, share, target, attainment: target > 0 ? line.total / target : 0 }; }), warnings,
-    reconciliation:{checks:reconciliationChecks,networkAssignments,blockedRules:reconciliationChecks.filter(check=>check.status==='BLOCKED').map(check=>check.note||check.label)},
+    reconciliation:{checks:reconciliationChecks,networkAssignments,relationships:relationships.audit,blockedRules:reconciliationChecks.filter(check=>check.status==='BLOCKED').map(check=>check.note||check.label)},
   };
 
   const legacy = legacySellOut(transactions, vendors, clients);

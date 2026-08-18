@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import type { LineName, SourceKind } from '../../domain/canonical';
+import type { CnpjNormalizationStatus, LineName, SourceKind } from '../../domain/canonical';
 import type { Row } from './runtime';
 
 export function normalizeText(value: unknown): string {
@@ -8,14 +8,31 @@ export function normalizeText(value: unknown): string {
 
 export function cleanDigits(value: unknown): string { return String(value ?? '').replace(/\D/g, '').replace(/^0+/, ''); }
 export function cleanCode(value: unknown): string { return String(value ?? '').trim().replace(/^0+/, ''); }
-export function cleanCnpj(value: unknown): string {
-  let digits = String(value ?? '').replace(/\D/g, '');
-  while (digits.length > 14 && digits.startsWith('0')) digits = digits.slice(1);
-  // CNPJ pode chegar como número do Excel e perder um ou dois zeros iniciais.
-  // CPF (11 dígitos) é mantido como CPF, sem preenchimento artificial.
-  if (digits.length >= 12 && digits.length < 14) digits = digits.padStart(14, '0');
-  return digits;
+export interface CnpjNormalization {
+  raw:string;
+  digits:string;
+  canonical:string;
+  status:CnpjNormalizationStatus;
+  note:string;
 }
+
+export function normalizeCnpj(value: unknown,options:{declaredCnpj?:boolean}={}): CnpjNormalization {
+  const raw=String(value??'').trim();
+  let digits=raw.replace(/\D/g,'');
+  if(!digits)return{raw,digits:'',canonical:'',status:'EMPTY',note:'CNPJ ausente.'};
+  if(digits.length===14)return{raw,digits,canonical:digits,status:'EXACT_14',note:'CNPJ já possui 14 dígitos.'};
+  if(digits.length===12||digits.length===13){const canonical=digits.padStart(14,'0');return{raw,digits,canonical,status:'PADDED_EXCEL',note:`Excel removeu ${14-digits.length} zero(s) inicial(is); valor recomposto e mantido na auditoria.`}}
+  if(digits.length===11&&options.declaredCnpj){const canonical=digits.padStart(14,'0');return{raw,digits,canonical,status:'PADDED_EXCEL',note:'Excel removeu 3 zeros iniciais; valor recomposto porque a própria fonte declara o identificador como CNPJ.'}}
+  if(digits.length>14&&/^0+/.test(digits)){
+    const original=digits;
+    while(digits.length>14&&digits.startsWith('0'))digits=digits.slice(1);
+    if(digits.length===14)return{raw,digits:original,canonical:digits,status:'TRIMMED_LEADING_ZERO',note:'Zeros excedentes à esquerda foram removidos; ocorrência mantida na auditoria.'};
+  }
+  if(digits.length===11)return{raw,digits,canonical:digits,status:'CPF_OR_AMBIGUOUS',note:'Valor possui 11 dígitos e não foi transformado artificialmente em CNPJ.'};
+  return{raw,digits,canonical:digits,status:'INVALID_LENGTH',note:`Identificador possui ${digits.length} dígito(s); não foi completado silenciosamente.`};
+}
+
+export function cleanCnpj(value: unknown): string { return normalizeCnpj(value).canonical; }
 
 export function canonicalCoordinatorName(value: unknown): string {
   const original = String(value ?? '').trim();

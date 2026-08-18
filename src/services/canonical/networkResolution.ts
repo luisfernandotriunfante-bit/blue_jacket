@@ -1,5 +1,5 @@
 import type { NetworkAssignmentSource } from '../../domain/canonical';
-import { displayNetwork, networkKey, normalizeText } from './utils';
+import { displayNetwork, networkKey } from './utils';
 
 export interface NetworkResolution {
   network:string;
@@ -11,7 +11,8 @@ export interface NetworkResolution {
 function normalizedNetwork(value:string):string {
   const raw=String(value||'').trim();
   if(!raw)return'';
-  return displayNetwork(normalizeText(raw).startsWith('REDE')?raw:`REDE ${raw}`);
+  const withoutPrefix=raw.replace(/^REDE(?:MS)?\s*/i,'').trim();
+  return displayNetwork(withoutPrefix?`Rede ${withoutPrefix}`:'Rede');
 }
 
 export function resolveClientNetwork(premisesNetwork:string,routeNetwork:string,referenceNetwork:string):NetworkResolution {

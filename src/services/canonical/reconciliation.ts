@@ -1,8 +1,8 @@
 import type { CanonicalNetworkAssignmentAudit, CanonicalReconciliationCheck, ReconciliationLevel } from '../../domain/canonical';
-import type { PremiseClient, RouteStore, SalesTransaction } from './runtime';
+import type { PremiseClient, ReferenceClientNetwork, RouteStore, SalesTransaction } from './runtime';
 import { resolveClientNetwork } from './networkResolution';
 import type { Row } from './runtime';
-import { normalizeText, parseNumber } from './utils';
+import { normalizeCnpj, normalizeText, parseNumber } from './utils';
 
 export interface NumericCheckInput {
   id:string;
@@ -35,15 +35,36 @@ export function reconcileNetworkAssignments(
   premisesByCnpj:Map<string,PremiseClient>,
   routeStores:RouteStore[],
   referenceNetworks:Map<string,string>,
+  referenceByCnpj:Map<string,ReferenceClientNetwork>=new Map(),
 ):CanonicalNetworkAssignmentAudit[] {
   const routeByCnpj=new Map(routeStores.map(store=>[store.cnpj,store]));
   const byCnpj=new Map<string,CanonicalNetworkAssignmentAudit>();
   transactions.forEach(transaction=>{
     const premise=premisesByCnpj.get(transaction.cnpj);
     const route=routeByCnpj.get(transaction.cnpj);
+    const reference=referenceByCnpj.get(transaction.cnpj);
     const resolution=resolveClientNetwork(premise?.network||'',route?.networkRaw||'',referenceNetworks.get(transaction.cnpj)||'');
-    const current=byCnpj.get(transaction.cnpj)||{cnpj:transaction.cnpj,value:0,network:resolution.network,source:resolution.source,divergentSources:resolution.divergentSources};
+    const originals={
+      '8022':[transaction.cnpjRaw||transaction.cnpj],
+      ...(premise?{PREMISSAS:[premise.cnpjRaw||premise.cnpj]}:{}),
+      ...(route?{ROTEIRO:[route.cnpjRaw||route.cnpj]}:{}),
+      ...(reference?{REFERENCIA:[reference.cnpjRaw||reference.cnpj]}:{}),
+    };
+    const issues=[
+      {source:'8022',status:transaction.cnpjNormalizationStatus||normalizeCnpj(transaction.cnpjRaw||transaction.cnpj).status},
+      ...(premise?[{source:'PREMISSAS',status:premise.cnpjNormalizationStatus||normalizeCnpj(premise.cnpjRaw||premise.cnpj).status}]:[]),
+      ...(route?[{source:'ROTEIRO',status:route.cnpjNormalizationStatus||normalizeCnpj(route.cnpjRaw||route.cnpj).status}]:[]),
+      ...(reference?[{source:'REFERENCIA',status:reference.cnpjNormalizationStatus||normalizeCnpj(reference.cnpjRaw||reference.cnpj).status}]:[]),
+    ].filter(item=>item.status!=='EXACT_14').map(item=>`${item.source}: ${item.status}`);
+    const current=byCnpj.get(transaction.cnpj)||{
+      cnpj:transaction.cnpj,value:0,network:resolution.network,source:resolution.source,divergentSources:resolution.divergentSources,
+      sourcePresence:{'8022':true,PREMISSAS:Boolean(premise),ROTEIRO:Boolean(route),REFERENCIA:referenceNetworks.has(transaction.cnpj)},
+      sourceNetworks:{...(premise?.network?{PREMISSAS:premise.network}:{}),...(route?.networkRaw?{ROTEIRO:route.networkRaw}:{}),...(referenceNetworks.get(transaction.cnpj)?{REFERENCIA:referenceNetworks.get(transaction.cnpj)!}:{})},
+      originalCnpjs:originals,normalizationIssues:[...new Set(issues)],
+    };
     current.value+=transaction.value;
+    current.originalCnpjs!['8022']=[...new Set([...(current.originalCnpjs!['8022']||[]),transaction.cnpjRaw||transaction.cnpj])];
+    current.normalizationIssues=[...new Set([...(current.normalizationIssues||[]),...issues])];
     byCnpj.set(transaction.cnpj,current);
   });
   return Array.from(byCnpj.values()).sort((left,right)=>left.cnpj.localeCompare(right.cnpj));

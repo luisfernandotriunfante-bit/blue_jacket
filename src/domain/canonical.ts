@@ -60,6 +60,8 @@ export interface CanonicalSalesTransaction {
   clientCode: string;
   clientName: string;
   cnpj: string;
+  cnpjRaw?: string;
+  cnpjNormalizationStatus?: CnpjNormalizationStatus;
   city: string;
   vendorCode: string;
   vendorName: string;
@@ -97,8 +99,8 @@ export interface CanonicalInventoryProduct {
 
 export interface CanonicalRcaSupport { newCode:string; oldCode:string; name:string; coordinatorCode:string; coordinatorName:string; }
 export interface CanonicalVendorTargetSupport { oldCode:string; name:string; supervisorName:string; salesTarget:number; positivityTarget:number; }
-export interface CanonicalClientSupport { cnpj:string; name:string; city:string; network:string; profile:string; isTop:boolean; }
-export interface CanonicalRouteStoreSupport { cnpj:string; name:string; fantasyName:string; city:string; networkRaw:string; managerCnpj:string; groupingCode:string; tier:string; storeType:string; target:number; }
+export interface CanonicalClientSupport { cnpj:string; cnpjRaw?:string; cnpjNormalizationStatus?:CnpjNormalizationStatus; name:string; city:string; network:string; profile:string; isTop:boolean; }
+export interface CanonicalRouteStoreSupport { cnpj:string; cnpjRaw?:string; cnpjNormalizationStatus?:CnpjNormalizationStatus; name:string; fantasyName:string; city:string; networkRaw:string; managerCnpj:string; managerCnpjRaw?:string; managerCnpjNormalizationStatus?:CnpjNormalizationStatus; groupingCode:string; tier:string; storeType:string; target:number; }
 export interface CanonicalProductSupport { sku:string; ean:string; description:string; category:string; subcategory:string; brand:string; isLaunch:boolean; boxPrice:number; unitPrice:number; unitsPerCase:number; line:LineName|''; }
 export interface CanonicalItemCodeSupport { internalCode:string; description:string; ean:string; factoryCode:string; }
 
@@ -146,6 +148,8 @@ export interface CanonicalHistorySummary {
 
 export type ReconciliationLevel = 'INTERNAL' | 'SOURCE' | 'SPREADSHEET';
 export type ReconciliationStatus = 'OK' | 'DIVERGENT' | 'BLOCKED';
+export type CnpjNormalizationStatus = 'EMPTY' | 'EXACT_14' | 'PADDED_EXCEL' | 'TRIMMED_LEADING_ZERO' | 'CPF_OR_AMBIGUOUS' | 'INVALID_LENGTH';
+export type CnpjRelationshipSource = '8022' | 'PREMISSAS' | 'ROTEIRO' | 'REFERENCIA';
 
 export interface CanonicalReconciliationCheck {
   id:string;
@@ -167,11 +171,51 @@ export interface CanonicalNetworkAssignmentAudit {
   network:string;
   source:NetworkAssignmentSource;
   divergentSources:string[];
+  sourcePresence?:Partial<Record<CnpjRelationshipSource,boolean>>;
+  sourceNetworks?:Partial<Record<Exclude<CnpjRelationshipSource,'8022'>,string>>;
+  originalCnpjs?:Partial<Record<CnpjRelationshipSource,string[]>>;
+  normalizationIssues?:string[];
+}
+
+export interface CanonicalCnpjSourceSummary {
+  source:CnpjRelationshipSource;
+  rows:number;
+  uniqueCanonical:number;
+  exact14:number;
+  paddedExcel:number;
+  trimmedLeadingZero:number;
+  cpfOrAmbiguous:number;
+  invalidLength:number;
+  duplicateCnpjs:number;
+  conflictingNetworkCnpjs:number;
+  matchedSalesCnpjs:number;
+  matchedSalesValue:number;
+}
+
+export interface CanonicalCnpjIssue {
+  source:CnpjRelationshipSource;
+  raw:string;
+  canonical:string;
+  status:CnpjNormalizationStatus;
+  note:string;
+}
+
+export interface CanonicalNetworkSourceConflict {
+  source:CnpjRelationshipSource;
+  cnpj:string;
+  networks:string[];
+}
+
+export interface CanonicalRelationshipAudit {
+  sourceSummaries:CanonicalCnpjSourceSummary[];
+  normalizationIssues:CanonicalCnpjIssue[];
+  networkConflicts:CanonicalNetworkSourceConflict[];
 }
 
 export interface CanonicalReconciliation {
   checks:CanonicalReconciliationCheck[];
   networkAssignments:CanonicalNetworkAssignmentAudit[];
+  relationships?:CanonicalRelationshipAudit;
   blockedRules:string[];
 }
 
