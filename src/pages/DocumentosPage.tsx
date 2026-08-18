@@ -23,7 +23,8 @@ export function DocumentosPage() {
   }
 
   const sourceCount = canonical.sources.filter(source => source.loaded).length;
-  const networkCount = canonical.networks.filter(network => network.networkTarget > 0 || network.topTarget > 0 || network.total > 0).length;
+  const officialNetworks = canonical.networks.filter(network => network.key !== 'SEM REDE');
+  const networkCount = officialNetworks.filter(network => network.networkTarget > 0 || network.topTarget > 0 || network.total > 0).length;
   const generate = async (kind:'painel'|'redes') => {
     setGenerating(kind); setError('');
     try {
@@ -68,8 +69,8 @@ export function DocumentosPage() {
           />
           <div style={{ display: 'grid', gap: '8px', margin: '20px 0' }}>
             <Info label="Redes apuradas" value={networkCount.toLocaleString('pt-BR')} />
-            <Info label="Meta Tops" value={fmtBRL(canonical.networks.reduce((sum, network) => sum + network.topTarget, 0))} />
-            <Info label="Realizado + A faturar" value={fmtBRL(canonical.networks.reduce((sum, network) => sum + network.total, 0))} />
+            <Info label="Meta Tops" value={fmtBRL(officialNetworks.reduce((sum, network) => sum + network.topTarget, 0))} />
+            <Info label="Realizado + A faturar" value={fmtBRL(officialNetworks.reduce((sum, network) => sum + network.total, 0))} />
             <Info label="Arquivos válidos na base" value={sourceCount.toLocaleString('pt-BR')} />
           </div>
           <button className="panel-primary-button" disabled={generating!==null} onClick={() => void generate('redes')}>

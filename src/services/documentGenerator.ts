@@ -41,7 +41,7 @@ function generatedDate(state:CanonicalState):Date {
 
 function officialNetworks(state:CanonicalState):CanonicalNetworkResult[] {
   return state.networks
-    .filter(network => network.networkTarget > 0 || network.topTarget > 0 || network.total !== 0)
+    .filter(network => network.key !== 'SEM REDE' && (network.networkTarget > 0 || network.topTarget > 0 || network.total !== 0))
     .sort((left,right) => right.networkTarget-left.networkTarget || right.topTarget-left.topTarget || right.total-left.total);
 }
 
