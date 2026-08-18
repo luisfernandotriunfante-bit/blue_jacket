@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as XLSX from 'xlsx';
 import { readWorkbook, sheetRows } from '../src/services/canonical/utils.ts';
-import { parseCadastro286, parseCompassTargets } from '../src/services/canonical/support.ts';
+import { parseCadastro286, parseCompassTargets, parsePremises } from '../src/services/canonical/support.ts';
 import { parseSales, parseStock105 } from '../src/services/canonical/operations.ts';
 import { gtin13 } from './helpers.ts';
 
@@ -57,4 +57,12 @@ test('Bússola considera somente distribuidor MCD e valores Colgate',()=>{
   const workbook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet(rows),'Metas');
   const targets=parseCompassTargets(workbook);
   assert.equal(targets.length,1);assert.equal(targets[0].salesTarget,1000);assert.equal(targets[0].supervisorName,'THIAGO');
+});
+
+test('Premissas usa a coluna TIPO para distinguir CNPJ com zeros perdidos de CPF/código inválido',()=>{
+  const cnpjRow=Array(16).fill('');cnpjRow[2]=73351000122;cnpjRow[3]='Cliente CNPJ';cnpjRow[10]='MILENIO';cnpjRow[13]='CNPJ';cnpjRow[15]='Rede A';
+  const invalidRow=Array(16).fill('');invalidRow[2]=52998224725;invalidRow[3]='Cliente CPF';invalidRow[10]='MILENIO';invalidRow[13]='CPF/CODIGO INVALIDO';
+  const parsed=parsePremises([Array(16).fill(''),cnpjRow,invalidRow]);
+  assert.equal(parsed[0].cnpj,'00073351000122');assert.equal(parsed[0].cnpjNormalizationStatus,'PADDED_EXCEL');
+  assert.equal(parsed[1].cnpj,'52998224725');assert.equal(parsed[1].cnpjNormalizationStatus,'CPF_OR_AMBIGUOUS');
 });

@@ -21,6 +21,7 @@ const result={
   sellOut:canonical.sellOut,
   stock:canonical.stock,
   counts:{transactions:canonical.transactions.length,inventory:canonical.inventory.length,vendors:canonical.vendors.length,coordinators:canonical.coordinators.length,clients:canonical.clients.length,networks:canonical.networks.length},
+  networks:canonical.networks.map(network=>({key:network.key,name:network.name,stores:network.stores.length,clients:network.clients,topTarget:network.topTarget,networkTarget:network.networkTarget,invoiced:network.invoiced,toInvoice:network.toInvoice,total:network.total})),
   reconciliation:canonical.reconciliation,
   warnings:canonical.warnings,
 };

@@ -1,6 +1,6 @@
 import type { CanonicalInventoryProduct } from '../../domain/canonical';
 import type { Row, SalesTransaction, StockProduct } from './runtime';
-import { canonicalCoordinatorName, cleanCnpj, cleanCode, cleanDigits, classifyLine, normalizeText, parseNumber, toIsoDate } from './utils';
+import { canonicalCoordinatorName, cleanCode, cleanDigits, classifyLine, normalizeCnpj, normalizeText, parseNumber, toIsoDate } from './utils';
 import { parseCadastro286, parsePriceList } from './support';
 
 function stockHeaderColumns(rows: Row[]) {
@@ -353,12 +353,15 @@ export function parseSales(rows: Row[], priceList: ReturnType<typeof parsePriceL
     const manufacturerCode = cleanCode(row[21]);
     const description = String(row[25] ?? '').trim();
     const master = priceList.byEan.get(ean) || priceList.bySku.get(manufacturerCode);
+    const normalizedCnpj=normalizeCnpj(row[5]);
     transactions.push({
       date: toIsoDate(row[2] || row[12]),
       status,
       clientCode: cleanCode(row[3]),
       clientName: String(row[4] ?? '').trim(),
-      cnpj: cleanCnpj(row[5]) || cleanCode(row[3]),
+      cnpj: normalizedCnpj.canonical || `CLIENTE:${cleanCode(row[3])}`,
+      cnpjRaw: normalizedCnpj.raw,
+      cnpjNormalizationStatus: normalizedCnpj.status,
       city: String(row[7] ?? '').trim(),
       vendorCode: cleanCode(row[17]),
       vendorName: String(row[18] ?? '').trim(),

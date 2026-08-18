@@ -58,7 +58,7 @@ test('redes usam fallback do Roteiro e preservam vendas sem rede em grupo explí
   const networks=buildNetworks(transactions,premises,route,new Map());
   assert.equal(networks.reduce((sum,network)=>sum+network.total,0),600);assert.equal(networks.find(network=>network.key==='REDE ROTEIRO')?.total,100);assert.equal(networks.find(network=>network.key==='REDE PREMISSAS')?.total,200);assert.equal(networks.find(network=>network.key==='SEM REDE')?.total,300);
   const audit=reconcileNetworkAssignments(transactions,premises,route,new Map());
-  assert.equal(audit.find(item=>item.cnpj==='00000000000001')?.source,'ROTEIRO');assert.deepEqual(audit.find(item=>item.cnpj==='00000000000002')?.divergentSources,['ROTEIRO: REDE Outra']);assert.equal(audit.find(item=>item.cnpj==='00000000000003')?.source,'SEM_REDE');
+  assert.equal(audit.find(item=>item.cnpj==='00000000000001')?.source,'ROTEIRO');assert.deepEqual(audit.find(item=>item.cnpj==='00000000000002')?.divergentSources,['ROTEIRO: Rede Outra']);assert.equal(audit.find(item=>item.cnpj==='00000000000003')?.source,'SEM_REDE');
 });
 
 test.todo('Meta Redes redistribui ajustes e preserva exatamente o total geral');
