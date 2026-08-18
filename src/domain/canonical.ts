@@ -144,6 +144,37 @@ export interface CanonicalHistorySummary {
   average3MonthKeys: string[];
 }
 
+export type ReconciliationLevel = 'INTERNAL' | 'SOURCE' | 'SPREADSHEET';
+export type ReconciliationStatus = 'OK' | 'DIVERGENT' | 'BLOCKED';
+
+export interface CanonicalReconciliationCheck {
+  id:string;
+  level:ReconciliationLevel;
+  label:string;
+  expected:number | string | null;
+  calculated:number | string | null;
+  difference:number | null;
+  tolerance:number;
+  status:ReconciliationStatus;
+  source:string;
+  note?:string;
+}
+
+export type NetworkAssignmentSource = 'PREMISSAS' | 'ROTEIRO' | 'REFERENCIA' | 'SEM_REDE';
+export interface CanonicalNetworkAssignmentAudit {
+  cnpj:string;
+  value:number;
+  network:string;
+  source:NetworkAssignmentSource;
+  divergentSources:string[];
+}
+
+export interface CanonicalReconciliation {
+  checks:CanonicalReconciliationCheck[];
+  networkAssignments:CanonicalNetworkAssignmentAudit[];
+  blockedRules:string[];
+}
+
 export interface CanonicalDailyMovement { date:string; invoiced:number; toInvoice:number; total:number; invoicedPositivation:number; totalPositivation:number; }
 export interface CanonicalClientResult { cnpj:string; name:string; city:string; network:string; invoiced:number; toInvoice:number; total:number; }
 
@@ -186,6 +217,7 @@ export interface CanonicalState {
   history:CanonicalHistorySummary;
   industryTarget:number; industryPositivityTarget:number; sellOut:CanonicalSellOutSummary; stock:CanonicalStockSummary;
   vendors:CanonicalVendorResult[]; coordinators:CanonicalCoordinatorResult[]; clients:CanonicalClientResult[]; networks:CanonicalNetworkResult[]; lines:CanonicalLineResult[]; warnings:string[];
+  reconciliation?:CanonicalReconciliation;
 }
 
 const ratio=(value:number,target:number)=>target>0?value/target:0;

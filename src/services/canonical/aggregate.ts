@@ -4,6 +4,7 @@ import { DEFAULT_MANUAL_CONFIGURATION, LINE_NAMES } from '../../domain/canonical
 import type { CompassTarget, PremiseClient, RcaMap, RouteStore, SalesTransaction } from './runtime';
 import { DAY_NAMES } from './runtime';
 import { displayNetwork, networkKey, normalizeText } from './utils';
+import { resolveClientNetwork } from './networkResolution';
 
 export function periodBounds(referenceDate: string): { start: string; end: string } {
   if (!referenceDate) return { start: '', end: '' };
@@ -81,16 +82,19 @@ export function buildCoordinators(vendors: CanonicalVendorResult[]): CanonicalCo
   return Array.from(groups.entries()).map(([name,members])=>{const code=members.find(v=>v.coordinatorCode)?.coordinatorCode||name;const salesTarget=members.reduce((s,v)=>s+v.salesTarget,0);const positivityTarget=members.reduce((s,v)=>s+v.positivityTarget,0);const invoiced=members.reduce((s,v)=>s+v.invoiced,0);const toInvoice=members.reduce((s,v)=>s+v.toInvoice,0);const total=invoiced+toInvoice;const invoicedPositivation=members.reduce((s,v)=>s+v.invoicedPositivation,0);const futurePositivation=members.reduce((s,v)=>s+v.futurePositivation,0);const totalPositivation=invoicedPositivation+futurePositivation;return{code,name,salesTarget,positivityTarget,invoiced,toInvoice,total,attainment:salesTarget>0?total/salesTarget:0,invoicedPositivation,futurePositivation,totalPositivation,positivityAttainment:positivityTarget>0?totalPositivation/positivityTarget:0,vendors:members.sort((a,b)=>b.total-a.total)}}).sort((a,b)=>b.salesTarget-a.salesTarget||b.total-a.total);
 }
 
-export function buildNetworks(transactions: SalesTransaction[], premisesByCnpj: Map<string,PremiseClient>, routeStores: RouteStore[], detectedTargets: Map<string,number>, detectedOwners: Map<string,{teamCode:string;vendorCode:string}> = new Map(), clientOwners: Map<string,{teamCode:string;vendorCode:string}> = new Map()): CanonicalNetworkResult[] {
+export function buildNetworks(transactions: SalesTransaction[], premisesByCnpj: Map<string,PremiseClient>, routeStores: RouteStore[], detectedTargets: Map<string,number>, detectedOwners: Map<string,{teamCode:string;vendorCode:string}> = new Map(), clientOwners: Map<string,{teamCode:string;vendorCode:string}> = new Map(), referenceNetworks: Map<string,string> = new Map()): CanonicalNetworkResult[] {
   type VendorActivity={value:number;teamCode:string};
   type Temp={name:string;invoiced:number;toInvoice:number;clients:Set<string>;vendors:Map<string,VendorActivity>}; const activity=new Map<string,Temp>();
   type ClientActivity={invoiced:number;toInvoice:number};
   const activityByCnpj=new Map<string,ClientActivity>();
+  const routeByCnpj=new Map(routeStores.map(store=>[store.cnpj,store]));
   transactions.forEach(tx=>{
     const client=activityByCnpj.get(tx.cnpj)||{invoiced:0,toInvoice:0};
     if(tx.status==='FATURADO')client.invoiced+=tx.value;else client.toInvoice+=tx.value;
     activityByCnpj.set(tx.cnpj,client);
-    const premise=premisesByCnpj.get(tx.cnpj);const network=premise?.network||'';if(!network)return;const key=networkKey(network);
+    const premise=premisesByCnpj.get(tx.cnpj);const route=routeByCnpj.get(tx.cnpj);
+    const resolved=resolveClientNetwork(premise?.network||'',route?.networkRaw||'',referenceNetworks.get(tx.cnpj)||'');
+    const network=resolved.network;const key=resolved.key;
     if(!activity.has(key))activity.set(key,{name:network,invoiced:0,toInvoice:0,clients:new Set(),vendors:new Map()});
     const a=activity.get(key)!;if(tx.status==='FATURADO')a.invoiced+=tx.value;else a.toInvoice+=tx.value;a.clients.add(tx.cnpj);
     if(tx.vendorCode){const current=a.vendors.get(tx.vendorCode)||{value:0,teamCode:tx.supervisorCode};current.value+=tx.value;if(!current.teamCode)current.teamCode=tx.supervisorCode;a.vendors.set(tx.vendorCode,current)}

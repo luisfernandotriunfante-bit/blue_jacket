@@ -8,6 +8,7 @@ import { parseActiveRoute, parseCadastro286, parseCompassTargets, parseLegacyCli
 import { applyLaunchList, applyPortfolio, canonicalToInventory, clearPortfolio, inventoryToCanonical, mergePriorPhysical, mergeStock8013, parseSales, parseStock105, refreshTransactionLines } from './canonical/operations';
 import { buildClients, buildCoordinators, buildDaily, buildLines, buildNetworks, buildVendorResults, businessDayStats, legacySellOut, periodBounds } from './canonical/aggregate';
 import { buildHistorySummary, mergeHistoryMonths, parse379History } from './canonical/history';
+import { blockedCheck, numericCheck, reconcileNetworkAssignments, sumRawSales8022 } from './canonical/reconciliation';
 
 export interface CanonicalProcessResult { canonical: CanonicalState; sellOut: SellOutData; produtos: ProdutoEstoque[]; metricas: MetricasEstoque; }
 
@@ -96,7 +97,7 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const maxDate = transactions.map(t => t.date).filter(Boolean).sort().at(-1) || previousState?.referenceDate || new Date().toISOString().slice(0, 10);
   const { start: periodStart, end: periodEnd } = periodBounds(maxDate); const business = businessDayStats(maxDate, config.holidays);
   const industryTarget = targets.reduce((s, t) => s + t.salesTarget, 0); const industryPositivityTarget = targets.reduce((s, t) => s + t.positivityTarget, 0);
-  const clients = buildClients(transactions, premisesByCnpj); const vendors = buildVendorResults(transactions, rcaByNew, rcaByOld, targets, business); const coordinators = buildCoordinators(vendors); const networks = buildNetworks(transactions, premisesByCnpj, routeStores, detectedNetworkTargets, detectedNetworkOwners, detectedClientOwners); const lines = buildLines(transactions); const daily = buildDaily(transactions,periodStart,periodEnd);
+  const clients = buildClients(transactions, premisesByCnpj); const vendors = buildVendorResults(transactions, rcaByNew, rcaByOld, targets, business); const coordinators = buildCoordinators(vendors); const networks = buildNetworks(transactions, premisesByCnpj, routeStores, detectedNetworkTargets, detectedNetworkOwners, detectedClientOwners, detectedClientNetworks); const lines = buildLines(transactions); const daily = buildDaily(transactions,periodStart,periodEnd);
 
   const priorInventory = canonicalToInventory(previousState?.inventory);
   let products = workbooks.has('stock105') ? parseStock105(workbooks.get('stock105')!.rows, cadastro) : canonicalToInventory(previousState?.inventory);
@@ -128,6 +129,34 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const invClients = new Set(transactions.filter(t => t.status === 'FATURADO').map(t => t.cnpj)); const allClients = new Set(transactions.map(t => t.cnpj)); const futurePositivation = Math.max(allClients.size - invClients.size, 0);
   const invDailyAverage = business.elapsed > 0 ? invoiced / business.elapsed : 0; const totalDailyAverage = business.elapsed > 0 ? total / business.elapsed : 0;
 
+  const networkAssignments = reconcileNetworkAssignments(transactions,premisesByCnpj,routeStores,detectedClientNetworks);
+  const sourceSales = workbooks.has('sales8022') ? sumRawSales8022(workbooks.get('sales8022')!.rows) : null;
+  const networkTotal = networks.reduce((sum,network)=>sum+network.total,0);
+  const vendorTotal = vendors.reduce((sum,vendor)=>sum+vendor.total,0);
+  const coordinatorTotal = coordinators.reduce((sum,coordinator)=>sum+coordinator.total,0);
+  const classifiedLineTotal = lines.reduce((sum,line)=>sum+line.total,0);
+  const reconciliationChecks = [
+    numericCheck({id:'sellout.internal',level:'INTERNAL',label:'Sell Out = Faturado + A Faturar',expected:invoiced+toInvoice,calculated:total,source:'Base canônica',tolerance:0.005}),
+    ...(sourceSales ? [
+      numericCheck({id:'sellout.source.invoiced',level:'SOURCE',label:'Faturado 8022 → motor',expected:sourceSales.invoiced,calculated:invoiced,source:'Vendas 8022',tolerance:0.005,note:`${sourceSales.validRows} linha(s) válida(s); ${sourceSales.ignoredRows} ignorada(s).`}),
+      numericCheck({id:'sellout.source.toInvoice',level:'SOURCE',label:'A Faturar 8022 → motor',expected:sourceSales.toInvoice,calculated:toInvoice,source:'Vendas 8022',tolerance:0.005}),
+      numericCheck({id:'sellout.source.total',level:'SOURCE',label:'Sell Out 8022 → motor',expected:sourceSales.total,calculated:total,source:'Vendas 8022',tolerance:0.005}),
+    ] : []),
+    numericCheck({id:'sellout.networks',level:'INTERNAL',label:'Sell Out = soma das redes + Sem Rede',expected:total,calculated:networkTotal,source:'Atribuição CNPJ → rede',tolerance:0.005}),
+    numericCheck({id:'sellout.vendors',level:'INTERNAL',label:'Sell Out = soma dos vendedores',expected:total,calculated:vendorTotal,source:'Vendas por RCA',tolerance:0.005}),
+    numericCheck({id:'sellout.coordinators',level:'INTERNAL',label:'Vendedores = soma das coordenações',expected:vendorTotal,calculated:coordinatorTotal,source:'De-para RCA',tolerance:0.005}),
+    numericCheck({id:'sellout.lines',level:'INTERNAL',label:'Sell Out = linhas classificadas + não classificado',expected:total,calculated:classifiedLineTotal,source:'Classificação de produtos',tolerance:0.005,note:classifiedLineTotal===total?'Todas as vendas foram classificadas.':'A diferença deve permanecer visível como venda não classificada.'}),
+    numericCheck({id:'positivity.internal',level:'INTERNAL',label:'Positivação = faturada + adicional a faturar',expected:allClients.size,calculated:invClients.size+futurePositivation,source:'CNPJs únicos do 8022',tolerance:0}),
+    blockedCheck('portfolio.order-bill','Carteira: regra Order Qty versus Bill Qty','Planilha com fórmulas','BLOQUEADA POR REGRA NÃO CONFIRMADA: a precedência entre Order Qty e Bill Qty ainda precisa ser demonstrada na planilha.'),
+    numericCheck({id:'portfolio.sale-markup',level:'SPREADSHEET',label:'Carteira: acréscimo custo → venda',expected:0.31530488350705,calculated:config.portfolioSaleMarkup,source:"Painel fórmula · '2026-MILENIO'!L24",tolerance:1e-12,note:'L24 é uma entrada numérica fixa na referência; L21 aplica L28*(1+L24). Alterações manuais permanecem visíveis como divergência de regressão.'}),
+    blockedCheck('stock.coverage','Cobertura de estoque por produto','Planilha com fórmulas','BLOQUEADA POR REGRA NÃO CONFIRMADA: a cobertura financeira total já está mapeada nas células L20/L27/L30; ainda falta localizar e confirmar a regra por produto e a coluna de estoque mínimo para Ruptura/Risco de Ruptura.'),
+  ];
+  reconciliationChecks.filter(check=>check.status==='DIVERGENT').forEach(check=>warnings.push(`Reconciliação divergente: ${check.label}. Diferença ${check.difference}.`));
+  const divergentNetworks=networkAssignments.filter(item=>item.divergentSources.length>0);
+  if(divergentNetworks.length)warnings.push(`${divergentNetworks.length} CNPJ(s) possuem divergência de rede entre Premissas, Roteiro ou referência; Premissas foi mantida como fonte principal.`);
+  const withoutNetwork=networkAssignments.filter(item=>item.source==='SEM_REDE');
+  if(withoutNetwork.length){const value=withoutNetwork.reduce((sum,item)=>sum+item.value,0);warnings.push(`${withoutNetwork.length} CNPJ(s), somando R$ ${value.toFixed(2)}, permanecem explicitamente em SEM REDE; nenhuma venda foi descartada.`)}
+
   const historyAverage = history.average3ClosedMonths || 0;
   const coverageSaleCurrent = historyAverage > 0 ? (stockSale / historyAverage) * 30 : 0;
   const coverageSaleProjected = historyAverage > 0 ? ((stockSale + portfolio.sale) / historyAverage) * 30 : 0;
@@ -148,6 +177,7 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
     vendors, coordinators, clients,
     networks: networks.map(n => { const manual = config.networkTargets[n.key]; const target = Number.isFinite(manual) ? Math.max(manual, 0) : n.detectedNetworkTarget; return { ...n, networkTarget: target, networkAttainment: target > 0 ? n.total / target : 0, gapToNetworkTarget: Math.max(target - n.total, 0) }; }),
     lines: lines.map(line => { const share = config.lineShares[line.name] ?? line.share; const target = sellOutTarget * share; return { ...line, share, target, attainment: target > 0 ? line.total / target : 0 }; }), warnings,
+    reconciliation:{checks:reconciliationChecks,networkAssignments,blockedRules:reconciliationChecks.filter(check=>check.status==='BLOCKED').map(check=>check.note||check.label)},
   };
 
   const legacy = legacySellOut(transactions, vendors, clients);
