@@ -224,19 +224,26 @@ export class TemplateWorkbook {
       this.files[path] = strToU8(new XMLSerializer().serializeToString(document));
     }
 
-    // O arquivo de entrega é totalmente estático. Depois de remover as fórmulas
-    // das planilhas, a cadeia de cálculo do modelo fica com referências órfãs e
-    // o Excel abre o arquivo em modo de reparo. Removemos a parte, seu vínculo e
-    // o tipo de conteúdo para manter o pacote Open XML internamente consistente.
+    // O arquivo de entrega é totalmente estático. Depois de remover as fórmulas,
+    // partes auxiliares vazias ou órfãs fazem o Excel abrir o arquivo em modo de
+    // reparo. Removemos as partes, seus vínculos e seus tipos de conteúdo para
+    // manter o pacote Open XML internamente consistente.
     delete this.files['xl/calcChain.xml'];
+    delete this.files['xl/connections.xml'];
 
     const relations = this.getRelationDocument();
-    removeNodes(relations, 'Relationship', element => (element.getAttribute('Type') || '').endsWith('/calcChain'));
+    removeNodes(relations, 'Relationship', element => {
+      const type = element.getAttribute('Type') || '';
+      return type.endsWith('/calcChain') || type.endsWith('/connections');
+    });
     this.files['xl/_rels/workbook.xml.rels'] = strToU8(new XMLSerializer().serializeToString(relations));
 
     const contentTypesPath = '[Content_Types].xml';
     const contentTypes = parseXml(this.files[contentTypesPath], contentTypesPath);
-    removeNodes(contentTypes, 'Override', element => element.getAttribute('PartName') === '/xl/calcChain.xml');
+    removeNodes(contentTypes, 'Override', element => {
+      const partName = element.getAttribute('PartName');
+      return partName === '/xl/calcChain.xml' || partName === '/xl/connections.xml';
+    });
     this.files[contentTypesPath] = strToU8(new XMLSerializer().serializeToString(contentTypes));
   }
 
