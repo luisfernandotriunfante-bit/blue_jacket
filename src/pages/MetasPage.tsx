@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useData } from '../store/DataContext';
 import { LINE_NAMES } from '../domain/canonical';
+import { redistributeNetworkTotal, redistributeSingleNetwork } from '../domain/targetRules';
 import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const fieldStyle:React.CSSProperties={width:'100%',borderRadius:'10px',border:'1px solid rgba(255,255,255,0.12)',background:'rgba(0,0,0,0.22)',color:'white',padding:'11px 12px',outline:'none',font:'inherit'};
@@ -23,42 +24,26 @@ export function MetasPage(){
  const addHoliday=()=>{if(!holidayDate)return;setManualConfig({...manualConfig,holidays:Array.from(new Set([...manualConfig.holidays,holidayDate])).sort()});setHolidayDate('')};
  const removeHoliday=(date:string)=>setManualConfig({...manualConfig,holidays:manualConfig.holidays.filter(item=>item!==date)});
 
- const saveNetworkTargets=(targets:Record<string,number>)=>setManualConfig({...manualConfig,networkTargets:targets});
+ const saveNetworkTargets=(targets:Record<string,number>)=>setManualConfig({...manualConfig,networkTargets:{...manualConfig.networkTargets,...targets}});
 
- // A Meta Redes é independente da Meta T&C. Alterar o total redistribui todas as
- // redes proporcionalmente à participação atual, preservando a composição.
+ // Meta Redes é independente da Meta T&C. O total informado é distribuído pelas
+ // redes atuais preservando suas participações e fechando exatamente no total.
  const setNetworkTotal=(requested:number)=>{
-  const total=Math.max(Number(requested)||0,0);
   if(!networkRows.length)return;
-  const currentTotal=networkRows.reduce((sum,network)=>sum+Math.max(network.networkTarget,0),0);
-  const next={...manualConfig.networkTargets};
-  if(currentTotal>0){networkRows.forEach(network=>{next[network.key]=total*(Math.max(network.networkTarget,0)/currentTotal)})}
-  else {const share=total/networkRows.length;networkRows.forEach(network=>{next[network.key]=share})}
-  saveNetworkTargets(next);
+  saveNetworkTargets(redistributeNetworkTotal(networkRows.map(network=>({key:network.key,target:network.networkTarget})),requested));
  };
 
- // Ao editar uma rede, o total de Meta Redes permanece fixo e somente o saldo é
- // redistribuído proporcionalmente entre as demais redes, como definido no modelo.
+ // Ao editar uma única rede, Meta Redes Geral permanece fixa. O saldo é
+ // redistribuído proporcionalmente entre as demais e o fechamento é exato.
  const setNetwork=(key:string,requested:number)=>{
   if(!networkRows.length)return;
-  const total=networkTotal;
-  if(total<=0){saveNetworkTargets({...manualConfig.networkTargets,[key]:Math.max(Number(requested)||0,0)});return}
-  const edited=Math.min(Math.max(Number(requested)||0,0),total);
-  const others=networkRows.filter(network=>network.key!==key);
-  const residual=Math.max(total-edited,0);
-  const othersCurrent=others.reduce((sum,network)=>sum+Math.max(network.networkTarget,0),0);
-  const next={...manualConfig.networkTargets,[key]:edited};
-  if(others.length){
-   if(othersCurrent>0)others.forEach(network=>{next[network.key]=residual*(Math.max(network.networkTarget,0)/othersCurrent)});
-   else {const equal=residual/others.length;others.forEach(network=>{next[network.key]=equal})}
-  }
-  saveNetworkTargets(next);
+  saveNetworkTargets(redistributeSingleNetwork(networkRows.map(network=>({key:network.key,target:network.networkTarget})),key,requested));
  };
 
  return <PanelPage title="Metas" metricLabel="Meta Sell Out T&C" metricValue={brl(canonical.sellOut.sellOutTarget)}>
   <PanelCard><PanelSectionHeader eyebrow="REFERÊNCIAS OFICIAIS" title="Metas recebidas dos arquivos" description="Somente leitura. Essas metas vêm das fontes oficiais e não são alteradas manualmente aqui."/><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(210px,1fr))',gap:'12px',marginTop:'16px'}}><ReadOnly label="Meta indústria · Bússola" value={brl(canonical.industryTarget)}/><ReadOnly label="Meta positivação · Bússola" value={canonical.industryPositivityTarget.toLocaleString('pt-BR')}/><ReadOnly label="Meta Tops · Roteiro Ativo" value={brl(topTotal)}/></div></PanelCard>
 
-  <PanelCard><PanelSectionHeader eyebrow="AJUSTÁVEIS" title="Parâmetros gerais" description="Alterações são salvas automaticamente e passam a valer no painel e nos documentos gerados."/><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(250px,1fr))',gap:'14px',marginTop:'16px'}}><Field label="Meta Sell Out (T&C)" value={manualConfig.sellOutTarget} step={1000} onChange={value=>setField('sellOutTarget',value)} detail="Use zero para seguir automaticamente a Meta Indústria da Bússola."/><Field label="Meta Redes Geral" value={networkTotal} step={1000} onChange={setNetworkTotal} detail="Total exclusivo das redes. Ao alterar, todas as metas de rede são redistribuídas proporcionalmente."/><Field label="Meta de cobertura (dias)" value={manualConfig.coverageTargetDays} step={1} onChange={value=>setField('coverageTargetDays',value)} detail="Referência usada na visão de estoque."/><Field label="Acréscimo de venda da carteira (%)" value={manualConfig.portfolioSaleMarkup*100} step={0.01} onChange={setPortfolioMarkup} detail="Regra da planilha para projetar venda sobre o custo integral da carteira. A Lista de Preços é somente Colgate → Milênio e fornece o fator Un/CX."/></div></PanelCard>
+  <PanelCard><PanelSectionHeader eyebrow="AJUSTÁVEIS" title="Parâmetros gerais" description="Alterações são salvas automaticamente e passam a valer no painel e nos documentos gerados."/><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(250px,1fr))',gap:'14px',marginTop:'16px'}}><Field label="Meta Sell Out (T&C)" value={manualConfig.sellOutTarget} step={1000} onChange={value=>setField('sellOutTarget',value)} detail="Meta manual e independente da Meta Indústria da Bússola. Zero significa meta T&C não informada; não há herança automática."/><Field label="Meta Redes Geral" value={networkTotal} step={1000} onChange={setNetworkTotal} detail="Total exclusivo das redes. Ao alterar, todas as metas de rede são redistribuídas proporcionalmente."/><Field label="Meta de cobertura (dias)" value={manualConfig.coverageTargetDays} step={1} onChange={value=>setField('coverageTargetDays',value)} detail="Referência usada na visão de estoque."/><Field label="Acréscimo de venda da carteira (%)" value={manualConfig.portfolioSaleMarkup*100} step={0.01} onChange={setPortfolioMarkup} detail="Regra ainda auditada contra a planilha fórmula. Alterações permanecem rastreáveis por competência."/></div></PanelCard>
 
   <PanelCard><PanelSectionHeader eyebrow="CALENDÁRIO" title="Feriados e dias não trabalhados" description="Datas excluídas do cálculo de dias úteis, médias diárias, tendência e necessidade por dia." action={<span className="panel-badge">{manualConfig.holidays.length} DATA(S)</span>}/><div style={{display:'flex',gap:'10px',alignItems:'end',flexWrap:'wrap',marginTop:'16px'}}><label style={{display:'grid',gap:'7px',minWidth:'220px'}}><span style={{color:'var(--panel-text-dim)',fontSize:'.75rem',fontWeight:750,textTransform:'uppercase'}}>Nova data</span><input type="date" value={holidayDate} onChange={event=>setHolidayDate(event.target.value)} style={fieldStyle}/></label><button className="panel-secondary-button" type="button" onClick={addHoliday} disabled={!holidayDate}>Adicionar data</button></div><div className="panel-chips" style={{marginTop:'14px'}}>{manualConfig.holidays.map(date=><button type="button" className="panel-chip" key={date} onClick={()=>removeHoliday(date)} title="Clique para remover">{new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR')} ×</button>)}</div></PanelCard>
 
