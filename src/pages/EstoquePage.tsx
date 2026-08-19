@@ -318,8 +318,8 @@ export function EstoquePage() {
                   <th className="is-sortable" onClick={() => requestSort('ean')}>EAN{getSortIcon('ean')}</th>
                   <th className="is-sortable" onClick={() => requestSort('descricao')}>Produto / Status{getSortIcon('descricao')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('quantidade')}>Estoque (Un){getSortIcon('quantidade')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('soldUnits')}>Venda mês (Un){getSortIcon('soldUnits')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('coverageDays')}>Cobertura ritmo{getSortIcon('coverageDays')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('soldUnits')}>Faturado mês (Un){getSortIcon('soldUnits')}</th>
+                  <th className="is-sortable is-right" onClick={() => requestSort('coverageDays')}>Cobertura ritmo faturado{getSortIcon('coverageDays')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('saldoPedidoCaixas')}>Carteira (Cx){getSortIcon('saldoPedidoCaixas')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('saldoPedido')}>Carteira (Un){getSortIcon('saldoPedido')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('custoUnitario')}>Custo Un.{getSortIcon('custoUnitario')}</th>
