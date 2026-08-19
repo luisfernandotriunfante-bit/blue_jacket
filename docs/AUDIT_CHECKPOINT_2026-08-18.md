@@ -133,9 +133,9 @@ Bloqueios restantes:
 Integração: PR #14 / commit `24824ca2465afaa10269a51f199ca7e570ff8489`.
 
 ### Etapa 10 — Regressão e checkpoint
-**Status: EM VALIDAÇÃO NESTE PR**
+**Status: CONCLUÍDA COMO CHECKPOINT DE REGRESSÃO**
 
-Este checkpoint adiciona testes que impedem regressão das regras já integradas:
+O checkpoint adicionou testes que impedem regressão das regras já integradas:
 
 - persistência por competência;
 - separação Meta T&C × Meta Indústria;
@@ -145,7 +145,19 @@ Este checkpoint adiciona testes que impedem regressão das regras já integradas
 - auditoria canônica em três níveis;
 - ordem do CI: typecheck → testes → build → artefato/publicação.
 
-A etapa 10 poderá confirmar a estabilidade da `main`, mas **não poderá transformar regras bloqueadas em regras validadas**.
+Resultado final do PR #15:
+
+- typecheck aprovado;
+- 57 testes registrados;
+- 51 testes aprovados;
+- 0 falhas;
+- 6 TODOs explícitos correspondentes a regras/fonte ainda bloqueadas;
+- build aprovado;
+- artefato de publicação gerado com sucesso.
+
+Integração: PR #15 / commit `00f4e0d90803de3f12aee65a218ed4d0636ff587`.
+
+A conclusão da etapa 10 confirma a estabilidade do checkpoint da `main`, mas **não transforma regras bloqueadas em regras validadas**.
 
 ## Situação de aprovação do projeto após este ciclo
 
