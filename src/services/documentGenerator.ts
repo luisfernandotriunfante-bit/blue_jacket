@@ -203,9 +203,9 @@ function fillTopNetworks(workbook:TemplateWorkbook,state:CanonicalState) {
   });
   workbook.patchCells(sheet,values,4);
 
-  // G/H tinham estilos residuais diferentes nas linhas históricas do modelo.
-  // Usamos uma célula da própria família G/H que já traz o percentual correto,
-  // e mantemos K/L com o formato já validado no modelo.
+  // K4 é uma célula do próprio modelo com o formato percentual validado. O
+  // TemplateWorkbook preserva cor/borda/alinhamento da célula de destino e
+  // corrige também estilos que tinham o mesmo numFmtId com aplicação desativada.
   const detailRows = networks.map((_,index) => 4+index);
   const networkPercentageRefs = [
     'G2','H2',
@@ -219,7 +219,7 @@ function fillTopNetworks(workbook:TemplateWorkbook,state:CanonicalState) {
     'D2','E2','F2','I2','J2',
     ...detailRows.flatMap(row => [ref('D',row),ref('E',row),ref('F',row),ref('I',row),ref('J',row)]),
   ];
-  workbook.copyNumberFormat(sheet,'G26',networkPercentageRefs);
+  workbook.copyNumberFormat(sheet,'K4',networkPercentageRefs);
   workbook.copyNumberFormat(sheet,'K4',attainmentPercentageRefs);
   workbook.copyNumberFormat(sheet,'F4',currencyRefs);
 }
