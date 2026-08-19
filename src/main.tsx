@@ -10,12 +10,14 @@ import { ConfiguracoesPage } from './pages/ConfiguracoesPage'
 import { MetasPage } from './pages/MetasPage'
 import { SellOutPage } from './pages/SellOutPage'
 import { DocumentosPage } from './pages/DocumentosPage'
+import { CriacaoComboPage } from './pages/CriacaoComboPage'
 import { DataProvider } from './store/DataContext'
 import './ui/theme/foundation.css'
 
 function App() {
   const [activeTab, setActiveTab] = useState('estoque')
-  const [activeTopTab, setActiveTopTab] = useState('geral')
+  const [activeEstoqueTopTab, setActiveEstoqueTopTab] = useState('geral')
+  const [activeAtividadesTopTab, setActiveAtividadesTopTab] = useState('combo')
 
   const sidebarItems = [
     { id: 'estoque', label: 'Estoque', active: activeTab === 'estoque', onSelect: () => setActiveTab('estoque') },
@@ -41,8 +43,14 @@ function App() {
     { id: 'lancamentos', label: 'Lançamentos' },
   ]
 
+  const atividadesTopTabs = [
+    { id: 'combo', label: 'Criação de Combo' },
+  ]
+
   const topNavigation = activeTab === 'estoque' ? (
-    <TopTabs tabs={estoqueTopTabs} activeId={activeTopTab} onChange={setActiveTopTab} />
+    <TopTabs tabs={estoqueTopTabs} activeId={activeEstoqueTopTab} onChange={setActiveEstoqueTopTab} />
+  ) : activeTab === 'atividades' ? (
+    <TopTabs tabs={atividadesTopTabs} activeId={activeAtividadesTopTab} onChange={setActiveAtividadesTopTab} />
   ) : null
 
   const currentLabel = sidebarItems.find(i => i.id === activeTab)?.label ?? activeTab
@@ -50,9 +58,11 @@ function App() {
   return (
     <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
       {activeTab === 'estoque' ? (
-        activeTopTab === 'lancamentos' ? <LancamentosPage /> : <EstoquePage />
+        activeEstoqueTopTab === 'lancamentos' ? <LancamentosPage /> : <EstoquePage />
       ) : activeTab === 'sellout' ? (
         <SellOutPage />
+      ) : activeTab === 'atividades' && activeAtividadesTopTab === 'combo' ? (
+        <CriacaoComboPage />
       ) : activeTab === 'relatorios' ? (
         <DocumentosPage />
       ) : activeTab === 'metas' ? (
