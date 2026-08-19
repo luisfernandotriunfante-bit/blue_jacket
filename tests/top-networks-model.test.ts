@@ -76,6 +76,17 @@ test('TOP REDES padroniza percentuais e valores sem substituir o estilo visual d
   assert.match(templateWorkbook,/formattedStyle\.setAttribute\('numFmtId', numFmtId\)/);
 });
 
+test('TOP REDES exporta vendedor e supervisor no padrão Winthor atual',()=>{
+  const generator=readFileSync('src/services/documentGenerator.ts','utf8');
+  assert.match(generator,/function currentVendorFor\(state:CanonicalState, code:string\)/);
+  assert.match(generator,/vendor\.newCode === code \|\| vendor\.oldCode === code/);
+  assert.match(generator,/const owner = currentVendorFor\(state,network\.vendorCode\)/);
+  assert.match(generator,/values\[ref\('B',row\)\] = owner\?\.coordinatorCode \|\| network\.teamCode/);
+  assert.match(generator,/values\[ref\('C',row\)\] = owner\?\.newCode \|\| network\.vendorCode/);
+  assert.match(generator,/values\[ref\('A',row\)\] = vendor\.newCode/);
+  assert.doesNotMatch(generator,/values\[ref\('A',row\)\] = vendor\.oldCode \|\| vendor\.newCode/);
+});
+
 test('modelo mantém granularidade operacional significativa nas abas auxiliares',()=>{
   const workbook=XLSX.read(readFileSync(PATH),{type:'buffer'});
   const rows=(name:string)=>XLSX.utils.decode_range(workbook.Sheets[name]['!ref']||'A1:A1').e.r;
