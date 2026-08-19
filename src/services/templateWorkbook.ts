@@ -119,6 +119,7 @@ export class TemplateWorkbook {
   private readonly sheets = new Map<string, SheetDocument>();
   private workbookDocument?: XMLDocument;
   private relationDocument?: XMLDocument;
+  private stylesDocument?: XMLDocument;
 
   private constructor(files: Record<string, Uint8Array>) {
     this.files = files;
@@ -138,6 +139,11 @@ export class TemplateWorkbook {
   private getRelationDocument(): XMLDocument {
     if (!this.relationDocument) this.relationDocument = parseXml(this.files['xl/_rels/workbook.xml.rels'], 'xl/_rels/workbook.xml.rels');
     return this.relationDocument;
+  }
+
+  private getStylesDocument(): XMLDocument {
+    if (!this.stylesDocument) this.stylesDocument = parseXml(this.files['xl/styles.xml'], 'xl/styles.xml');
+    return this.stylesDocument;
   }
 
   private getSheet(name: string): SheetDocument {
@@ -201,6 +207,60 @@ export class TemplateWorkbook {
     }
   }
 
+  copyNumberFormat(sheetName: string, sourceReference: string, references: string[]) {
+    const { document } = this.getSheet(sheetName);
+    const sheetData = document.getElementsByTagNameNS(MAIN_NS, 'sheetData')[0];
+    if (!sheetData || references.length === 0) return;
+
+    const cells = new Map<string, Element>();
+    childElements(sheetData, 'row').forEach(row => {
+      childElements(row, 'c').forEach(cell => {
+        const reference = cell.getAttribute('r');
+        if (reference) cells.set(reference, cell);
+      });
+    });
+
+    const sourceCell = cells.get(sourceReference);
+    if (!sourceCell) throw new Error(`A célula de formato “${sourceReference}” não existe na aba “${sheetName}”.`);
+
+    const styles = this.getStylesDocument();
+    const cellXfs = styles.getElementsByTagNameNS(MAIN_NS, 'cellXfs')[0];
+    if (!cellXfs) throw new Error('O modelo Excel não possui estilos de célula.');
+
+    const styleList = () => childElements(cellXfs, 'xf');
+    const sourceStyleIndex = Number(sourceCell.getAttribute('s') || 0);
+    const sourceStyle = styleList()[sourceStyleIndex] || styleList()[0];
+    if (!sourceStyle) throw new Error(`Não foi possível localizar o estilo de “${sourceReference}”.`);
+
+    const numFmtId = sourceStyle.getAttribute('numFmtId') || '0';
+    const applyNumberFormat = sourceStyle.getAttribute('applyNumberFormat') || (numFmtId === '0' ? '0' : '1');
+    const generatedStyles = new Map<string, number>();
+
+    references.forEach(reference => {
+      const cell = cells.get(reference);
+      if (!cell) return;
+      const currentStyleIndex = Number(cell.getAttribute('s') || 0);
+      const currentStyle = styleList()[currentStyleIndex] || styleList()[0];
+      if (!currentStyle) return;
+      if ((currentStyle.getAttribute('numFmtId') || '0') === numFmtId) return;
+
+      const key = `${currentStyleIndex}:${numFmtId}:${applyNumberFormat}`;
+      let formattedStyleIndex = generatedStyles.get(key);
+      if (formattedStyleIndex === undefined) {
+        const formattedStyle = currentStyle.cloneNode(true) as Element;
+        formattedStyle.setAttribute('numFmtId', numFmtId);
+        if (applyNumberFormat === '0') formattedStyle.removeAttribute('applyNumberFormat');
+        else formattedStyle.setAttribute('applyNumberFormat', applyNumberFormat);
+        cellXfs.appendChild(formattedStyle);
+        formattedStyleIndex = childElements(cellXfs, 'xf').length - 1;
+        generatedStyles.set(key, formattedStyleIndex);
+      }
+      cell.setAttribute('s', String(formattedStyleIndex));
+    });
+
+    cellXfs.setAttribute('count', String(childElements(cellXfs, 'xf').length));
+  }
+
   clearRows(sheetName: string, startRow: number, endRow: number, startColumn = 1, endColumn = 16384) {
     const { document } = this.getSheet(sheetName);
     const sheetData = document.getElementsByTagNameNS(MAIN_NS, 'sheetData')[0];
@@ -222,6 +282,10 @@ export class TemplateWorkbook {
       const document = cached?.document || parseXml(bytes, path);
       stripWorksheetFormulas(document);
       this.files[path] = strToU8(new XMLSerializer().serializeToString(document));
+    }
+
+    if (this.stylesDocument) {
+      this.files['xl/styles.xml'] = strToU8(new XMLSerializer().serializeToString(this.stylesDocument));
     }
 
     // O arquivo de entrega é totalmente estático. Depois de remover as fórmulas,

@@ -192,6 +192,21 @@ function fillTopNetworks(workbook:TemplateWorkbook,state:CanonicalState) {
     values[ref('K',row)] = ratio(network.total,network.topTarget); values[ref('L',row)] = ratio(network.total,network.networkTarget); values[ref('M',row)] = '';
   });
   workbook.patchCells(sheet,values,4);
+
+  // O modelo contém estilos visuais diferentes entre as colunas. Copiamos
+  // apenas o formato numérico de células-modelo corretas, preservando cor,
+  // borda, alinhamento e demais propriedades de cada célula de destino.
+  const detailRows = networks.map((_,index) => 4+index);
+  const percentageRefs = [
+    'G2','H2','K2','L2',
+    ...detailRows.flatMap(row => [ref('G',row),ref('H',row),ref('K',row),ref('L',row)]),
+  ];
+  const currencyRefs = [
+    'D2','E2','F2','I2','J2',
+    ...detailRows.flatMap(row => [ref('D',row),ref('E',row),ref('F',row),ref('I',row),ref('J',row)]),
+  ];
+  workbook.copyNumberFormat(sheet,'K4',percentageRefs);
+  workbook.copyNumberFormat(sheet,'F4',currencyRefs);
 }
 
 function fillNetworkStores(workbook:TemplateWorkbook,state:CanonicalState) {

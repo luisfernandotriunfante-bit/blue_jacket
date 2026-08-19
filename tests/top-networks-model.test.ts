@@ -60,6 +60,22 @@ test('gerador mantém todos os conjuntos de registros e usa rede canônica resol
   assert.match(source,/values\[ref\('L',row\)\] = ratio\(network\.total,network\.networkTarget\)/);
 });
 
+test('TOP REDES padroniza percentuais e valores sem substituir o estilo visual das células',()=>{
+  const workbook=XLSX.read(readFileSync(PATH),{type:'buffer',cellNF:true});
+  const sheet=workbook.Sheets['Top Redes'];
+  assert.match(String((sheet.K4 as XLSX.CellObject|undefined)?.z||''),/%/);
+
+  const generator=readFileSync('src/services/documentGenerator.ts','utf8');
+  const templateWorkbook=readFileSync('src/services/templateWorkbook.ts','utf8');
+  assert.match(generator,/const percentageRefs = \[/);
+  assert.match(generator,/'G2','H2','K2','L2'/);
+  assert.match(generator,/ref\('G',row\),ref\('H',row\),ref\('K',row\),ref\('L',row\)/);
+  assert.match(generator,/workbook\.copyNumberFormat\(sheet,'K4',percentageRefs\)/);
+  assert.match(generator,/workbook\.copyNumberFormat\(sheet,'F4',currencyRefs\)/);
+  assert.match(templateWorkbook,/formattedStyle = currentStyle\.cloneNode\(true\)/);
+  assert.match(templateWorkbook,/formattedStyle\.setAttribute\('numFmtId', numFmtId\)/);
+});
+
 test('modelo mantém granularidade operacional significativa nas abas auxiliares',()=>{
   const workbook=XLSX.read(readFileSync(PATH),{type:'buffer'});
   const rows=(name:string)=>XLSX.utils.decode_range(workbook.Sheets[name]['!ref']||'A1:A1').e.r;
