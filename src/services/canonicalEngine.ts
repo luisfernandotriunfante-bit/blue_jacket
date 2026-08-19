@@ -2,6 +2,7 @@ import type * as XLSX from 'xlsx';
 import type { MetricasEstoque, ProdutoEstoque, SellOutData } from '../store/DataContext';
 import type { CanonicalHistoryMonth, CanonicalState, CanonicalSupportData, ManualConfiguration, SourceAudit, SourceKind } from '../domain/canonical';
 import { DEFAULT_MANUAL_CONFIGURATION, EMPTY_CANONICAL_SUPPORT } from '../domain/canonical';
+import { resolveSellOutTarget } from '../domain/targetRules';
 import type { CompassTarget, PremiseClient, ProductMaster, RcaMap, ReferenceClientNetwork, RouteStore, Row, SalesTransaction } from './canonical/runtime';
 import { detectSource, readWorkbook, sheetRows } from './canonical/utils';
 import { parseActiveRoute, parseCadastro286, parseCompassTargets, parseLegacyClientNetworkRecords, parseLegacyClientOwners, parseLegacyNetworkOwners, parseLegacyNetworkTargets, parsePremises, parsePriceList, parseRcaMap } from './canonical/support';
@@ -93,6 +94,8 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const maxDate = transactions.map(t => t.date).filter(Boolean).sort().at(-1) || previousState?.referenceDate || new Date().toISOString().slice(0, 10);
   const { start: periodStart, end: periodEnd } = periodBounds(maxDate); const business = businessDayStats(maxDate, config.holidays);
   const industryTarget = targets.reduce((s, t) => s + t.salesTarget, 0); const industryPositivityTarget = targets.reduce((s, t) => s + t.positivityTarget, 0);
+  const sellOutTarget = resolveSellOutTarget(config.sellOutTarget);
+  if (sellOutTarget <= 0) warnings.push('Meta Sell Out T&C não informada para a competência; a Meta Indústria da Bússola permanece apenas como referência e não foi usada como substituta.');
   const clients = buildClients(transactions, premisesByCnpj, resolvedRouteStores, detectedClientNetworks); const vendors = buildVendorResults(transactions, rcaByNew, rcaByOld, targets, business); const coordinators = buildCoordinators(vendors); const networks = buildNetworks(transactions, premisesByCnpj, resolvedRouteStores, detectedNetworkTargets, detectedNetworkOwners, detectedClientOwners, detectedClientNetworks); const lines = buildLines(transactions); const daily = buildDaily(transactions,periodStart,periodEnd);
 
   const priorInventory = canonicalToInventory(previousState?.inventory);
@@ -129,6 +132,8 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const sourceSales = workbooks.has('sales8022') ? sumRawSales8022(workbooks.get('sales8022')!.rows) : null;
   const networkTotal = networks.reduce((sum,network)=>sum+network.total,0);
   const vendorTotal = vendors.reduce((sum,vendor)=>sum+vendor.total,0);
+  const vendorTargetTotal = vendors.reduce((sum,vendor)=>sum+vendor.salesTarget,0);
+  const vendorPositivityTargetTotal = vendors.reduce((sum,vendor)=>sum+vendor.positivityTarget,0);
   const coordinatorTotal = coordinators.reduce((sum,coordinator)=>sum+coordinator.total,0);
   const classifiedLineTotal = lines.reduce((sum,line)=>sum+line.total,0);
   const reconciliationChecks = [
@@ -146,6 +151,11 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
     numericCheck({id:'sellout.coordinators',level:'INTERNAL',label:'Vendedores = soma das coordenações',expected:vendorTotal,calculated:coordinatorTotal,source:'De-para RCA',tolerance:0.005}),
     numericCheck({id:'sellout.lines',level:'INTERNAL',label:'Sell Out = linhas classificadas + não classificado',expected:total,calculated:classifiedLineTotal,source:'Classificação de produtos',tolerance:0.005,note:classifiedLineTotal===total?'Todas as vendas foram classificadas.':'A diferença deve permanecer visível como venda não classificada.'}),
     numericCheck({id:'positivity.internal',level:'INTERNAL',label:'Positivação = faturada + adicional a faturar',expected:allClients.size,calculated:invClients.size+futurePositivation,source:'CNPJs únicos do 8022',tolerance:0}),
+    numericCheck({id:'targets.industry.sales',level:'SOURCE',label:'Meta indústria = soma das metas dos vendedores Colgate',expected:industryTarget,calculated:vendorTargetTotal,source:'Bússola · MCD + Colgate',tolerance:0.005,note:'A soma deve permanecer separada da Meta T&C.'}),
+    numericCheck({id:'targets.industry.positivity',level:'SOURCE',label:'Meta positivação indústria = soma das metas de positivação dos vendedores Colgate',expected:industryPositivityTarget,calculated:vendorPositivityTargetTotal,source:'Bússola · MCD + Colgate',tolerance:0.005}),
+    ...(sellOutTarget>0
+      ? [numericCheck({id:'targets.sellout.manual',level:'INTERNAL',label:'Meta Sell Out T&C = configuração manual da competência',expected:config.sellOutTarget,calculated:sellOutTarget,source:'Configuração manual por competência',tolerance:0.005,note:'Meta T&C não herda a Meta Indústria da Bússola.'})]
+      : [blockedCheck('targets.sellout.manual','Meta Sell Out T&C da competência','Configuração manual por competência','BLOQUEADA POR REGRA NÃO CONFIRMADA: Meta Sell Out T&C não foi informada para a competência; a Meta Indústria permanece separada e não foi usada como substituta.')]),
     blockedCheck('portfolio.order-bill','Carteira: regra Order Qty versus Bill Qty','Planilha com fórmulas','BLOQUEADA POR REGRA NÃO CONFIRMADA: a precedência entre Order Qty e Bill Qty ainda precisa ser demonstrada na planilha.'),
     numericCheck({id:'portfolio.sale-markup',level:'SPREADSHEET',label:'Carteira: acréscimo custo → venda',expected:0.31530488350705,calculated:config.portfolioSaleMarkup,source:"Painel fórmula · '2026-MILENIO'!L24",tolerance:1e-12,note:'L24 é uma entrada numérica fixa na referência; L21 aplica L28*(1+L24). Alterações manuais permanecem visíveis como divergência de regressão.'}),
     blockedCheck('stock.coverage','Cobertura de estoque por produto','Planilha com fórmulas','BLOQUEADA POR REGRA NÃO CONFIRMADA: a cobertura financeira total já está mapeada nas células L20/L27/L30; ainda falta localizar e confirmar a regra por produto e a coluna de estoque mínimo para Ruptura/Risco de Ruptura.'),
@@ -167,9 +177,6 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   if (!historyAverage && (stockSale > 0 || stockCost > 0)) warnings.push('Cobertura de estoque aguardando os três meses fechados anteriores no histórico 379.');
 
   const support: CanonicalSupportData = { rcas: rcas.map(r => ({ ...r })), vendorTargets: targets.map(t => ({ ...t })), clients: resolvedPremises.map(p => ({ ...p })), activeRoute: resolvedRouteStores.map(r => ({ ...r })), legacyNetworkTargets: Object.fromEntries(detectedNetworkTargets.entries()), legacyNetworkOwners: Object.fromEntries(detectedNetworkOwners.entries()), legacyClientNetworks: Object.fromEntries(detectedClientNetworks.entries()), legacyClientOwners: Object.fromEntries(detectedClientOwners.entries()), products: Array.from(priceList.bySku.values()).map(p => ({ ...p })), itemCodes: Array.from(cadastro.byInternal.entries()).map(([internalCode, item]) => ({ internalCode, ...item })) };
-  // Na operação Milênio a meta global do painel é a Meta PNA Colgate da
-  // Bússola. A configuração manual continua prevalecendo quando informada.
-  const sellOutTarget = config.sellOutTarget > 0 ? config.sellOutTarget : Math.max(industryTarget, 0);
   const sources = mergeSourceAudits(previousState?.sources || [], currentSources);
   const canonical: CanonicalState = {
     schemaVersion: 2, generatedAt: processedAt, referenceDate: maxDate, periodStart, periodEnd, sources, support,
