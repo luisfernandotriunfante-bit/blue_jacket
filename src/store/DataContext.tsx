@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useMemo, useState, ReactNode } from 'react';
 import { applyManualConfiguration, CanonicalState, CanonicalVendorResult, DEFAULT_MANUAL_CONFIGURATION, ManualConfiguration } from '../domain/canonical';
+import { competenceFromCanonical, loadManualConfiguration, normalizeManualConfiguration, saveManualConfiguration } from './competencePersistence';
 
 export interface ProdutoEstoque { codigo:string; descricao:string; ean:string; quantidade:number; saldoMinimo:number; custoUnitario:number; vendaUnitario:number; entradas:number; saidas:number; saldoPedido:number; saldoPedidoCaixas?:number; saldoPedidoValorCusto?:number; saldoPedidoValorVenda?:number; isLancamento?:boolean; hasWinthor?:boolean; factoryCode?:string; physicalCases?:number; physicalUnits?:number; grossKg?:number; }
 export interface VendedorSellOut { codVendedor:string; nomeVendedor:string; codCoord:string; nomeCoord:string; faturado:number; aFaturar:number; positivacao:number; }
@@ -22,8 +23,6 @@ const defaultMetricas:MetricasEstoque={valorEstoqueCompra:0,valorEstoqueVenda:0,
 const DataContext=createContext<DataContextType>({produtos:[],setProdutos:()=>{},metricas:defaultMetricas,setMetricas:()=>{},sellOut:null,setSellOut:()=>{},canonical:null,setCanonical:()=>{},manualConfig:DEFAULT_MANUAL_CONFIGURATION,setManualConfig:()=>{},isLoaded:false});
 
 function readStored<T>(key:string,fallback:T):T{try{const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback}catch{return fallback}}
-function mergeHolidays(values:string[]=[]){return Array.from(new Set([...DEFAULT_MANUAL_CONFIGURATION.holidays,...values.filter(Boolean)])).sort()}
-function normalizeHolidays(values:string[]=[]){return Array.from(new Set(values.filter(Boolean))).sort()}
 function canonicalCoordinatorName(value:string){
   const original=value?.trim()||'SEM COORDENADOR';
   const normalized=original.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
@@ -78,15 +77,46 @@ function normalizeCanonicalTeam(state:CanonicalState|null,config:ManualConfigura
 
 export const DataProvider=({children}:{children:ReactNode})=>{
   const[produtosState,setProdutosState]=useState<ProdutoEstoque[]>([]);const[metricasState,setMetricasState]=useState<MetricasEstoque>(defaultMetricas);const[sellOut,setSellOutState]=useState<SellOutData|null>(null);const[canonicalBase,setCanonicalBase]=useState<CanonicalState|null>(null);const[manualConfig,setManualConfigState]=useState<ManualConfiguration>(DEFAULT_MANUAL_CONFIGURATION);const[isLoaded,setIsLoaded]=useState(false);
-  React.useEffect(()=>{const storedProdutos=readStored<ProdutoEstoque[]>('bj_produtos',[]);const storedMetricas=readStored<MetricasEstoque>('bj_metricas',defaultMetricas);const storedSellOut=readStored<SellOutData|null>('bj_sellout',null);const storedCanonical=readStored<CanonicalState|null>('bj_canonical',null);const storedManual=readStored<ManualConfiguration>('bj_manual_config',DEFAULT_MANUAL_CONFIGURATION);const holidayDefaultsInitialized=localStorage.getItem('bj_holiday_defaults_v1')==='1';const holidays=holidayDefaultsInitialized?normalizeHolidays(storedManual.holidays||[]):mergeHolidays(storedManual.holidays||[]);localStorage.setItem('bj_holiday_defaults_v1','1');setProdutosState(storedProdutos);setMetricasState({...defaultMetricas,...storedMetricas});setSellOutState(storedSellOut);setCanonicalBase(storedCanonical);setManualConfigState({...DEFAULT_MANUAL_CONFIGURATION,...storedManual,networkTargets:storedManual.networkTargets||{},lineShares:{...DEFAULT_MANUAL_CONFIGURATION.lineShares,...(storedManual.lineShares||{})},holidays});setIsLoaded(Boolean(storedCanonical||storedSellOut||storedProdutos.length))},[]);
+  React.useEffect(()=>{
+    const storedProdutos=readStored<ProdutoEstoque[]>('bj_produtos',[]);
+    const storedMetricas=readStored<MetricasEstoque>('bj_metricas',defaultMetricas);
+    const storedSellOut=readStored<SellOutData|null>('bj_sellout',null);
+    const storedCanonical=readStored<CanonicalState|null>('bj_canonical',null);
+    const competence=competenceFromCanonical(storedCanonical);
+    const storedManual=loadManualConfiguration(localStorage,competence,{migrateLegacy:Boolean(storedCanonical)}).config;
+    setProdutosState(storedProdutos);
+    setMetricasState({...defaultMetricas,...storedMetricas,metaCobertura:storedManual.coverageTargetDays});
+    setSellOutState(storedSellOut);
+    setCanonicalBase(storedCanonical);
+    setManualConfigState(storedManual);
+    setIsLoaded(Boolean(storedCanonical||storedSellOut||storedProdutos.length));
+  },[]);
+  const activeCompetence=useMemo(()=>competenceFromCanonical(canonicalBase),[canonicalBase]);
   const canonical=useMemo(()=>normalizeCanonicalTeam(applyManualConfiguration(canonicalBase,manualConfig),manualConfig),[canonicalBase,manualConfig]);
   const produtos=useMemo<ProdutoEstoque[]>(()=>canonical?canonical.inventory.map(item=>({codigo:item.code,descricao:item.description,ean:item.ean,quantidade:item.quantity,saldoMinimo:0,custoUnitario:item.costUnit,vendaUnitario:item.saleUnit,entradas:0,saidas:0,saldoPedido:item.pendingQty,saldoPedidoCaixas:item.pendingCases,saldoPedidoValorCusto:item.pendingCost,saldoPedidoValorVenda:item.pendingSale,isLancamento:item.isLaunch,hasWinthor:item.hasWinthor,factoryCode:item.factoryCode,physicalCases:item.physicalCases,physicalUnits:item.physicalUnits,grossKg:item.grossKg})):produtosState,[canonical,produtosState]);
   const metricas=useMemo<MetricasEstoque>(()=>canonical?{valorEstoqueCompra:canonical.stock.costValue,valorEstoqueVenda:canonical.stock.saleValue,saldoPedidoCusto:canonical.stock.pendingPurchaseCost,saldoPedidoVenda:canonical.stock.pendingPurchaseSale,coberturaDiasAtual:canonical.stock.coverageCurrentDays,coberturaEstoqueMaisSaldo:canonical.stock.coverageProjectedDays,coberturaDiasAtualCusto:canonical.stock.coverageCostCurrentDays,coberturaEstoqueMaisSaldoCusto:canonical.stock.coverageCostProjectedDays,produtosRuptura:canonical.inventory.filter(item=>item.hasWinthor&&item.quantity<=0).length,metaCobertura:canonical.stock.coverageTargetDays}:metricasState,[canonical,metricasState]);
   const setProdutos=(newProdutos:ProdutoEstoque[])=>{setProdutosState(newProdutos);localStorage.setItem('bj_produtos',JSON.stringify(newProdutos));if(newProdutos.length>0)setIsLoaded(true)};
   const setMetricas=(newMetricas:MetricasEstoque)=>{const normalized={...defaultMetricas,...newMetricas,metaCobertura:manualConfig.coverageTargetDays};setMetricasState(normalized);localStorage.setItem('bj_metricas',JSON.stringify(normalized))};
   const setSellOut=(data:SellOutData|null)=>{setSellOutState(data);if(data){localStorage.setItem('bj_sellout',JSON.stringify(data));setIsLoaded(true)}else localStorage.removeItem('bj_sellout')};
-  const setCanonical=(data:CanonicalState|null)=>{setCanonicalBase(data);if(data){localStorage.setItem('bj_canonical',JSON.stringify(data));setIsLoaded(true)}else localStorage.removeItem('bj_canonical')};
-  const setManualConfig=(config:ManualConfiguration)=>{const normalized:ManualConfiguration={...DEFAULT_MANUAL_CONFIGURATION,...config,sellOutTarget:Math.max(Number(config.sellOutTarget)||0,0),coverageTargetDays:Math.max(Number(config.coverageTargetDays)||0,0),portfolioSaleMarkup:Math.max(Number(config.portfolioSaleMarkup)||0,0),networkTargets:config.networkTargets||{},holidays:normalizeHolidays(config.holidays||[]),lineShares:{...DEFAULT_MANUAL_CONFIGURATION.lineShares,...(config.lineShares||{})}};setManualConfigState(normalized);localStorage.setItem('bj_manual_config',JSON.stringify(normalized));setMetricasState(current=>{const updated={...current,metaCobertura:normalized.coverageTargetDays};localStorage.setItem('bj_metricas',JSON.stringify(updated));return updated})};
+  const setCanonical=(data:CanonicalState|null)=>{
+    const nextCompetence=competenceFromCanonical(data);
+    setCanonicalBase(data);
+    if(data){
+      localStorage.setItem('bj_canonical',JSON.stringify(data));
+      if(nextCompetence&&nextCompetence!==activeCompetence){
+        const nextConfig=loadManualConfiguration(localStorage,nextCompetence).config;
+        setManualConfigState(nextConfig);
+        setMetricasState(current=>({...current,metaCobertura:nextConfig.coverageTargetDays}));
+      }
+      setIsLoaded(true);
+    }else localStorage.removeItem('bj_canonical');
+  };
+  const setManualConfig=(config:ManualConfiguration)=>{
+    const normalized=normalizeManualConfiguration(config);
+    setManualConfigState(normalized);
+    if(activeCompetence)saveManualConfiguration(localStorage,activeCompetence,normalized);
+    setMetricasState(current=>({...current,metaCobertura:normalized.coverageTargetDays}));
+  };
   return <DataContext.Provider value={{produtos,setProdutos,metricas,setMetricas,sellOut,setSellOut,canonical,setCanonical,manualConfig,setManualConfig,isLoaded}}>{children}</DataContext.Provider>;
 };
 
