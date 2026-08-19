@@ -45,6 +45,11 @@ function officialNetworks(state:CanonicalState):CanonicalNetworkResult[] {
     .sort((left,right) => right.networkTarget-left.networkTarget || right.topTarget-left.topTarget || right.total-left.total);
 }
 
+function currentVendorFor(state:CanonicalState, code:string) {
+  if (!code) return undefined;
+  return state.vendors.find(vendor => vendor.newCode === code || vendor.oldCode === code);
+}
+
 function dominantVendorByClient(transactions:CanonicalSalesTransaction[]):Map<string,string> {
   const values = new Map<string,Map<string,number>>();
   transactions.forEach(transaction => {
@@ -183,7 +188,10 @@ function fillTopNetworks(workbook:TemplateWorkbook,state:CanonicalState) {
   workbook.clearRows(sheet,4,1000,1,13);
   networks.forEach((network,index) => {
     const row = 4+index;
-    values[ref('A',row)] = network.name; values[ref('B',row)] = network.teamCode; values[ref('C',row)] = network.vendorCode;
+    const owner = currentVendorFor(state,network.vendorCode);
+    values[ref('A',row)] = network.name;
+    values[ref('B',row)] = owner?.coordinatorCode || network.teamCode;
+    values[ref('C',row)] = owner?.newCode || network.vendorCode;
     values[ref('D',row)] = network.networkTarget; values[ref('E',row)] = network.topTarget; values[ref('F',row)] = network.invoiced;
     values[ref('G',row)] = ratio(network.invoiced,network.networkTarget); values[ref('H',row)] = ratio(network.invoiced,network.topTarget);
     values[ref('I',row)] = network.toInvoice; values[ref('J',row)] = gap(network.networkTarget,network.total);
@@ -244,7 +252,7 @@ function fillNetworkTeam(workbook:TemplateWorkbook,state:CanonicalState) {
   workbook.clearRows(sheet,2,1000,1,5);
   state.vendors.forEach((vendor,index) => {
     const row = 2+index;
-    values[ref('A',row)] = vendor.oldCode || vendor.newCode; values[ref('B',row)] = vendor.name; values[ref('C',row)] = vendor.coordinatorCode;
+    values[ref('A',row)] = vendor.newCode; values[ref('B',row)] = vendor.name; values[ref('C',row)] = vendor.coordinatorCode;
     values[ref('D',row)] = vendor.coordinatorName; values[ref('E',row)] = '';
   });
   workbook.patchCells(sheet,values,2);
