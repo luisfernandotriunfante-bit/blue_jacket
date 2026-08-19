@@ -83,7 +83,7 @@ function fillPanelSummary(workbook:TemplateWorkbook,state:CanonicalState) {
     M16: state.history.average3ClosedMonths ?? '', N16: state.history.average3ClosedMonths ? summary.invoicedTrend/state.history.average3ClosedMonths-1 : '',
     L19: state.stock.saleValue, L20: state.stock.coverageCurrentDays, M20: state.stock.coverageTargetDays, N20: state.stock.coverageTargetDays-state.stock.coverageCurrentDays,
     L21: state.stock.pendingPurchaseSale, L22: state.stock.projectedSaleValue, L23: state.stock.coverageProjectedDays,
-    L26: state.stock.costValue, L27: state.stock.coverageCostCurrentDays, M27: state.stock.coverageTargetDays, N27: state.stock.coverageTargetDays-state.stock.coverageCurrentDays,
+    L26: state.stock.costValue, L27: state.stock.coverageCostCurrentDays, M27: state.stock.coverageTargetDays, N27: state.stock.coverageTargetDays-state.stock.coverageCostCurrentDays,
     L28: state.stock.pendingPurchaseCost, L29: state.stock.projectedCostValue, L30: state.stock.coverageCostProjectedDays,
     L33: state.industryPositivityTarget, L34: summary.totalPositivation, M34: ratio(summary.totalPositivation,state.industryPositivityTarget),
     L35: positivityTrend, M35: ratio(positivityTrend,state.industryPositivityTarget), L36: '', M36: '',
