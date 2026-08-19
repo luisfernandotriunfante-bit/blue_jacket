@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
+import { buildComboClientLookup, extractComboCnpjs, normalizeComboClientCode, normalizeComboCnpj } from '../domain/comboClients';
 import { comboDiscount, parseComboPrice, selectComboProducts } from '../domain/comboPricing';
+import { buildComboWorkbook } from '../services/comboWorkbook';
 import { useData } from '../store/DataContext';
 import { StockCodeListFilter } from '../ui/stock/StockCodeListFilter';
 import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
@@ -13,10 +15,20 @@ function formatPercent(value: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
 }
 
+function formatCnpj(cnpj: string) {
+  if (cnpj.length !== 14) return cnpj;
+  return `${cnpj.slice(0, 2)}.${cnpj.slice(2, 5)}.${cnpj.slice(5, 8)}/${cnpj.slice(8, 12)}-${cnpj.slice(12)}`;
+}
+
 export function CriacaoComboPage() {
-  const { produtos } = useData();
+  const { produtos, canonical } = useData();
   const [importedCodes, setImportedCodes] = useState<Set<string>>(() => new Set());
   const [practicedPrices, setPracticedPrices] = useState<Record<string, string>>({});
+  const [clientCnpjs, setClientCnpjs] = useState<Set<string>>(() => new Set());
+  const [clientCodeOverrides, setClientCodeOverrides] = useState<Record<string, string>>({});
+  const [manualCnpj, setManualCnpj] = useState('');
+  const [clientError, setClientError] = useState('');
+  const [clientImportName, setClientImportName] = useState('');
 
   // Para criação de combo, "encontrado" significa item efetivamente disponível no 105:
   // código Winthor confirmado + preço de venda/tabela válido.
@@ -35,7 +47,42 @@ export function CriacaoComboPage() {
     [comboProducts, practicedPrices],
   );
 
-  const canExport = comboProducts.length > 0 && filledCount === comboProducts.length;
+  // O 8022 já traz o código Winthor do cliente junto do CNPJ. Usamos essa relação
+  // somente como preenchimento automático; quando não existe ou há conflito, o código
+  // fica editável para que o usuário possa vinculá-lo manualmente antes de exportar.
+  const clientLookup = useMemo(
+    () => buildComboClientLookup(canonical?.transactions || []),
+    [canonical],
+  );
+
+  const selectedClients = useMemo(() => Array.from(clientCnpjs).map(cnpj => {
+    const lookup = clientLookup.get(cnpj);
+    const hasOverride = Object.prototype.hasOwnProperty.call(clientCodeOverrides, cnpj);
+    const automaticCode = lookup?.codes.length === 1 ? lookup.codes[0] : '';
+    const rawCode = hasOverride ? clientCodeOverrides[cnpj] : automaticCode;
+    const clientCode = normalizeComboClientCode(rawCode);
+    const source = hasOverride && clientCode
+      ? 'MANUAL'
+      : lookup?.codes.length === 1
+        ? '8022'
+        : lookup && lookup.codes.length > 1
+          ? 'CONFLITO 8022'
+          : 'NÃO LOCALIZADO';
+    return {
+      cnpj,
+      name: lookup?.name || '',
+      clientCode,
+      rawCode,
+      source,
+      possibleCodes: lookup?.codes || [],
+    };
+  }), [clientCnpjs, clientLookup, clientCodeOverrides]);
+
+  const resolvedClientCount = selectedClients.filter(client => Boolean(client.clientCode)).length;
+  const unresolvedClientCount = selectedClients.length - resolvedClientCount;
+  const productsReady = comboProducts.length > 0 && filledCount === comboProducts.length;
+  const clientsReady = selectedClients.length > 0 && unresolvedClientCount === 0;
+  const canExport = productsReady && clientsReady;
 
   const changeImportedCodes = (codes: Set<string>) => {
     setImportedCodes(codes);
@@ -48,39 +95,82 @@ export function CriacaoComboPage() {
 
   const clearPrices = () => setPracticedPrices({});
 
+  const addManualClient = () => {
+    const cnpj = normalizeComboCnpj(manualCnpj);
+    if (!cnpj) {
+      setClientError('Informe um CNPJ válido.');
+      return;
+    }
+    setClientCnpjs(current => new Set([...current, cnpj]));
+    setManualCnpj('');
+    setClientError('');
+  };
+
+  const importClients = async (file: File) => {
+    try {
+      setClientError('');
+      let values: unknown[] = [];
+      const lower = file.name.toLowerCase();
+      if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;
+        const rows = sheet ? XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' }) as unknown[][] : [];
+        values = rows.flat();
+      } else {
+        values = [await file.text()];
+      }
+
+      const imported = extractComboCnpjs(values);
+      if (!imported.size) {
+        setClientError('Nenhum CNPJ válido foi encontrado no arquivo.');
+        setClientImportName('');
+        return;
+      }
+      setClientCnpjs(current => new Set([...current, ...imported]));
+      setClientImportName(file.name);
+    } catch {
+      setClientError('Não foi possível ler a lista de clientes.');
+      setClientImportName('');
+    }
+  };
+
+  const updateClientCode = (cnpj: string, value: string) => {
+    setClientCodeOverrides(current => ({ ...current, [cnpj]: value }));
+  };
+
+  const removeClient = (cnpj: string) => {
+    setClientCnpjs(current => {
+      const next = new Set(current);
+      next.delete(cnpj);
+      return next;
+    });
+    setClientCodeOverrides(current => {
+      const next = { ...current };
+      delete next[cnpj];
+      return next;
+    });
+  };
+
+  const clearClients = () => {
+    setClientCnpjs(new Set());
+    setClientCodeOverrides({});
+    setClientImportName('');
+    setClientError('');
+  };
+
   const downloadExcel = () => {
     if (!canExport) return;
 
-    const rows: Array<Array<string | number>> = [
-      ['Código do Item Winthor', 'Descrição Produto', 'Preço de Tabela', 'Preço Praticado', '% de Desconto'],
-      ...comboProducts.map(product => {
-        const practiced = parseComboPrice(practicedPrices[product.codigo] || '') as number;
-        const discount = comboDiscount(product.vendaUnitario, practiced) as number;
-        return [product.codigo, product.descricao, product.vendaUnitario, practiced, discount];
-      }),
-    ];
-
-    const worksheet = XLSX.utils.aoa_to_sheet(rows);
-    worksheet['!cols'] = [
-      { wch: 20 },
-      { wch: 52 },
-      { wch: 18 },
-      { wch: 18 },
-      { wch: 16 },
-    ];
-    worksheet['!autofilter'] = { ref: `A1:E${rows.length}` };
-
-    for (let row = 2; row <= rows.length; row += 1) {
-      const tableCell = worksheet[`C${row}`];
-      const practicedCell = worksheet[`D${row}`];
-      const discountCell = worksheet[`E${row}`];
-      if (tableCell) tableCell.z = 'R$ #,##0.00';
-      if (practicedCell) practicedCell.z = 'R$ #,##0.00';
-      if (discountCell) discountCell.z = '0.00%';
-    }
-
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Criação de Combo');
+    const workbook = buildComboWorkbook(
+      comboProducts.map(product => ({
+        codigo: product.codigo,
+        descricao: product.descricao,
+        tablePrice: product.vendaUnitario,
+        practicedPrice: parseComboPrice(practicedPrices[product.codigo] || '') as number,
+      })),
+      selectedClients.map(client => ({ cnpj: client.cnpj, clientCode: client.clientCode })),
+    );
     XLSX.writeFile(workbook, 'criacao-de-combo.xlsx');
   };
 
@@ -102,8 +192,8 @@ export function CriacaoComboPage() {
         <PanelCard>
           <PanelSectionHeader
             eyebrow="ATIVIDADES"
-            title="Criação de Combo"
-            description="Importe uma lista de EANs, códigos Winthor ou códigos de fábrica. O preço de tabela vem exclusivamente da Posição 105."
+            title="Produtos do Combo"
+            description="Importe EANs, códigos Winthor ou códigos de fábrica. O preço de tabela vem exclusivamente da Posição 105."
             action={<span className="panel-badge">PREÇO TABELA · 105</span>}
           />
 
@@ -112,12 +202,11 @@ export function CriacaoComboPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
               {comboProducts.length > 0 ? <span className="panel-badge">PREÇOS · {filledCount}/{comboProducts.length}</span> : null}
               <button type="button" className="panel-secondary-button" onClick={clearPrices} disabled={filledCount === 0}>Limpar preços</button>
-              <button type="button" className="panel-secondary-button" onClick={downloadExcel} disabled={!canExport}>Gerar Excel</button>
             </div>
           </div>
 
           <div style={{ color: 'var(--panel-muted)', fontSize: '0.74rem', marginBottom: '16px' }}>
-            Para entrar no combo, o item precisa ter código Winthor e preço de tabela válido no 105. O desconto é calculado por item como (Preço de Tabela − Preço Praticado) ÷ Preço de Tabela.
+            O desconto é calculado por item como (Preço de Tabela − Preço Praticado) ÷ Preço de Tabela.
           </div>
 
           {!importedCodes.size ? (
@@ -178,6 +267,104 @@ export function CriacaoComboPage() {
                       </tr>
                     );
                   })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </PanelCard>
+
+        <PanelCard>
+          <PanelSectionHeader
+            eyebrow="CLIENTES"
+            title="Clientes do Combo"
+            description="Adicione um CNPJ manualmente ou importe uma lista. O código Winthor é preenchido pelo 8022 quando esse vínculo existe na carga atual e pode ser corrigido manualmente."
+            action={<span className="panel-badge">EXCEL · 2 ABAS</span>}
+          />
+
+          <div className="panel-toolbar" style={{ marginBottom: '14px', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <input
+              className="panel-input"
+              aria-label="CNPJ do cliente do combo"
+              value={manualCnpj}
+              placeholder="CNPJ do cliente"
+              inputMode="numeric"
+              onChange={event => setManualCnpj(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  addManualClient();
+                }
+              }}
+              style={{ minWidth: '220px' }}
+            />
+            <button type="button" className="panel-secondary-button" onClick={addManualClient}>Adicionar CNPJ</button>
+            <label className="panel-secondary-button" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
+              Importar lista de CNPJs
+              <input
+                aria-label="Importar lista de CNPJs do combo"
+                type="file"
+                accept=".txt,.csv,.xlsx,.xls"
+                style={{ display: 'none' }}
+                onChange={event => {
+                  const file = event.target.files?.[0];
+                  if (file) void importClients(file);
+                  event.target.value = '';
+                }}
+              />
+            </label>
+            {clientImportName ? <span className="panel-badge" title={clientImportName}>LISTA IMPORTADA</span> : null}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
+              {selectedClients.length > 0 ? <span className="panel-badge">CLIENTES · {resolvedClientCount}/{selectedClients.length} VINCULADOS</span> : null}
+              <button type="button" className="panel-secondary-button" onClick={clearClients} disabled={selectedClients.length === 0}>Limpar clientes</button>
+              <button type="button" className="panel-secondary-button" onClick={downloadExcel} disabled={!canExport}>Gerar Excel</button>
+            </div>
+          </div>
+
+          {clientError ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginBottom: '12px' }}>{clientError}</div> : null}
+          {!productsReady && comboProducts.length > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginBottom: '12px' }}>Preencha o preço praticado de todos os produtos antes de gerar o Excel.</div> : null}
+          {unresolvedClientCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginBottom: '12px' }}>{unresolvedClientCount} cliente{unresolvedClientCount === 1 ? '' : 's'} sem código Winthor confirmado. Preencha o código na tabela para liberar a exportação.</div> : null}
+
+          {selectedClients.length === 0 ? (
+            <PanelEmptyState
+              icon="◆"
+              title="Vincule os clientes do combo"
+              description="Digite um CNPJ ou importe uma lista em TXT, CSV, XLS ou XLSX. O Excel só é gerado quando todos os clientes tiverem código Winthor."
+            />
+          ) : (
+            <div className="panel-table-wrap">
+              <table className="panel-table">
+                <thead>
+                  <tr>
+                    <th>CNPJ</th>
+                    <th>Cliente</th>
+                    <th>Código Winthor</th>
+                    <th>Origem do vínculo</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedClients.map(client => (
+                    <tr key={client.cnpj}>
+                      <td className="is-strong">{formatCnpj(client.cnpj)}</td>
+                      <td>{client.name || <span className="is-muted">—</span>}</td>
+                      <td>
+                        <input
+                          className="panel-input"
+                          aria-label={`Código Winthor do cliente ${client.cnpj}`}
+                          inputMode="numeric"
+                          value={client.rawCode}
+                          placeholder="Código Winthor"
+                          onChange={event => updateClientCode(client.cnpj, event.target.value)}
+                          style={{ width: '150px', minHeight: '34px', padding: '6px 8px' }}
+                        />
+                        {client.source === 'CONFLITO 8022' ? <div style={{ color: '#fca5a5', fontSize: '0.68rem', marginTop: '4px' }}>Códigos encontrados: {client.possibleCodes.join(', ')}</div> : null}
+                      </td>
+                      <td>
+                        <span className={`panel-badge${client.source === '8022' ? '' : client.clientCode ? '' : ' panel-badge-amber'}`}>{client.source}</span>
+                      </td>
+                      <td className="is-right"><button type="button" className="panel-secondary-button" onClick={() => removeClient(client.cnpj)}>Remover</button></td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
