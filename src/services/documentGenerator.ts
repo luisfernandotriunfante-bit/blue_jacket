@@ -41,7 +41,9 @@ function generatedDate(state:CanonicalState):Date {
 
 function officialNetworks(state:CanonicalState):CanonicalNetworkResult[] {
   return state.networks
-    .filter(network => network.key !== 'SEM REDE' && (network.networkTarget > 0 || network.topTarget > 0 || network.total !== 0))
+    // TOP REDES é uma visão de redes com meta. Venda sem Meta Redes e sem Meta Tops
+    // continua existindo no Sell Out geral, mas não deve criar linha nesta planilha.
+    .filter(network => network.key !== 'SEM REDE' && (network.networkTarget > 0 || network.topTarget > 0))
     .sort((left,right) => right.networkTarget-left.networkTarget || right.topTarget-left.topTarget || right.total-left.total);
 }
 
@@ -81,7 +83,7 @@ function fillPanelSummary(workbook:TemplateWorkbook,state:CanonicalState) {
     M16: state.history.average3ClosedMonths ?? '', N16: state.history.average3ClosedMonths ? summary.invoicedTrend/state.history.average3ClosedMonths-1 : '',
     L19: state.stock.saleValue, L20: state.stock.coverageCurrentDays, M20: state.stock.coverageTargetDays, N20: state.stock.coverageTargetDays-state.stock.coverageCurrentDays,
     L21: state.stock.pendingPurchaseSale, L22: state.stock.projectedSaleValue, L23: state.stock.coverageProjectedDays,
-    L26: state.stock.costValue, L27: state.stock.coverageCostCurrentDays, M27: state.stock.coverageTargetDays, N27: state.stock.coverageTargetDays-state.stock.coverageCostCurrentDays,
+    L26: state.stock.costValue, L27: state.stock.coverageCostCurrentDays, M27: state.stock.coverageTargetDays, N27: state.stock.coverageTargetDays-state.stock.coverageCurrentDays,
     L28: state.stock.pendingPurchaseCost, L29: state.stock.projectedCostValue, L30: state.stock.coverageCostProjectedDays,
     L33: state.industryPositivityTarget, L34: summary.totalPositivation, M34: ratio(summary.totalPositivation,state.industryPositivityTarget),
     L35: positivityTrend, M35: ratio(positivityTrend,state.industryPositivityTarget), L36: '', M36: '',
@@ -201,19 +203,24 @@ function fillTopNetworks(workbook:TemplateWorkbook,state:CanonicalState) {
   });
   workbook.patchCells(sheet,values,4);
 
-  // O modelo contém estilos visuais diferentes entre as colunas. Copiamos
-  // apenas o formato numérico de células-modelo corretas, preservando cor,
-  // borda, alinhamento e demais propriedades de cada célula de destino.
+  // G/H tinham estilos residuais diferentes nas linhas históricas do modelo.
+  // Usamos uma célula da própria família G/H que já traz o percentual correto,
+  // e mantemos K/L com o formato já validado no modelo.
   const detailRows = networks.map((_,index) => 4+index);
-  const percentageRefs = [
-    'G2','H2','K2','L2',
-    ...detailRows.flatMap(row => [ref('G',row),ref('H',row),ref('K',row),ref('L',row)]),
+  const networkPercentageRefs = [
+    'G2','H2',
+    ...detailRows.flatMap(row => [ref('G',row),ref('H',row)]),
+  ];
+  const attainmentPercentageRefs = [
+    'K2','L2',
+    ...detailRows.flatMap(row => [ref('K',row),ref('L',row)]),
   ];
   const currencyRefs = [
     'D2','E2','F2','I2','J2',
     ...detailRows.flatMap(row => [ref('D',row),ref('E',row),ref('F',row),ref('I',row),ref('J',row)]),
   ];
-  workbook.copyNumberFormat(sheet,'K4',percentageRefs);
+  workbook.copyNumberFormat(sheet,'G26',networkPercentageRefs);
+  workbook.copyNumberFormat(sheet,'K4',attainmentPercentageRefs);
   workbook.copyNumberFormat(sheet,'F4',currencyRefs);
 }
 
