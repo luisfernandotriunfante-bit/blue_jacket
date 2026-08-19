@@ -82,8 +82,10 @@ export function CriacaoComboPage() {
   const canExport = productsReady && clientsReady;
 
   const changeImportedCodes = (codes: Set<string>) => {
+    // Ao adicionar um item manualmente, não apaga preços já digitados nos demais itens.
+    // Valores de produtos removidos podem permanecer em memória, mas só são exportados
+    // quando o produto volta a fazer parte da seleção.
     setImportedCodes(codes);
-    setPracticedPrices({});
   };
 
   const updatePracticedPrice = (code: string, value: string) => {
@@ -195,12 +197,12 @@ export function CriacaoComboPage() {
           <PanelSectionHeader
             eyebrow="ATIVIDADES"
             title="Produtos do Combo"
-            description="Importe EANs, códigos Winthor ou códigos de fábrica. O preço de tabela vem exclusivamente da Posição 105."
+            description="Adicione um EAN, código Winthor ou código de fábrica por vez, ou importe uma lista. O preço de tabela vem exclusivamente da Posição 105."
             action={<span className="panel-badge">PREÇO TABELA · 105</span>}
           />
 
           <div className="panel-toolbar" style={{ marginBottom: '14px', alignItems: 'center' }}>
-            <StockCodeListFilter products={tableProducts} codes={importedCodes} onChange={changeImportedCodes} />
+            <StockCodeListFilter products={tableProducts} codes={importedCodes} onChange={changeImportedCodes} allowManual />
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
               {comboProducts.length > 0 ? <span className="panel-badge">PREÇOS · {filledCount}/{comboProducts.length}</span> : null}
               <button type="button" className="panel-secondary-button" onClick={clearPrices} disabled={filledCount === 0}>Limpar preços</button>
@@ -214,14 +216,14 @@ export function CriacaoComboPage() {
           {!importedCodes.size ? (
             <PanelEmptyState
               icon="◆"
-              title="Importe os itens do combo"
-              description="Use o mesmo formato de lista do Estoque: TXT, CSV, XLS ou XLSX com EANs ou códigos dos produtos."
+              title="Adicione ou importe os itens do combo"
+              description="Digite um EAN/código e clique em Adicionar item, ou importe TXT, CSV, XLS ou XLSX com os códigos dos produtos."
             />
           ) : comboProducts.length === 0 ? (
             <PanelEmptyState
               icon="◆"
               title="Nenhum item com preço no 105"
-              description="Os códigos importados não encontraram itens com código Winthor e preço de tabela disponível na Posição 105."
+              description="Os códigos selecionados não encontraram itens com código Winthor e preço de tabela disponível na Posição 105."
             />
           ) : (
             <div className="panel-table-wrap">
@@ -307,7 +309,7 @@ export function CriacaoComboPage() {
             <button type="button" className="panel-secondary-button" onClick={downloadExcel} disabled={!canExport} style={{ marginLeft: 'auto' }}>Gerar Excel</button>
           </div>
 
-          {!productsReady && comboProducts.length === 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Importe ao menos um produto para gerar o Excel.</div> : null}
+          {!productsReady && comboProducts.length === 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Adicione ao menos um produto para gerar o Excel.</div> : null}
           {!productsReady && comboProducts.length > 0 && needsPracticedPrice ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Como Preço Praticado ou % de Desconto está marcado, preencha o preço praticado de todos os produtos.</div> : null}
           {exportOptions.includeClients && selectedClients.length === 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>A aba Clientes está marcada. Adicione ao menos um cliente ou desmarque essa opção.</div> : null}
           {exportOptions.includeClients && unresolvedClientCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>{unresolvedClientCount} cliente{unresolvedClientCount === 1 ? '' : 's'} sem código Winthor confirmado.</div> : null}

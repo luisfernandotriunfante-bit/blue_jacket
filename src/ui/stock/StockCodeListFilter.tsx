@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { extractStockCodes, matchedStockCodes } from '../../domain/stockCodeFilter';
+import { extractStockCodes, matchedStockCodes, normalizeStockCode } from '../../domain/stockCodeFilter';
 
 type StockProductRef = { codigo?: string; factoryCode?: string; ean?: string };
 
@@ -8,11 +8,13 @@ type Props = {
   products: StockProductRef[];
   codes: Set<string>;
   onChange: (codes: Set<string>) => void;
+  allowManual?: boolean;
 };
 
-export function StockCodeListFilter({ products, codes, onChange }: Props) {
+export function StockCodeListFilter({ products, codes, onChange, allowManual = false }: Props) {
   const [fileName, setFileName] = useState('');
   const [error, setError] = useState('');
+  const [manualCode, setManualCode] = useState('');
 
   const matchedCount = useMemo(() => matchedStockCodes(products, codes).size, [products, codes]);
   const missingCount = Math.max(codes.size - matchedCount, 0);
@@ -52,14 +54,53 @@ export function StockCodeListFilter({ products, codes, onChange }: Props) {
     }
   };
 
+  const addManualCode = () => {
+    const code = normalizeStockCode(manualCode);
+    if (code.length < 3 || !/\d/.test(code)) {
+      setError('Informe um EAN ou código válido.');
+      return;
+    }
+
+    const found = matchedStockCodes(products, new Set([code])).size > 0;
+    if (!found) {
+      setError('Código não encontrado nos itens disponíveis.');
+      return;
+    }
+
+    setError('');
+    setManualCode('');
+    onChange(new Set([...codes, code]));
+  };
+
   const clearList = () => {
     setFileName('');
     setError('');
+    setManualCode('');
     onChange(new Set());
   };
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+      {allowManual ? (
+        <>
+          <input
+            className="panel-input"
+            aria-label="EAN ou código do produto"
+            value={manualCode}
+            placeholder="EAN ou código do item"
+            onChange={event => setManualCode(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                addManualCode();
+              }
+            }}
+            style={{ width: '190px', minHeight: '34px', padding: '6px 8px' }}
+          />
+          <button type="button" className="panel-secondary-button" onClick={addManualCode}>Adicionar item</button>
+        </>
+      ) : null}
+
       <label className="panel-secondary-button" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}>
         Importar lista de códigos
         <input
@@ -77,11 +118,11 @@ export function StockCodeListFilter({ products, codes, onChange }: Props) {
 
       {codes.size > 0 ? (
         <>
-          <span className="panel-badge" title={fileName || 'Lista importada'}>
-            LISTA · {matchedCount}/{codes.size} ENCONTRADOS
+          <span className="panel-badge" title={fileName || (allowManual ? 'Itens selecionados' : 'Lista importada')}>
+            {allowManual ? 'ITENS' : 'LISTA'} · {matchedCount}/{codes.size} ENCONTRADOS
           </span>
           {missingCount > 0 ? <span style={{ color: '#fca5a5', fontSize: '0.7rem' }}>{missingCount} não encontrado{missingCount === 1 ? '' : 's'}</span> : null}
-          <button type="button" className="panel-secondary-button" onClick={clearList}>Remover lista</button>
+          <button type="button" className="panel-secondary-button" onClick={clearList}>{allowManual ? 'Limpar itens' : 'Remover lista'}</button>
         </>
       ) : null}
 
