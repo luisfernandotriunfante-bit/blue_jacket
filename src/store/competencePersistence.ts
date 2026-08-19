@@ -83,5 +83,6 @@ export function saveManualConfiguration(storage:StorageLike,competence:string,co
   const key=manualConfigStorageKey(competence);
   if(!key)return null;
   storage.setItem(key,JSON.stringify(normalizeManualConfiguration(config)));
+  storage.removeItem?.(LEGACY_MANUAL_CONFIG_KEY);
   return key;
 }
