@@ -9,8 +9,11 @@ import { unzipSync, strFromU8 } from 'fflate';
 
 const SOURCE = 'public/templates/top-redes-padrao.xlsx';
 const SCRIPT = 'scripts/prepare-top-redes-template.mjs';
-const MAIN_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
-const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+function attribute(tag:string,name:string) {
+  const escaped = name.replace(':','\\:');
+  return tag.match(new RegExp(`\\b${escaped}="([^"]+)"`))?.[1] || '';
+}
 
 function preparedTemplate() {
   const dir = mkdtempSync(join(tmpdir(),'bj-top-redes-'));
@@ -23,22 +26,26 @@ function preparedTemplate() {
 
 function packageParts(path:string) {
   const files = unzipSync(new Uint8Array(readFileSync(path)));
-  const workbookDoc = new DOMParser().parseFromString(strFromU8(files['xl/workbook.xml']), 'application/xml');
-  const relDoc = new DOMParser().parseFromString(strFromU8(files['xl/_rels/workbook.xml.rels']), 'application/xml');
-  const sheet = Array.from(workbookDoc.getElementsByTagNameNS(MAIN_NS,'sheet')).find(item => item.getAttribute('name') === 'Top Redes');
-  const rid = sheet?.getAttributeNS(REL_NS,'id') || sheet?.getAttribute('r:id');
-  const rel = Array.from(relDoc.getElementsByTagName('Relationship')).find(item => item.getAttribute('Id') === rid);
-  const target = String(rel?.getAttribute('Target') || '').replace(/^\//,'').replace(/^\.\//,'');
+  const workbookXml = strFromU8(files['xl/workbook.xml']);
+  const relsXml = strFromU8(files['xl/_rels/workbook.xml.rels']);
+  const sheetTag = workbookXml.match(/<sheet\b[^>]*\bname="Top Redes"[^>]*\/?>(?:<\/sheet>)?/)?.[0] || '';
+  const rid = attribute(sheetTag,'r:id');
+  const relationshipTag = Array.from(relsXml.matchAll(/<Relationship\b[^>]*\/>/g)).map(match=>match[0]).find(tag=>attribute(tag,'Id')===rid) || '';
+  const target = attribute(relationshipTag,'Target').replace(/^\//,'').replace(/^\.\//,'');
   const sheetPath = target.startsWith('xl/') ? target : `xl/${target}`;
-  return { files, sheetDoc:new DOMParser().parseFromString(strFromU8(files[sheetPath]), 'application/xml') };
+  return { files, sheetXml:strFromU8(files[sheetPath]) };
+}
+
+function cellStyle(sheetXml:string,reference:string) {
+  const tag = sheetXml.match(new RegExp(`<c\\b[^>]*\\br="${reference}"[^>]*>`))?.[0] || '';
+  return attribute(tag,'s');
 }
 
 test('TOP REDES mantém F com a mesma tipografia/alinhamento estrutural dos demais valores', () => {
   const prepared = preparedTemplate();
   try {
-    const { sheetDoc } = packageParts(prepared.path);
-    const cells = new Map(Array.from(sheetDoc.getElementsByTagNameNS(MAIN_NS,'c')).map(cell => [cell.getAttribute('r') || '',cell]));
-    assert.equal(cells.get('F4')?.getAttribute('s'), cells.get('I4')?.getAttribute('s'));
+    const { sheetXml } = packageParts(prepared.path);
+    assert.equal(cellStyle(sheetXml,'F4'),cellStyle(sheetXml,'I4'));
   } finally { prepared.cleanup(); }
 });
 
@@ -55,18 +62,15 @@ test('TOP REDES mantém G e H como percentual depois da preparação do modelo',
 test('TOP REDES estende a formatação condicional de F G H e não deixa dxf trocar percentual por General', () => {
   const prepared = preparedTemplate();
   try {
-    const { files, sheetDoc } = packageParts(prepared.path);
-    const sqrefs = Array.from(sheetDoc.getElementsByTagNameNS(MAIN_NS,'conditionalFormatting')).map(item => item.getAttribute('sqref') || '');
+    const { files, sheetXml } = packageParts(prepared.path);
+    const sqrefs = Array.from(sheetXml.matchAll(/\bsqref="([^"]+)"/g)).map(match=>match[1]);
     assert.ok(sqrefs.some(value => /F4:F1000/.test(value)));
     assert.ok(sqrefs.some(value => /G4:G1000/.test(value)));
     assert.ok(sqrefs.some(value => /H4:H1000/.test(value)));
 
-    const dxfIds = new Set(Array.from(sheetDoc.getElementsByTagNameNS(MAIN_NS,'cfRule')).map(rule => Number(rule.getAttribute('dxfId'))).filter(Number.isFinite));
-    const stylesDoc = new DOMParser().parseFromString(strFromU8(files['xl/styles.xml']), 'application/xml');
-    const dxfs = Array.from(stylesDoc.getElementsByTagNameNS(MAIN_NS,'dxf'));
-    dxfIds.forEach(id => {
-      const numFmt = dxfs[id]?.getElementsByTagNameNS(MAIN_NS,'numFmt')[0];
-      assert.equal(numFmt, undefined, `dxf ${id} não pode sobrescrever o formato numérico`);
-    });
+    const dxfIds = new Set(Array.from(sheetXml.matchAll(/<cfRule\b[^>]*\bdxfId="(\d+)"[^>]*>/g)).map(match=>Number(match[1])));
+    const stylesXml = strFromU8(files['xl/styles.xml']);
+    const dxfs = Array.from(stylesXml.matchAll(/<dxf\b[^>]*>[\s\S]*?<\/dxf>/g)).map(match=>match[0]);
+    dxfIds.forEach(id => assert.doesNotMatch(dxfs[id] || '', /<numFmt\b/, `dxf ${id} não pode sobrescrever o formato numérico`));
   } finally { prepared.cleanup(); }
 });
