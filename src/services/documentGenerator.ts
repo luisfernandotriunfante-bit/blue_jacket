@@ -187,7 +187,9 @@ function fillTopNetworks(workbook:TemplateWorkbook,state:CanonicalState) {
     values[ref('D',row)] = network.networkTarget; values[ref('E',row)] = network.topTarget; values[ref('F',row)] = network.invoiced;
     values[ref('G',row)] = ratio(network.invoiced,network.networkTarget); values[ref('H',row)] = ratio(network.invoiced,network.topTarget);
     values[ref('I',row)] = network.toInvoice; values[ref('J',row)] = gap(network.networkTarget,network.total);
-    values[ref('K',row)] = ratio(network.total,network.networkTarget); values[ref('L',row)] = ratio(network.total,network.topTarget); values[ref('M',row)] = '';
+    // O modelo original usa, no detalhe, K para TOPS e L para REDES.
+    // A linha-resumo 2 preserva a disposição histórica K=REDES / L=TOPS.
+    values[ref('K',row)] = ratio(network.total,network.topTarget); values[ref('L',row)] = ratio(network.total,network.networkTarget); values[ref('M',row)] = '';
   });
   workbook.patchCells(sheet,values,4);
 }
@@ -213,7 +215,10 @@ function fillNetworkClients(workbook:TemplateWorkbook,state:CanonicalState) {
   workbook.clearRows(sheet,2,50000,1,7);
   clients.forEach((client,index) => {
     const row = 2+index; const result = results.get(client.cnpj);
-    values[ref('A',row)] = client.cnpj; values[ref('B',row)] = client.name; values[ref('C',row)] = client.city; values[ref('D',row)] = client.network;
+    values[ref('A',row)] = client.cnpj; values[ref('B',row)] = client.name; values[ref('C',row)] = client.city;
+    // A rede exibida precisa ser a resolução canônica validada (Premissas → Roteiro
+    // → referência), e não voltar à rede crua da Premissas no momento da exportação.
+    values[ref('D',row)] = result?.network || client.network;
     values[ref('E',row)] = route.get(client.cnpj)?.fantasyName || client.name; values[ref('F',row)] = result?.invoiced || 0; values[ref('G',row)] = result?.toInvoice || 0;
   });
   workbook.patchCells(sheet,values,2);
