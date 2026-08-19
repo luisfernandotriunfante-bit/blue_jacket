@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { buildComboClientLookup, extractComboCnpjs, normalizeComboClientCode, normalizeComboCnpj } from '../domain/comboClients';
 import { comboDiscount, parseComboPrice, selectComboProducts } from '../domain/comboPricing';
-import { buildComboWorkbook } from '../services/comboWorkbook';
+import { buildComboWorkbook, DEFAULT_COMBO_WORKBOOK_OPTIONS, type ComboWorkbookOptions } from '../services/comboWorkbook';
 import { useData } from '../store/DataContext';
 import { StockCodeListFilter } from '../ui/stock/StockCodeListFilter';
 import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
@@ -29,9 +29,8 @@ export function CriacaoComboPage() {
   const [manualCnpj, setManualCnpj] = useState('');
   const [clientError, setClientError] = useState('');
   const [clientImportName, setClientImportName] = useState('');
+  const [exportOptions, setExportOptions] = useState<ComboWorkbookOptions>({ ...DEFAULT_COMBO_WORKBOOK_OPTIONS });
 
-  // Para criação de combo, "encontrado" significa item efetivamente disponível no 105:
-  // código Winthor confirmado + preço de venda/tabela válido.
   const tableProducts = useMemo(
     () => produtos.filter(product => product.hasWinthor === true && Number.isFinite(product.vendaUnitario) && product.vendaUnitario > 0),
     [produtos],
@@ -47,9 +46,6 @@ export function CriacaoComboPage() {
     [comboProducts, practicedPrices],
   );
 
-  // O 8022 já traz o código Winthor do cliente junto do CNPJ. Usamos essa relação
-  // somente como preenchimento automático; quando não existe ou há conflito, o código
-  // fica editável para que o usuário possa vinculá-lo manualmente antes de exportar.
   const clientLookup = useMemo(
     () => buildComboClientLookup(canonical?.transactions || []),
     [canonical],
@@ -80,8 +76,9 @@ export function CriacaoComboPage() {
 
   const resolvedClientCount = selectedClients.filter(client => Boolean(client.clientCode)).length;
   const unresolvedClientCount = selectedClients.length - resolvedClientCount;
-  const productsReady = comboProducts.length > 0 && filledCount === comboProducts.length;
-  const clientsReady = selectedClients.length > 0 && unresolvedClientCount === 0;
+  const needsPracticedPrice = exportOptions.includePracticedPrice || exportOptions.includeDiscount;
+  const productsReady = comboProducts.length > 0 && (!needsPracticedPrice || filledCount === comboProducts.length);
+  const clientsReady = !exportOptions.includeClients || (selectedClients.length > 0 && unresolvedClientCount === 0);
   const canExport = productsReady && clientsReady;
 
   const changeImportedCodes = (codes: Set<string>) => {
@@ -94,6 +91,10 @@ export function CriacaoComboPage() {
   };
 
   const clearPrices = () => setPracticedPrices({});
+
+  const updateExportOption = (key: keyof ComboWorkbookOptions, checked: boolean) => {
+    setExportOptions(current => ({ ...current, [key]: checked }));
+  };
 
   const addManualClient = () => {
     const cnpj = normalizeComboCnpj(manualCnpj);
@@ -167,9 +168,10 @@ export function CriacaoComboPage() {
         codigo: product.codigo,
         descricao: product.descricao,
         tablePrice: product.vendaUnitario,
-        practicedPrice: parseComboPrice(practicedPrices[product.codigo] || '') as number,
+        practicedPrice: parseComboPrice(practicedPrices[product.codigo] || ''),
       })),
       selectedClients.map(client => ({ cnpj: client.cnpj, clientCode: client.clientCode })),
+      exportOptions,
     );
     XLSX.writeFile(workbook, 'criacao-de-combo.xlsx');
   };
@@ -206,7 +208,7 @@ export function CriacaoComboPage() {
           </div>
 
           <div style={{ color: 'var(--panel-muted)', fontSize: '0.74rem', marginBottom: '16px' }}>
-            O desconto é calculado por item como (Preço de Tabela − Preço Praticado) ÷ Preço de Tabela.
+            O desconto é calculado por item como (Preço de Tabela − Preço Praticado) ÷ Preço de Tabela. O preenchimento do preço praticado só será obrigatório se ele ou a % de desconto estiverem marcados para exportação.
           </div>
 
           {!importedCodes.size ? (
@@ -275,10 +277,48 @@ export function CriacaoComboPage() {
 
         <PanelCard>
           <PanelSectionHeader
+            eyebrow="EXCEL"
+            title="Conteúdo do arquivo"
+            description="Marque somente o que você quer levar para o Excel. Código Winthor e descrição do produto ficam sempre na aba Produtos."
+            action={<span className="panel-badge">EXPORTAÇÃO PERSONALIZADA</span>}
+          />
+
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' }}>
+            {([
+              ['includeTablePrice', 'Preço de Tabela'],
+              ['includePracticedPrice', 'Preço Praticado'],
+              ['includeDiscount', '% de Desconto'],
+              ['includeClients', 'Aba Clientes'],
+            ] as Array<[keyof ComboWorkbookOptions, string]>).map(([key, label]) => (
+              <label key={key} className="panel-secondary-button" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={exportOptions[key]}
+                  onChange={event => updateExportOption(key, event.target.checked)}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <span className="panel-badge">PRODUTOS · {comboProducts.length}</span>
+            {exportOptions.includeClients ? <span className="panel-badge">CLIENTES · {resolvedClientCount}/{selectedClients.length}</span> : <span className="panel-badge">CLIENTES · FORA DO EXCEL</span>}
+            <button type="button" className="panel-secondary-button" onClick={downloadExcel} disabled={!canExport} style={{ marginLeft: 'auto' }}>Gerar Excel</button>
+          </div>
+
+          {!productsReady && comboProducts.length === 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Importe ao menos um produto para gerar o Excel.</div> : null}
+          {!productsReady && comboProducts.length > 0 && needsPracticedPrice ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Como Preço Praticado ou % de Desconto está marcado, preencha o preço praticado de todos os produtos.</div> : null}
+          {exportOptions.includeClients && selectedClients.length === 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>A aba Clientes está marcada. Adicione ao menos um cliente ou desmarque essa opção.</div> : null}
+          {exportOptions.includeClients && unresolvedClientCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>{unresolvedClientCount} cliente{unresolvedClientCount === 1 ? '' : 's'} sem código Winthor confirmado.</div> : null}
+        </PanelCard>
+
+        <PanelCard>
+          <PanelSectionHeader
             eyebrow="CLIENTES"
             title="Clientes do Combo"
             description="Adicione um CNPJ manualmente ou importe uma lista. O código Winthor é preenchido pelo 8022 quando esse vínculo existe na carga atual e pode ser corrigido manualmente."
-            action={<span className="panel-badge">EXCEL · 2 ABAS</span>}
+            action={<span className="panel-badge">{exportOptions.includeClients ? 'INCLUIR NO EXCEL' : 'FORA DO EXCEL'}</span>}
           />
 
           <div className="panel-toolbar" style={{ marginBottom: '14px', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -316,19 +356,19 @@ export function CriacaoComboPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
               {selectedClients.length > 0 ? <span className="panel-badge">CLIENTES · {resolvedClientCount}/{selectedClients.length} VINCULADOS</span> : null}
               <button type="button" className="panel-secondary-button" onClick={clearClients} disabled={selectedClients.length === 0}>Limpar clientes</button>
-              <button type="button" className="panel-secondary-button" onClick={downloadExcel} disabled={!canExport}>Gerar Excel</button>
             </div>
           </div>
 
           {clientError ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginBottom: '12px' }}>{clientError}</div> : null}
-          {!productsReady && comboProducts.length > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginBottom: '12px' }}>Preencha o preço praticado de todos os produtos antes de gerar o Excel.</div> : null}
-          {unresolvedClientCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginBottom: '12px' }}>{unresolvedClientCount} cliente{unresolvedClientCount === 1 ? '' : 's'} sem código Winthor confirmado. Preencha o código na tabela para liberar a exportação.</div> : null}
+          {exportOptions.includeClients && unresolvedClientCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginBottom: '12px' }}>{unresolvedClientCount} cliente{unresolvedClientCount === 1 ? '' : 's'} sem código Winthor confirmado. Preencha o código na tabela para exportar a aba Clientes.</div> : null}
 
           {selectedClients.length === 0 ? (
             <PanelEmptyState
               icon="◆"
               title="Vincule os clientes do combo"
-              description="Digite um CNPJ ou importe uma lista em TXT, CSV, XLS ou XLSX. O Excel só é gerado quando todos os clientes tiverem código Winthor."
+              description={exportOptions.includeClients
+                ? 'Digite um CNPJ ou importe uma lista em TXT, CSV, XLS ou XLSX. Se não quiser clientes no arquivo, desmarque Aba Clientes em Conteúdo do arquivo.'
+                : 'A aba Clientes está desmarcada. Você pode deixar esta lista vazia ou montar os clientes agora e marcar a opção depois.'}
             />
           ) : (
             <div className="panel-table-wrap">
