@@ -23,10 +23,10 @@ test('checkpoint: Meta T&C continua separada da Meta Indústria',()=>{
   assert.match(rules,/redistributeSingleNetwork/);
 });
 
-test('checkpoint: exportação TOP REDES preserva percentuais comprovados e rede canônica',()=>{
+test('checkpoint: exportação TOP REDES mantém K=REDES, L=TOPS e rede canônica',()=>{
   const generator=read('src/services/documentGenerator.ts');
-  assert.match(generator,/values\[ref\('K',row\)\] = ratio\(network\.total,network\.topTarget\)/);
-  assert.match(generator,/values\[ref\('L',row\)\] = ratio\(network\.total,network\.networkTarget\)/);
+  assert.match(generator,/values\[ref\('K',row\)\] = ratio\(network\.total,network\.networkTarget\)/);
+  assert.match(generator,/values\[ref\('L',row\)\] = ratio\(network\.total,network\.topTarget\)/);
   assert.match(generator,/values\[ref\('D',row\)\] = result\?\.network \|\| client\.network/);
 });
 
