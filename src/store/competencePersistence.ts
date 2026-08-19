@@ -1,4 +1,5 @@
-import { CanonicalState, DEFAULT_MANUAL_CONFIGURATION, LINE_NAMES, ManualConfiguration } from '../domain/canonical';
+import { DEFAULT_MANUAL_CONFIGURATION, LINE_NAMES } from '../domain/canonical';
+import type { CanonicalState, ManualConfiguration } from '../domain/canonical';
 
 export interface StorageLike {
   getItem(key:string):string|null;
