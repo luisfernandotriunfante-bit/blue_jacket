@@ -54,7 +54,7 @@ export function auditRawSales8022(rows:Row[]):RawSalesAudit {
     if(status==='FATURADO')invoiced+=value;else toInvoice+=value;
     cases+=parseNumber(row[26]);units+=parseNumber(row[27]);
     const vendor=String(row[17]??'').trim().replace(/^0+/,'');if(vendor)vendors.add(vendor);
-    const product=String(row[24]??row[21]??row[22]??'').trim();if(product)products.add(product);
+    const product=[row[21],row[22],row[24]].map(value=>String(value??'').trim()).find(Boolean)||'';if(product)products.add(product);
 
     const normalized=normalizeCnpj(row[5]);
     if(/^\d{14}$/.test(normalized.canonical)&&['EXACT_14','PADDED_EXCEL','TRIMMED_LEADING_ZERO'].includes(normalized.status)){
@@ -79,10 +79,26 @@ export function summarizeTransactionPositivity(transactions:SalesTransaction[]){
   return{invoiced:invoiced.size,future:future.length,total:invoiced.size+future.length,validCnpjs:new Set([...invoiced,...pending]).size};
 }
 
+function unassignedVendorRow(transactions:SalesTransaction[]):CanonicalVendorResult|null {
+  const rows=transactions.filter(tx=>!tx.vendorCode);
+  if(!rows.length)return null;
+  const invoiced=rows.filter(tx=>tx.status==='FATURADO').reduce((sum,tx)=>sum+tx.value,0);
+  const toInvoice=rows.filter(tx=>tx.status==='A FATURAR').reduce((sum,tx)=>sum+tx.value,0);
+  const positivity=summarizeTransactionPositivity(rows);
+  const total=invoiced+toInvoice;
+  return{
+    newCode:'SEM_VENDEDOR',oldCode:'SEM_VENDEDOR',name:'NÃO CLASSIFICADO',coordinatorCode:'SEM_COORDENADOR',coordinatorName:'SEM COORDENADOR',
+    salesTarget:0,positivityTarget:0,invoiced,toInvoice,total,attainment:0,
+    invoicedPositivation:positivity.invoiced,futurePositivation:positivity.future,totalPositivation:positivity.total,positivityAttainment:0,
+    idealSalesToday:0,salesGapToIdeal:0,salesGapToTarget:0,idealPositivationToday:0,positivityGapToIdeal:0,positivityGapToTarget:0,positivityDailyTarget:0,
+  };
+}
+
 /**
  * Mantém TODO o valor de venda por vendedor, inclusive linhas cujo CNPJ esteja
  * ausente/ambíguo, mas impede que identificadores que não são CNPJ contem como
- * positivação. O total de venda e a positivação passam a ter trilhas separadas.
+ * positivação. Linhas sem vendedor entram em um bucket explícito NÃO CLASSIFICADO
+ * para que nenhuma venda desapareça das somas de vendedor/coordenação.
  */
 export function buildVendorResultsWithValidatedPositivity(
   transactions:SalesTransaction[],
@@ -94,7 +110,7 @@ export function buildVendorResultsWithValidatedPositivity(
   const salesRows=buildVendorResults(transactions,rcaByNew,rcaByOld,targets,business);
   const positivityRows=buildVendorResults(transactions.filter(isValidSalesCnpj),rcaByNew,rcaByOld,targets,business);
   const positivityByKey=new Map(positivityRows.map(row=>[row.oldCode||row.newCode,row]));
-  return salesRows.map(row=>{
+  const rows=salesRows.map(row=>{
     const pos=positivityByKey.get(row.oldCode||row.newCode);
     const invoicedPositivation=pos?.invoicedPositivation||0;
     const futurePositivation=pos?.futurePositivation||0;
@@ -113,4 +129,7 @@ export function buildVendorResultsWithValidatedPositivity(
       positivityDailyTarget:business.remaining>0?positivityGapToTarget/business.remaining:positivityGapToTarget,
     };
   });
+  const unassigned=unassignedVendorRow(transactions);
+  if(unassigned)rows.push(unassigned);
+  return rows.sort((a,b)=>b.salesTarget-a.salesTarget||b.total-a.total);
 }
