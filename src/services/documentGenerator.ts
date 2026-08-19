@@ -149,7 +149,7 @@ function fillPanelTeam(workbook:TemplateWorkbook,state:CanonicalState) {
   vendors.forEach((vendor,index) => {
     const row = 4+index;
     values[ref('A',row)] = vendor.coordinatorCode; values[ref('B',row)] = vendor.coordinatorName;
-    values[ref('C',row)] = vendor.oldCode || vendor.newCode; values[ref('D',row)] = vendor.name;
+    values[ref('C',row)] = vendor.newCode; values[ref('D',row)] = vendor.name;
     values[ref('E',row)] = vendor.salesTarget; values[ref('F',row)] = vendor.invoiced; values[ref('G',row)] = ratio(vendor.invoiced,vendor.salesTarget);
     values[ref('H',row)] = vendor.toInvoice; values[ref('I',row)] = vendor.total; values[ref('J',row)] = vendor.attainment;
     values[ref('K',row)] = vendor.salesGapToIdeal > 0 ? vendor.idealSalesToday : ''; values[ref('L',row)] = vendor.salesGapToIdeal > 0 ? vendor.salesGapToIdeal : '';
