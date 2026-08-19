@@ -4,6 +4,7 @@ import { DailyPositivityChart } from './DailyPositivityChart';
 
 type MovementDay = { date:string; invoiced:number; toInvoice:number; total:number; invoicedPositivation:number; totalPositivation:number; };
 const WINDOW_DAYS=10;
+const WINDOW_STORAGE_KEY='bj_sellout_daily_window_end';
 const fmtBRL=(value:number)=>value.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const fmtInt=(value:number)=>Math.round(value||0).toLocaleString('pt-BR');
 const fmtDate=(date:string)=>new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR');
@@ -11,13 +12,31 @@ const fmtShortDate=(date:string)=>new Date(`${date}T12:00:00`).toLocaleDateStrin
 function addDays(date:string,amount:number){const value=new Date(`${date}T12:00:00Z`);value.setUTCDate(value.getUTCDate()+amount);return value.toISOString().slice(0,10)}
 function firstDayOfMonth(date:string){return `${date.slice(0,7)}-01`}
 function buildCalendar(data:MovementDay[]){if(!data.length)return [] as MovementDay[];const ordered=[...data].sort((a,b)=>a.date.localeCompare(b.date));const byDate=new Map(ordered.map(item=>[item.date,item]));const monthStart=firstDayOfMonth(ordered[0].date);const latest=ordered[ordered.length-1].date;const minimumWindowStart=addDays(latest,-(WINDOW_DAYS-1));const start=monthStart<minimumWindowStart?monthStart:minimumWindowStart;const days:MovementDay[]=[];for(let cursor=start;cursor<=latest;cursor=addDays(cursor,1)){days.push(byDate.get(cursor)||{date:cursor,invoiced:0,toInvoice:0,total:0,invoicedPositivation:0,totalPositivation:0})}return days}
+function readStoredEndDate(){try{return typeof window==='undefined'?'':window.sessionStorage.getItem(WINDOW_STORAGE_KEY)||''}catch{return''}}
+function storeEndDate(date:string){try{if(typeof window!=='undefined'&&date)window.sessionStorage.setItem(WINDOW_STORAGE_KEY,date)}catch{/* storage indisponível não deve quebrar o painel */}}
 
 export function DailyMovementWindow({data}:{data:MovementDay[]}){
- const calendar=useMemo(()=>buildCalendar(data),[data]);const latestDate=calendar.length?calendar[calendar.length-1].date:'';const maxEnd=Math.max(calendar.length-1,0);const minEnd=Math.min(WINDOW_DAYS-1,maxEnd);const[endIndex,setEndIndex]=useState(maxEnd);
- useEffect(()=>{setEndIndex(maxEnd)},[latestDate,maxEnd]);if(!calendar.length)return null;
- const safeEnd=Math.min(Math.max(endIndex,minEnd),maxEnd);const startIndex=Math.max(0,safeEnd-(WINDOW_DAYS-1));const visible=calendar.slice(startIndex,safeEnd+1);const isLatest=safeEnd===maxEnd;const isEarliest=safeEnd===minEnd;const periodStart=visible[0]?.date||'';const periodEnd=visible[visible.length-1]?.date||'';const move=(direction:number)=>setEndIndex(current=>Math.min(maxEnd,Math.max(minEnd,current+direction)));
+ const calendar=useMemo(()=>buildCalendar(data),[data]);
+ const latestDate=calendar.length?calendar[calendar.length-1].date:'';
+ const maxEnd=Math.max(calendar.length-1,0);
+ const minEnd=Math.min(WINDOW_DAYS-1,maxEnd);
+ const[selectedEndDate,setSelectedEndDate]=useState(readStoredEndDate);
+ const selectedIndex=selectedEndDate?calendar.findIndex(day=>day.date===selectedEndDate):-1;
+ const safeEnd=selectedIndex>=minEnd&&selectedIndex<=maxEnd?selectedIndex:maxEnd;
+ useEffect(()=>{if(!calendar.length)return;const current=calendar[safeEnd]?.date||latestDate;if(current!==selectedEndDate)setSelectedEndDate(current)},[calendar,latestDate,safeEnd,selectedEndDate]);
+ useEffect(()=>{if(selectedEndDate)storeEndDate(selectedEndDate)},[selectedEndDate]);
+ if(!calendar.length)return null;
+ const startIndex=Math.max(0,safeEnd-(WINDOW_DAYS-1));
+ const visible=calendar.slice(startIndex,safeEnd+1);
+ const isLatest=safeEnd===maxEnd;
+ const isEarliest=safeEnd===minEnd;
+ const periodStart=visible[0]?.date||'';
+ const periodEnd=visible[visible.length-1]?.date||'';
+ const selectEnd=(index:number)=>{const target=Math.min(maxEnd,Math.max(minEnd,index));setSelectedEndDate(calendar[target]?.date||latestDate)};
+ const move=(direction:number)=>selectEnd(safeEnd+direction);
+ const goCurrent=()=>setSelectedEndDate(latestDate);
  return <div style={{marginTop:'16px'}}>
-  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'18px',padding:'11px 14px',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'13px',background:'rgba(0,0,0,0.14)',marginBottom:'14px'}}><div style={{minWidth:0}}><div style={{color:'var(--panel-muted)',fontSize:'0.62rem',fontWeight:850,letterSpacing:'0.1em',textTransform:'uppercase'}}>Janela sincronizada · {WINDOW_DAYS} dias</div><div style={{color:'white',fontSize:'0.9rem',fontWeight:780,marginTop:'3px'}}>{fmtDate(periodStart)} — {fmtDate(periodEnd)}</div></div><div style={{display:'flex',alignItems:'center',gap:'7px',flexShrink:0}}><button type="button" onClick={()=>move(-1)} disabled={isEarliest} aria-label="Voltar um dia" style={navButtonStyle(isEarliest)}>‹</button><button type="button" onClick={()=>setEndIndex(maxEnd)} disabled={isLatest} style={currentButtonStyle(isLatest)}>Atual</button><button type="button" onClick={()=>move(1)} disabled={isLatest} aria-label="Avançar um dia" style={navButtonStyle(isLatest)}>›</button></div></div>
+  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'18px',padding:'11px 14px',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'13px',background:'rgba(0,0,0,0.14)',marginBottom:'14px'}}><div style={{minWidth:0}}><div style={{color:'var(--panel-muted)',fontSize:'0.62rem',fontWeight:850,letterSpacing:'0.1em',textTransform:'uppercase'}}>Janela sincronizada · {WINDOW_DAYS} dias</div><div style={{color:'white',fontSize:'0.9rem',fontWeight:780,marginTop:'3px'}}>{fmtDate(periodStart)} — {fmtDate(periodEnd)}</div></div><div style={{display:'flex',alignItems:'center',gap:'7px',flexShrink:0}}><button type="button" onClick={()=>move(-1)} disabled={isEarliest} aria-label="Voltar um dia" style={navButtonStyle(isEarliest)}>‹</button><button type="button" onClick={goCurrent} disabled={isLatest} style={currentButtonStyle(isLatest)}>Atual</button><button type="button" onClick={()=>move(1)} disabled={isLatest} aria-label="Avançar um dia" style={navButtonStyle(isLatest)}>›</button></div></div>
   <div style={{display:'grid',gridTemplateColumns:'minmax(0, 1.18fr) minmax(560px, 0.82fr)',gap:'14px',alignItems:'stretch',overflowX:'auto'}}>
    <div style={{display:'grid',gap:'12px',minWidth:'650px'}}><MovementPanel eyebrow="MOVIMENTO FINANCEIRO" title="Sell Out diário"><DailyMovementChart data={visible}/></MovementPanel><MovementPanel eyebrow="MOVIMENTO DE POSITIVAÇÃO" title="Clientes positivados por dia"><DailyPositivityChart data={visible}/></MovementPanel></div>
    <div style={{minWidth:'560px',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'14px',background:'rgba(255,255,255,0.025)',overflow:'hidden',display:'flex',flexDirection:'column',height:'100%'}}><div style={{padding:'16px 16px 12px',borderBottom:'1px solid rgba(255,255,255,0.08)'}}><div style={{color:'#ef3340',fontSize:'0.62rem',fontWeight:900,letterSpacing:'0.11em',textTransform:'uppercase'}}>PLANILHA DIÁRIA</div><div style={{color:'white',fontSize:'0.94rem',fontWeight:760,marginTop:'4px'}}>Financeiro + positivação</div><div style={{color:'var(--panel-muted)',fontSize:'0.68rem',marginTop:'3px'}}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div></div>
