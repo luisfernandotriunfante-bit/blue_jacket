@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useData, ProdutoEstoque } from '../store/DataContext';
 import { productMatchesStockCodeList } from '../domain/stockCodeFilter';
+import { classifyStockRisk, stockRiskLabel, StockRiskStatus } from '../domain/stockRisk';
 import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 import { StockCodeListFilter } from '../ui/stock/StockCodeListFilter';
 
@@ -41,10 +42,12 @@ type CatalogItem = ProdutoEstoque & {
   averageDailyUnits: number;
   coverageDays: number | null;
   isNoWinthor: boolean;
+  stockStatus: StockRiskStatus;
 };
 
 type SortKey = keyof ProdutoEstoque | 'totalCusto' | 'totalVenda' | 'soldUnits' | 'coverageDays';
 type CatalogFilter = 'todos' | 'lancamento' | 'sem-winthor';
+type RiskFilter = 'todos' | 'ruptura' | 'risco' | 'sem-giro' | 'ok';
 
 type ColumnFilters = {
   codigo: string;
@@ -81,6 +84,7 @@ export function EstoquePage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: 'asc' | 'desc' } | null>(null);
   const [activeFilter, setActiveFilter] = useState<CatalogFilter>('todos');
+  const [statusFilter, setStatusFilter] = useState<RiskFilter>('todos');
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>(EMPTY_COLUMN_FILTERS);
   const [importedCodes, setImportedCodes] = useState<Set<string>>(() => new Set());
 
@@ -114,6 +118,14 @@ export function EstoquePage() {
       // SEM WINTHOR nasce exclusivamente da CARTEIRA Colgate.
       const hasPortfolioPending = product.saldoPedido > 0 || (product.saldoPedidoValorCusto || 0) > 0;
       const isNoWinthor = product.hasWinthor === false && hasPortfolioPending;
+      const stockStatus = classifyStockRisk({
+        hasWinthor: product.hasWinthor,
+        quantity: product.quantidade,
+        soldUnits,
+        coverageDays,
+        pendingQty: product.saldoPedido,
+        coverageTargetDays: metricas.metaCobertura,
+      });
 
       return {
         ...product,
@@ -121,14 +133,19 @@ export function EstoquePage() {
         averageDailyUnits,
         coverageDays,
         isNoWinthor,
+        stockStatus,
       };
     });
-  }, [produtos, canonical]);
+  }, [produtos, canonical, metricas.metaCobertura]);
 
   const counts = useMemo(() => ({
     todos: catalog.length,
     lancamento: catalog.filter(p => p.isLancamento).length,
     semWinthor: catalog.filter(p => p.isNoWinthor).length,
+    ruptura: catalog.filter(p => p.stockStatus === 'ruptura').length,
+    risco: catalog.filter(p => p.stockStatus === 'risco').length,
+    semGiro: catalog.filter(p => p.stockStatus === 'sem-giro').length,
+    ok: catalog.filter(p => p.stockStatus === 'ok').length,
   }), [catalog]);
 
   const sortedProdutos = useMemo(() => {
@@ -146,6 +163,8 @@ export function EstoquePage() {
 
     if (activeFilter === 'lancamento') sortableItems = sortableItems.filter(p => p.isLancamento);
     else if (activeFilter === 'sem-winthor') sortableItems = sortableItems.filter(p => p.isNoWinthor);
+
+    if (statusFilter !== 'todos') sortableItems = sortableItems.filter(p => p.stockStatus === statusFilter);
 
     const codeFilter = columnFilters.codigo.trim().toLowerCase();
     const eanFilter = columnFilters.ean.trim().toLowerCase();
@@ -190,7 +209,7 @@ export function EstoquePage() {
     }
 
     return sortableItems;
-  }, [catalog, searchTerm, sortConfig, activeFilter, columnFilters, importedCodes]);
+  }, [catalog, searchTerm, sortConfig, activeFilter, statusFilter, columnFilters, importedCodes]);
 
   const requestSort = (key: SortKey) => {
     let direction: 'asc' | 'desc' = 'asc';
@@ -207,11 +226,12 @@ export function EstoquePage() {
   };
 
   const activeColumnFilterCount = Object.values(columnFilters).filter(value => value.trim()).length;
-  const hasAnyFilter = searchTerm.trim().length > 0 || activeFilter !== 'todos' || activeColumnFilterCount > 0 || importedCodes.size > 0;
+  const hasAnyFilter = searchTerm.trim().length > 0 || activeFilter !== 'todos' || statusFilter !== 'todos' || activeColumnFilterCount > 0 || importedCodes.size > 0;
 
   const clearFilters = () => {
     setSearchTerm('');
     setActiveFilter('todos');
+    setStatusFilter('todos');
     setColumnFilters(EMPTY_COLUMN_FILTERS);
     setImportedCodes(new Set());
   };
@@ -239,6 +259,14 @@ export function EstoquePage() {
       }}
     />
   );
+
+  const renderRiskBadge = (status: StockRiskStatus) => {
+    if (status === 'sem-winthor') return <span style={{ color: 'var(--panel-muted)' }}>—</span>;
+    if (status === 'ruptura') return <span className="panel-badge panel-badge-red">{stockRiskLabel(status)}</span>;
+    if (status === 'risco') return <span className="panel-badge panel-badge-amber">{stockRiskLabel(status)}</span>;
+    if (status === 'sem-giro') return <span className="panel-badge">{stockRiskLabel(status)}</span>;
+    return <span className="panel-badge">{stockRiskLabel(status)}</span>;
+  };
 
   if (!isLoaded) {
     return <PanelEmptyState icon="◆" title="Nenhum dado carregado" description={<>Vá até <strong>Configurações</strong> e faça o upload das planilhas de estoque, itens e carteira.</>} />;
@@ -301,7 +329,7 @@ export function EstoquePage() {
           <PanelSectionHeader
             eyebrow="CATÁLOGO"
             title={`Produtos (${sortedProdutos.length}${sortedProdutos.length !== catalog.length ? ` de ${catalog.length}` : ''})`}
-            description="Lançamento vem da lista oficial por EAN. Sem Winthor aparece somente quando um item da CARTEIRA Colgate não encontra correspondência no Winthor."
+            description="Lançamento continua sendo lido exclusivamente pela lista oficial por EAN. Ruptura e risco são uma camada separada: ruptura = estoque zero; risco = cobertura abaixo da meta e sem o item na carteira Colgate."
           />
 
           <div className="panel-toolbar" style={{ marginBottom: '12px' }}>
@@ -311,6 +339,17 @@ export function EstoquePage() {
               <button className={`panel-chip is-warning${activeFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setActiveFilter('sem-winthor')}>Sem Winthor · {counts.semWinthor}</button>
             </div>
             <input id="searchInput" className="panel-input" type="text" value={searchTerm} placeholder="Buscar por código, EAN ou descrição..." onChange={event => setSearchTerm(event.target.value)} />
+          </div>
+
+          <div className="panel-toolbar" style={{ marginBottom: '12px', alignItems: 'center' }}>
+            <div className="panel-chips">
+              <button className={`panel-chip${statusFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setStatusFilter('todos')}>Situação · Todas</button>
+              <button className={`panel-chip panel-chip-red${statusFilter === 'ruptura' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ruptura')}>Ruptura · {counts.ruptura}</button>
+              <button className={`panel-chip is-warning${statusFilter === 'risco' ? ' is-active' : ''}`} onClick={() => setStatusFilter('risco')}>Risco · {counts.risco}</button>
+              <button className={`panel-chip${statusFilter === 'sem-giro' ? ' is-active' : ''}`} onClick={() => setStatusFilter('sem-giro')}>Sem giro · {counts.semGiro}</button>
+              <button className={`panel-chip${statusFilter === 'ok' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ok')}>OK · {counts.ok}</button>
+            </div>
+            <span style={{ color: 'var(--panel-muted)', fontSize: '0.72rem', marginLeft: 'auto' }}>Meta usada no risco: <strong style={{ color: 'var(--panel-text)' }}>{metricas.metaCobertura} dias</strong></span>
           </div>
 
           <div className="panel-toolbar" style={{ marginBottom: '18px', alignItems: 'center' }}>
@@ -327,7 +366,8 @@ export function EstoquePage() {
                 <tr>
                   <th className="is-sortable" onClick={() => requestSort('codigo')}>Código{getSortIcon('codigo')}</th>
                   <th className="is-sortable" onClick={() => requestSort('ean')}>EAN{getSortIcon('ean')}</th>
-                  <th className="is-sortable" onClick={() => requestSort('descricao')}>Produto / Status{getSortIcon('descricao')}</th>
+                  <th className="is-sortable" onClick={() => requestSort('descricao')}>Produto / Lançamento{getSortIcon('descricao')}</th>
+                  <th>Situação</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('quantidade')}>Estoque (Un){getSortIcon('quantidade')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('soldUnits')}>Venda mês (Un){getSortIcon('soldUnits')}</th>
                   <th className="is-sortable is-right" onClick={() => requestSort('coverageDays')}>Cobertura ritmo{getSortIcon('coverageDays')}</th>
@@ -342,6 +382,7 @@ export function EstoquePage() {
                   <th>{renderFilterInput('codigo', 'Código')}</th>
                   <th>{renderFilterInput('ean', 'EAN', { minWidth: 128 })}</th>
                   <th>{renderFilterInput('descricao', 'Produto', { minWidth: 190 })}</th>
+                  <th></th>
                   <th>{renderFilterInput('quantidade', '>1000', { numeric: true })}</th>
                   <th>{renderFilterInput('soldUnits', '>100', { numeric: true })}</th>
                   <th>{renderFilterInput('coverageDays', '<5', { numeric: true })}</th>
@@ -365,6 +406,7 @@ export function EstoquePage() {
                         {p.isNoWinthor && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}
                       </div>
                     </td>
+                    <td>{renderRiskBadge(p.stockStatus)}</td>
                     <td className="is-right is-strong">{p.quantidade.toLocaleString('pt-BR')}</td>
                     <td className="is-right">{Math.round(p.soldUnits).toLocaleString('pt-BR')}</td>
                     <td className="is-right">
