@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { useData, ProdutoEstoque } from '../store/DataContext';
+import { productMatchesStockCodeList } from '../domain/stockCodeFilter';
 import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
+import { StockCodeListFilter } from '../ui/stock/StockCodeListFilter';
 
 function formatCurrency(val: number) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
@@ -80,6 +82,7 @@ export function EstoquePage() {
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: 'asc' | 'desc' } | null>(null);
   const [activeFilter, setActiveFilter] = useState<CatalogFilter>('todos');
   const [columnFilters, setColumnFilters] = useState<ColumnFilters>(EMPTY_COLUMN_FILTERS);
+  const [importedCodes, setImportedCodes] = useState<Set<string>>(() => new Set());
 
   const catalog = useMemo<CatalogItem[]>(() => {
     const soldByInternal = new Map<string, number>();
@@ -137,6 +140,10 @@ export function EstoquePage() {
         .some(value => String(value || '').toLowerCase().includes(search)));
     }
 
+    if (importedCodes.size) {
+      sortableItems = sortableItems.filter(product => productMatchesStockCodeList(product, importedCodes));
+    }
+
     if (activeFilter === 'lancamento') sortableItems = sortableItems.filter(p => p.isLancamento);
     else if (activeFilter === 'sem-winthor') sortableItems = sortableItems.filter(p => p.isNoWinthor);
 
@@ -183,7 +190,7 @@ export function EstoquePage() {
     }
 
     return sortableItems;
-  }, [catalog, searchTerm, sortConfig, activeFilter, columnFilters]);
+  }, [catalog, searchTerm, sortConfig, activeFilter, columnFilters, importedCodes]);
 
   const requestSort = (key: SortKey) => {
     let direction: 'asc' | 'desc' = 'asc';
@@ -200,12 +207,13 @@ export function EstoquePage() {
   };
 
   const activeColumnFilterCount = Object.values(columnFilters).filter(value => value.trim()).length;
-  const hasAnyFilter = searchTerm.trim().length > 0 || activeFilter !== 'todos' || activeColumnFilterCount > 0;
+  const hasAnyFilter = searchTerm.trim().length > 0 || activeFilter !== 'todos' || activeColumnFilterCount > 0 || importedCodes.size > 0;
 
   const clearFilters = () => {
     setSearchTerm('');
     setActiveFilter('todos');
     setColumnFilters(EMPTY_COLUMN_FILTERS);
+    setImportedCodes(new Set());
   };
 
   const renderFilterInput = (
@@ -305,9 +313,12 @@ export function EstoquePage() {
             <input id="searchInput" className="panel-input" type="text" value={searchTerm} placeholder="Buscar por código, EAN ou descrição..." onChange={event => setSearchTerm(event.target.value)} />
           </div>
 
-          <div className="panel-toolbar" style={{ marginBottom: '18px', justifyContent: 'flex-end' }}>
-            <span style={{ color: 'var(--panel-muted)', fontSize: '0.72rem' }}>Filtros numéricos: use &gt;, &lt;, &gt;=, &lt;= ou =. Ex.: &gt;1000 ou &lt;R$ 5,00.</span>
-            <button className="panel-secondary-button" onClick={clearFilters} disabled={!hasAnyFilter}>Limpar filtros{activeColumnFilterCount > 0 ? ` · ${activeColumnFilterCount}` : ''}</button>
+          <div className="panel-toolbar" style={{ marginBottom: '18px', alignItems: 'center' }}>
+            <StockCodeListFilter products={catalog} codes={importedCodes} onChange={setImportedCodes} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px', flexWrap: 'wrap', marginLeft: 'auto' }}>
+              <span style={{ color: 'var(--panel-muted)', fontSize: '0.72rem' }}>Filtros numéricos: use &gt;, &lt;, &gt;=, &lt;= ou =. Ex.: &gt;1000 ou &lt;R$ 5,00.</span>
+              <button className="panel-secondary-button" onClick={clearFilters} disabled={!hasAnyFilter}>Limpar filtros{activeColumnFilterCount > 0 ? ` · ${activeColumnFilterCount}` : ''}</button>
+            </div>
           </div>
 
           <div className="panel-table-wrap">
