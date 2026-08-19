@@ -109,6 +109,15 @@ function removeNodes(document: XMLDocument, localName: string, predicate: (eleme
     .forEach(element => element.parentNode?.removeChild(element));
 }
 
+function clearFilterCriteria(document: XMLDocument) {
+  Array.from(document.getElementsByTagName('*'))
+    .filter(element => element.localName === 'autoFilter')
+    .forEach(autoFilter => {
+      childElements(autoFilter, 'filterColumn').forEach(filter => autoFilter.removeChild(filter));
+      childElements(autoFilter, 'sortState').forEach(sort => autoFilter.removeChild(sort));
+    });
+}
+
 function normalizeTarget(target: string): string {
   const clean = target.replace(/^\//, '');
   return clean.startsWith('xl/') ? clean : `xl/${clean.replace(/^\.\//, '')}`;
@@ -199,10 +208,38 @@ export class TemplateWorkbook {
       rowsByNumber.set(targetRow, row);
     }
 
+    const normalizeTopNetworks = sheetName === 'Top Redes' && Boolean(styleSource);
+    if (normalizeTopNetworks) {
+      // O modelo histórico traz linhas ocultas e estilos diferentes após certas
+      // posições. A exportação precisa ser uma tabela única, sem herdar filtros,
+      // linhas escondidas ou mudança de fonte/borda no meio dos dados.
+      clearFilterCriteria(document);
+      const targetRows = new Set(entries.map(entry => entry.targetRow).filter(row => row >= 4));
+      targetRows.forEach(targetRow => {
+        const row = rowsByNumber.get(targetRow);
+        if (!row) return;
+        row.removeAttribute('hidden');
+        row.removeAttribute('collapsed');
+        row.removeAttribute('outlineLevel');
+        const sourceHeight = styleSource?.getAttribute('ht');
+        const sourceCustomHeight = styleSource?.getAttribute('customHeight');
+        if (sourceHeight) row.setAttribute('ht', sourceHeight); else row.removeAttribute('ht');
+        if (sourceCustomHeight) row.setAttribute('customHeight', sourceCustomHeight); else row.removeAttribute('customHeight');
+      });
+    }
+
     for (const { reference, value, targetRow } of entries) {
       const row = rowsByNumber.get(targetRow);
       if (!row) continue;
       const cell = ensureCell(document, row, reference, styleSource);
+
+      if (normalizeTopNetworks && targetRow >= 4 && styleSource) {
+        const sourceCell = childElements(styleSource, 'c').find(candidate => cellColumn(candidate.getAttribute('r') || '') === cellColumn(reference));
+        const sourceStyle = sourceCell?.getAttribute('s');
+        if (sourceStyle) cell.setAttribute('s', sourceStyle);
+        else cell.removeAttribute('s');
+      }
+
       setCellValue(document, cell, value);
     }
   }
@@ -225,15 +262,25 @@ export class TemplateWorkbook {
 
     const styles = this.getStylesDocument();
     const cellXfs = styles.getElementsByTagNameNS(MAIN_NS, 'cellXfs')[0];
+    const cellStyleXfs = styles.getElementsByTagNameNS(MAIN_NS, 'cellStyleXfs')[0];
     if (!cellXfs) throw new Error('O modelo Excel não possui estilos de célula.');
 
     const styleList = () => childElements(cellXfs, 'xf');
+    const inheritedStyleList = () => cellStyleXfs ? childElements(cellStyleXfs, 'xf') : [];
+    const effectiveNumberFormatId = (style: Element): string => {
+      const direct = style.getAttribute('numFmtId') || '0';
+      if (direct !== '0') return direct;
+      const parentIndex = Number(style.getAttribute('xfId') || 0);
+      const inherited = inheritedStyleList()[parentIndex]?.getAttribute('numFmtId') || '0';
+      return inherited !== '0' ? inherited : direct;
+    };
+
     const sourceStyleIndex = Number(sourceCell.getAttribute('s') || 0);
     const sourceStyle = styleList()[sourceStyleIndex] || styleList()[0];
     if (!sourceStyle) throw new Error(`Não foi possível localizar o estilo de “${sourceReference}”.`);
 
-    const numFmtId = sourceStyle.getAttribute('numFmtId') || '0';
-    const applyNumberFormat = sourceStyle.getAttribute('applyNumberFormat') || (numFmtId === '0' ? '0' : '1');
+    const numFmtId = effectiveNumberFormatId(sourceStyle);
+    const applyNumberFormat = numFmtId === '0' ? '0' : '1';
     const generatedStyles = new Map<string, number>();
 
     references.forEach(reference => {
@@ -242,9 +289,9 @@ export class TemplateWorkbook {
       const currentStyleIndex = Number(cell.getAttribute('s') || 0);
       const currentStyle = styleList()[currentStyleIndex] || styleList()[0];
       if (!currentStyle) return;
-      const currentNumFmtId = currentStyle.getAttribute('numFmtId') || '0';
-      const currentApplyNumberFormat = currentStyle.getAttribute('applyNumberFormat') || (currentNumFmtId === '0' ? '0' : '1');
-      if (currentNumFmtId === numFmtId && currentApplyNumberFormat === applyNumberFormat) return;
+      const currentDirectNumFmtId = currentStyle.getAttribute('numFmtId') || '0';
+      const currentApplyNumberFormat = currentStyle.getAttribute('applyNumberFormat') || '0';
+      if (currentDirectNumFmtId === numFmtId && currentApplyNumberFormat === applyNumberFormat) return;
 
       const key = `${currentStyleIndex}:${numFmtId}:${applyNumberFormat}`;
       let formattedStyleIndex = generatedStyles.get(key);
@@ -252,7 +299,7 @@ export class TemplateWorkbook {
         const formattedStyle = currentStyle.cloneNode(true) as Element;
         formattedStyle.setAttribute('numFmtId', numFmtId);
         if (applyNumberFormat === '0') formattedStyle.removeAttribute('applyNumberFormat');
-        else formattedStyle.setAttribute('applyNumberFormat', applyNumberFormat);
+        else formattedStyle.setAttribute('applyNumberFormat', '1');
         cellXfs.appendChild(formattedStyle);
         formattedStyleIndex = childElements(cellXfs, 'xf').length - 1;
         generatedStyles.set(key, formattedStyleIndex);
@@ -279,6 +326,12 @@ export class TemplateWorkbook {
 
   private serializeSheets() {
     for (const [path, bytes] of Object.entries(this.files)) {
+      if (/^xl\/tables\/[^/]+\.xml$/.test(path)) {
+        const tableDocument = parseXml(bytes, path);
+        clearFilterCriteria(tableDocument);
+        this.files[path] = strToU8(new XMLSerializer().serializeToString(tableDocument));
+        continue;
+      }
       if (!/^xl\/worksheets\/[^/]+\.xml$/.test(path)) continue;
       const cached = Array.from(this.sheets.values()).find(sheet => sheet.path === path);
       const document = cached?.document || parseXml(bytes, path);
