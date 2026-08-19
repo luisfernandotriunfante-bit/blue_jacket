@@ -63,7 +63,6 @@ test('gerador mantém todos os conjuntos de registros e usa rede canônica resol
 test('TOP REDES padroniza percentuais e valores sem substituir o estilo visual das células',()=>{
   const workbook=XLSX.read(readFileSync(PATH),{type:'buffer',cellNF:true});
   const sheet=workbook.Sheets['Top Redes'];
-  assert.match(String((sheet.G26 as XLSX.CellObject|undefined)?.z||''),/%/);
   assert.match(String((sheet.K4 as XLSX.CellObject|undefined)?.z||''),/%/);
 
   const generator=readFileSync('src/services/documentGenerator.ts','utf8');
@@ -74,11 +73,12 @@ test('TOP REDES padroniza percentuais e valores sem substituir o estilo visual d
   assert.match(generator,/'K2','L2'/);
   assert.match(generator,/ref\('G',row\),ref\('H',row\)/);
   assert.match(generator,/ref\('K',row\),ref\('L',row\)/);
-  assert.match(generator,/workbook\.copyNumberFormat\(sheet,'G26',networkPercentageRefs\)/);
+  assert.match(generator,/workbook\.copyNumberFormat\(sheet,'K4',networkPercentageRefs\)/);
   assert.match(generator,/workbook\.copyNumberFormat\(sheet,'K4',attainmentPercentageRefs\)/);
   assert.match(generator,/workbook\.copyNumberFormat\(sheet,'F4',currencyRefs\)/);
   assert.match(templateWorkbook,/formattedStyle = currentStyle\.cloneNode\(true\)/);
   assert.match(templateWorkbook,/formattedStyle\.setAttribute\('numFmtId', numFmtId\)/);
+  assert.match(templateWorkbook,/currentApplyNumberFormat/);
 });
 
 test('TOP REDES exporta vendedor e supervisor no padrão Winthor atual',()=>{
