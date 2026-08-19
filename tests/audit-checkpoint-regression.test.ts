@@ -37,7 +37,8 @@ test('checkpoint: auditoria oficial é a reconciliação canônica em três nív
   assert.match(presentation,/INTERNAL:'CONSISTÊNCIA INTERNA'/);
   assert.match(presentation,/SOURCE:'RECONCILIAÇÃO DE FONTES'/);
   assert.match(presentation,/SPREADSHEET:'REGRESSÃO CONTRA PLANILHA'/);
-  assert.match(presentation,/BLOCKED/);
+  assert.match(presentation,/return'BLOQUEADO'/);
+  assert.match(presentation,/blocked:number/);
 });
 
 test('checkpoint: CI mantém ordem typecheck → testes → build antes da publicação',()=>{
