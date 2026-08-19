@@ -242,7 +242,9 @@ export class TemplateWorkbook {
       const currentStyleIndex = Number(cell.getAttribute('s') || 0);
       const currentStyle = styleList()[currentStyleIndex] || styleList()[0];
       if (!currentStyle) return;
-      if ((currentStyle.getAttribute('numFmtId') || '0') === numFmtId) return;
+      const currentNumFmtId = currentStyle.getAttribute('numFmtId') || '0';
+      const currentApplyNumberFormat = currentStyle.getAttribute('applyNumberFormat') || (currentNumFmtId === '0' ? '0' : '1');
+      if (currentNumFmtId === numFmtId && currentApplyNumberFormat === applyNumberFormat) return;
 
       const key = `${currentStyleIndex}:${numFmtId}:${applyNumberFormat}`;
       let formattedStyleIndex = generatedStyles.get(key);

@@ -41,7 +41,9 @@ function generatedDate(state:CanonicalState):Date {
 
 function officialNetworks(state:CanonicalState):CanonicalNetworkResult[] {
   return state.networks
-    .filter(network => network.key !== 'SEM REDE' && (network.networkTarget > 0 || network.topTarget > 0 || network.total !== 0))
+    // TOP REDES é uma visão de redes com meta. Venda sem Meta Redes e sem Meta Tops
+    // continua existindo no Sell Out geral, mas não deve criar linha nesta planilha.
+    .filter(network => network.key !== 'SEM REDE' && (network.networkTarget > 0 || network.topTarget > 0))
     .sort((left,right) => right.networkTarget-left.networkTarget || right.topTarget-left.topTarget || right.total-left.total);
 }
 
@@ -201,19 +203,24 @@ function fillTopNetworks(workbook:TemplateWorkbook,state:CanonicalState) {
   });
   workbook.patchCells(sheet,values,4);
 
-  // O modelo contém estilos visuais diferentes entre as colunas. Copiamos
-  // apenas o formato numérico de células-modelo corretas, preservando cor,
-  // borda, alinhamento e demais propriedades de cada célula de destino.
+  // K4 é uma célula do próprio modelo com o formato percentual validado. O
+  // TemplateWorkbook preserva cor/borda/alinhamento da célula de destino e
+  // corrige também estilos que tinham o mesmo numFmtId com aplicação desativada.
   const detailRows = networks.map((_,index) => 4+index);
-  const percentageRefs = [
-    'G2','H2','K2','L2',
-    ...detailRows.flatMap(row => [ref('G',row),ref('H',row),ref('K',row),ref('L',row)]),
+  const networkPercentageRefs = [
+    'G2','H2',
+    ...detailRows.flatMap(row => [ref('G',row),ref('H',row)]),
+  ];
+  const attainmentPercentageRefs = [
+    'K2','L2',
+    ...detailRows.flatMap(row => [ref('K',row),ref('L',row)]),
   ];
   const currencyRefs = [
     'D2','E2','F2','I2','J2',
     ...detailRows.flatMap(row => [ref('D',row),ref('E',row),ref('F',row),ref('I',row),ref('J',row)]),
   ];
-  workbook.copyNumberFormat(sheet,'K4',percentageRefs);
+  workbook.copyNumberFormat(sheet,'K4',networkPercentageRefs);
+  workbook.copyNumberFormat(sheet,'K4',attainmentPercentageRefs);
   workbook.copyNumberFormat(sheet,'F4',currencyRefs);
 }
 
