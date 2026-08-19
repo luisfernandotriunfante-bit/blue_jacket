@@ -197,9 +197,10 @@ function fillTopNetworks(workbook:TemplateWorkbook,state:CanonicalState) {
     values[ref('D',row)] = network.networkTarget; values[ref('E',row)] = network.topTarget; values[ref('F',row)] = network.invoiced;
     values[ref('G',row)] = ratio(network.invoiced,network.networkTarget); values[ref('H',row)] = ratio(network.invoiced,network.topTarget);
     values[ref('I',row)] = network.toInvoice; values[ref('J',row)] = gap(network.networkTarget,network.total);
-    // O modelo original usa, no detalhe, K para TOPS e L para REDES.
-    // A linha-resumo 2 preserva a disposição histórica K=REDES / L=TOPS.
-    values[ref('K',row)] = ratio(network.total,network.topTarget); values[ref('L',row)] = ratio(network.total,network.networkTarget); values[ref('M',row)] = '';
+    // Os cabeçalhos definem K como REDES e L como TOPS. O detalhe deve seguir a
+    // mesma regra da linha-resumo: K = (Faturado + A Faturar) / Meta Redes;
+    // L = (Faturado + A Faturar) / Meta Tops.
+    values[ref('K',row)] = ratio(network.total,network.networkTarget); values[ref('L',row)] = ratio(network.total,network.topTarget); values[ref('M',row)] = '';
   });
   workbook.patchCells(sheet,values,4);
 
