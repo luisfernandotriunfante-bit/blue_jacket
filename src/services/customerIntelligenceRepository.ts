@@ -1,6 +1,7 @@
 import type { CustomerIntelligenceSupport } from '../domain/customerIntelligenceTypes';
 import { EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT } from '../domain/customerIntelligenceTypes';
 import { enrichAssortmentWith322 } from './customerIntelligence322';
+import { filterCustomerProfilesByDeclaredCnpj } from './customerIntelligenceCustomers';
 import {
   detectCustomerIntelligenceSource,
   mergeCustomerIntelligenceSupport,
@@ -71,10 +72,11 @@ export async function processCustomerIntelligenceFiles(files: File[], previous: 
     }
     if (kind === 'PURCHASE_310') {
       const parsed = parseCustomerAndPurchaseWorkbook(workbook);
+      const validatedCustomers = filterCustomerProfilesByDeclaredCnpj(workbook, parsed.customers);
       result = mergeCustomerIntelligenceSupport(result, {
         purchases: parsed.purchases,
-        customers: parsed.customers,
-        source: { kind, fileName: file.name, note: `${parsed.purchases.length} combinação(ões) CNPJ × SKU consolidadas; ${parsed.customers.length} perfil(is) de cliente.` },
+        customers: validatedCustomers.customers,
+        source: { kind, fileName: file.name, note: `${parsed.purchases.length} combinação(ões) CNPJ × SKU consolidadas; ${validatedCustomers.customers.length} perfil(is) CNPJ válido(s); ${validatedCustomers.removedInvalidType} perfil(is) removido(s) por TIPO CPF/código inválido.` },
       });
       continue;
     }
