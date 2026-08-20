@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { buildComboClientLookup, extractComboCnpjs, normalizeComboClientCode, normalizeComboCnpj, type ComboClientLookupEntry } from '../domain/comboClients';
 import { buildComboPortfolioLookup } from '../domain/comboClientPortfolio';
 import { comboDiscount, parseComboPrice, selectComboProducts } from '../domain/comboPricing';
+import { matchedStockCodes, normalizeStockCode } from '../domain/stockCodeFilter';
 import { buildComboWorkbook, DEFAULT_COMBO_WORKBOOK_OPTIONS, type ComboWorkbookOptions } from '../services/comboWorkbook';
 import { useData } from '../store/DataContext';
 import { StockCodeListFilter } from '../ui/stock/StockCodeListFilter';
@@ -43,6 +44,16 @@ export function CriacaoComboPage() {
   const comboProducts = useMemo(
     () => selectComboProducts(tableProducts, importedCodes),
     [tableProducts, importedCodes],
+  );
+
+  const matchedImportedCodes = useMemo(
+    () => matchedStockCodes(tableProducts, importedCodes),
+    [tableProducts, importedCodes],
+  );
+
+  const unmatchedCodes = useMemo(
+    () => Array.from(importedCodes).filter(code => !matchedImportedCodes.has(code)),
+    [importedCodes, matchedImportedCodes],
   );
 
   const filledCount = useMemo(
@@ -93,6 +104,28 @@ export function CriacaoComboPage() {
 
   const changeImportedCodes = (codes: Set<string>) => {
     setImportedCodes(codes);
+  };
+
+  const removeSelectedCode = (code: string) => {
+    setImportedCodes(current => {
+      const next = new Set(current);
+      next.delete(code);
+      return next;
+    });
+  };
+
+  const removeProduct = (product: (typeof comboProducts)[number]) => {
+    const aliases = new Set(
+      [product.codigo, product.ean, product.factoryCode]
+        .map(normalizeStockCode)
+        .filter(Boolean),
+    );
+    setImportedCodes(current => new Set(Array.from(current).filter(code => !aliases.has(normalizeStockCode(code)))));
+    setPracticedPrices(current => {
+      const next = { ...current };
+      delete next[product.codigo];
+      return next;
+    });
   };
 
   const updatePracticedPrice = (code: string, value: string) => {
@@ -250,22 +283,17 @@ export function CriacaoComboPage() {
               title="Adicione ou importe os itens do combo"
               description="Digite um EAN/código e clique em Adicionar item, ou importe TXT, CSV, XLS ou XLSX com os códigos dos produtos."
             />
-          ) : comboProducts.length === 0 ? (
-            <PanelEmptyState
-              icon="◆"
-              title="Nenhum item com preço no 105"
-              description="Os códigos selecionados não encontraram itens com código Winthor e preço de tabela disponível na Posição 105."
-            />
           ) : (
             <div className="panel-table-wrap">
               <table className="panel-table">
                 <thead>
                   <tr>
-                    <th>Código Winthor</th>
+                    <th>Código / EAN</th>
                     <th>Produto</th>
                     <th className="is-right">Preço de Tabela</th>
                     <th className="is-right">Preço Praticado</th>
                     <th className="is-right">% de Desconto</th>
+                    <th className="is-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -299,9 +327,27 @@ export function CriacaoComboPage() {
                             <span className="is-strong" style={{ color: discount >= 0 ? 'var(--panel-text)' : '#fca5a5' }}>{formatPercent(discount)}</span>
                           )}
                         </td>
+                        <td className="is-right">
+                          <button type="button" className="panel-secondary-button" aria-label={`Excluir item ${product.codigo}`} onClick={() => removeProduct(product)}>Excluir</button>
+                        </td>
                       </tr>
                     );
                   })}
+                  {unmatchedCodes.map(code => (
+                    <tr key={`unmatched-${code}`}>
+                      <td className="is-strong">{code}</td>
+                      <td>
+                        <div className="is-strong" style={{ color: '#fca5a5' }}>Item não encontrado</div>
+                        <div className="is-muted" style={{ marginTop: '3px', fontSize: '0.7rem' }}>Revise o EAN/código informado e adicione o correto.</div>
+                      </td>
+                      <td className="is-right"><span className="is-muted">—</span></td>
+                      <td className="is-right"><span className="is-muted">—</span></td>
+                      <td className="is-right"><span className="panel-badge panel-badge-amber">NÃO ENCONTRADO</span></td>
+                      <td className="is-right">
+                        <button type="button" className="panel-secondary-button" aria-label={`Excluir código ${code}`} onClick={() => removeSelectedCode(code)}>Excluir</button>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
