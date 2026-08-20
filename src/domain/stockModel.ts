@@ -38,7 +38,8 @@ function augmentProductSupport(input: StockPresentationInputWithPackaging): Cano
 
 function normalizePortfolioWinthor(result: StockPresentation): StockPresentation {
   const products = result.products.map(product => product.pendingUnits > 0 || product.pendingCases > 0 ? product : { ...product, hasWinthor: true });
-  return { ...result, products };
+  const noWinthorCount = products.filter(product => !product.hasWinthor && (product.pendingUnits > 0 || product.pendingCases > 0)).length;
+  return { ...result, products, summary: { ...result.summary, noWinthorCount } };
 }
 
 function enrichMovementPackaging(result: StockPresentation): StockPresentation {
