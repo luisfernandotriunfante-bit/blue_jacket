@@ -53,9 +53,19 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
   }
 }
 
+function portfolioDateColumns(rows: Row[]) {
+  const header = (rows[0] || []).map(normalizeText);
+  const find = (...labels: string[]) => header.findIndex(value => labels.some(label => value === label || value.includes(label)));
+  return {
+    orderDate: find('ORDER DATE', 'DATA PEDIDO'),
+    billingDate: find('BILLING DATE', 'BILL DATE', 'DATA FATURAMENTO'),
+  };
+}
+
 /** CARTEIRA Colgate: única origem do status SEM WINTHOR. */
 export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>, saleMarkup: number): { cost: number; sale: number; unresolved: number; lines: PortfolioSourceLine[] } {
   let totalCost = 0; let totalSale = 0; let unresolved = 0; const lines: PortfolioSourceLine[] = [];
+  const dateColumns = portfolioDateColumns(rows);
   const productsByEan = new Map<string, StockProduct>(); const productsByFactory = new Map<string, StockProduct>(); const cadastroByEan = new Map<string, string>();
   products.forEach(product => { const ean = cleanDigits(product.ean); const factory = cleanCode(product.factoryCode); if (ean) productsByEan.set(ean, product); if (factory) productsByFactory.set(factory, product); });
   cadastro.byInternal.forEach((item, internalCode) => { const ean = cleanDigits(item.ean); if (ean && !cadastroByEan.has(ean)) cadastroByEan.set(ean, internalCode); });
@@ -84,7 +94,23 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
     const unitsPerCase = Math.max(master?.unitsPerCase || cad?.unitsPerCase || preliminaryCad?.unitsPerCase || product.unitsPerCase || 0, 0); const portfolioUnits = unitsPerCase > 0 ? portfolioCases * unitsPerCase : 0;
     if (portfolioCases > 0 && unitsPerCase <= 0) unresolved += 1; if (unitsPerCase > 0 && !product.unitsPerCase) product.unitsPerCase = unitsPerCase;
     const portfolioSale = portfolioCost * (1 + Math.max(Number(saleMarkup) || 0, 0)); totalSale += portfolioSale;
-    const line: PortfolioSourceLine = { sourceRow: i + 1, materialCode: rawMaterial, orderQty: orderedQty, billQty: billedQty, totalCases: portfolioCases, unitsPerCase, totalUnits: portfolioUnits, costValue: portfolioCost, saleValue: portfolioSale, internalCode: mappedInternal || product.codigo, ean: product.ean || resolvedEan, description: product.descricao, hasWinthor: product.hasWinthor !== false };
+    const line: PortfolioSourceLine = {
+      sourceRow: i + 1,
+      materialCode: rawMaterial,
+      orderDate: dateColumns.orderDate >= 0 ? toIsoDate(row[dateColumns.orderDate]) : '',
+      billingDate: dateColumns.billingDate >= 0 ? toIsoDate(row[dateColumns.billingDate]) : '',
+      orderQty: orderedQty,
+      billQty: billedQty,
+      totalCases: portfolioCases,
+      unitsPerCase,
+      totalUnits: portfolioUnits,
+      costValue: portfolioCost,
+      saleValue: portfolioSale,
+      internalCode: mappedInternal || product.codigo,
+      ean: product.ean || resolvedEan,
+      description: product.descricao,
+      hasWinthor: product.hasWinthor !== false,
+    };
     lines.push(line); product.portfolioLines = [...(product.portfolioLines || []), line];
     product.saldoPedidoCaixas = (product.saldoPedidoCaixas || 0) + portfolioCases; product.saldoPedido += portfolioUnits; product.saldoPedidoValorCusto = (product.saldoPedidoValorCusto || 0) + portfolioCost; product.saldoPedidoValorVenda = (product.saldoPedidoValorVenda || 0) + portfolioSale; if (!product.factoryCode) product.factoryCode = rawMaterial;
   }
