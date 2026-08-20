@@ -9,5 +9,5 @@ export type RouteStore = { cnpj: string; cnpjRaw?:string; cnpjNormalizationStatu
 export type ReferenceClientNetwork = { cnpj:string; cnpjRaw?:string; cnpjNormalizationStatus?:CnpjNormalizationStatus; network:string };
 export type ProductMaster = { sku: string; ean: string; description: string; category: string; subcategory: string; brand: string; isLaunch: boolean; boxPrice: number; unitPrice: number; unitsPerCase: number; line: LineName | '' };
 export type SalesTransaction = CanonicalSalesTransaction;
-export type StockProduct = ProdutoEstoque & { factoryCode?: string; physicalCases?: number; physicalUnits?: number; grossKg?: number };
+export type StockProduct = ProdutoEstoque & { factoryCode?: string; physicalCases?: number; physicalUnits?: number; grossKg?: number; unitsPerCase?: number };
 export const DAY_NAMES = ['Domingo', 'Segunda-Feira', 'Terça-Feira', 'Quarta-Feira', 'Quinta-Feira', 'Sexta-Feira', 'Sábado'];
