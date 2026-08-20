@@ -88,7 +88,7 @@ export function CriacaoComboPage() {
   const unresolvedClientCount = selectedClients.length - resolvedClientCount;
   const needsPracticedPrice = exportOptions.includePracticedPrice || exportOptions.includeDiscount;
   const productsReady = comboProducts.length > 0 && (!needsPracticedPrice || filledCount === comboProducts.length);
-  const clientsReady = !exportOptions.includeClients || (selectedClients.length > 0 && unresolvedClientCount === 0);
+  const clientsReady = !exportOptions.includeClients || selectedClients.length > 0;
   const canExport = productsReady && clientsReady;
 
   const changeImportedCodes = (codes: Set<string>) => {
@@ -343,7 +343,7 @@ export function CriacaoComboPage() {
           {!productsReady && comboProducts.length === 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Adicione ao menos um produto para gerar o Excel.</div> : null}
           {!productsReady && comboProducts.length > 0 && needsPracticedPrice ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Como Preço Praticado ou % de Desconto está marcado, preencha o preço praticado de todos os produtos.</div> : null}
           {exportOptions.includeClients && selectedClients.length === 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>A aba Clientes está marcada. Adicione ao menos um cliente ou desmarque essa opção.</div> : null}
-          {exportOptions.includeClients && unresolvedClientCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>{unresolvedClientCount} cliente{unresolvedClientCount === 1 ? '' : 's'} sem código Winthor confirmado.</div> : null}
+          {exportOptions.includeClients && unresolvedClientCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>{unresolvedClientCount} cliente{unresolvedClientCount === 1 ? '' : 's'} sem código Winthor confirmado. O Excel será gerado normalmente e esses códigos ficarão em branco.</div> : null}
         </PanelCard>
 
         <PanelCard>
@@ -412,7 +412,7 @@ export function CriacaoComboPage() {
           </div>
 
           {clientError ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginBottom: '12px' }}>{clientError}</div> : null}
-          {exportOptions.includeClients && unresolvedClientCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginBottom: '12px' }}>{unresolvedClientCount} cliente{unresolvedClientCount === 1 ? '' : 's'} sem código Winthor confirmado. Preencha o código na tabela para exportar a aba Clientes.</div> : null}
+          {exportOptions.includeClients && unresolvedClientCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginBottom: '12px' }}>{unresolvedClientCount} cliente{unresolvedClientCount === 1 ? '' : 's'} sem código Winthor confirmado. Você pode corrigir o código manualmente ou gerar o Excel com esse campo em branco.</div> : null}
 
           {selectedClients.length === 0 ? (
             <PanelEmptyState
