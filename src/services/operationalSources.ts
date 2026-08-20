@@ -151,7 +151,8 @@ export function parseWinthorTablePrices(rows: unknown[][]): Record<string, numbe
     const status = statusCol >= 0 ? normalizeText(row[statusCol]) : 'A';
     const isMcdCampoGrande = region === '11' || branch === '11' || regionName.includes('CAMPO GRANDE') && regionName.includes('MCD');
     if (!isMcdCampoGrande || (status && status !== 'A')) continue;
-    const price = parseNumber(row[tableCol]);
+    const rawPrice = parseNumber(row[tableCol]);
+    const price = Math.round((rawPrice + Number.EPSILON) * 100) / 100;
     if (price > 0) prices[code] = price;
   }
   if (!Object.keys(prices).length) throw new Error('Tabela de Preços Winthor: nenhum Preço 1 (PVENDA1) ativo da região MCD/Campo Grande foi encontrado.');
