@@ -2,15 +2,9 @@ export * from './stockModelCore';
 
 import type { CanonicalInventoryProduct, CanonicalProductSupport } from './canonical';
 import { buildStockPresentation as buildCore } from './stockModelCore';
-import type { StockPresentationInput as CoreStockPresentationInput } from './stockModelCore';
+import type { StockPresentationInput as CoreStockPresentationInput, StockPresentation } from './stockModelCore';
 
-export interface StockItemCodeSupport {
-  internalCode: string;
-  ean: string;
-  factoryCode: string;
-  unitsPerCase?: number;
-}
-
+export interface StockItemCodeSupport { internalCode: string; ean: string; factoryCode: string; unitsPerCase?: number; }
 type InventoryWithPackaging = CanonicalInventoryProduct & { unitsPerCase?: number };
 export type StockPresentationInputWithPackaging = CoreStockPresentationInput & { itemCodeSupport?: StockItemCodeSupport[] };
 
@@ -29,25 +23,32 @@ function packagingFactor(item: InventoryWithPackaging, itemCodes: StockItemCodeS
 }
 
 function augmentProductSupport(input: StockPresentationInputWithPackaging): CanonicalProductSupport[] {
-  const result = [...(input.productSupport || [])];
-  const itemCodes = input.itemCodeSupport || [];
+  const result = [...(input.productSupport || [])]; const itemCodes = input.itemCodeSupport || [];
   input.inventory.forEach(rawItem => {
-    const item = rawItem as InventoryWithPackaging;
-    const unitsPerCase = packagingFactor(item, itemCodes);
+    const item = rawItem as InventoryWithPackaging; const unitsPerCase = packagingFactor(item, itemCodes);
     if (unitsPerCase <= 0) return;
     const factory = cleanCode(item.factoryCode); const ean = clean(item.ean);
     const index = result.findIndex(master => Boolean((factory && cleanCode(master.sku) === factory) || (ean && clean(master.ean) === ean)));
-    if (index >= 0) {
-      if ((Number(result[index].unitsPerCase) || 0) <= 0) result[index] = { ...result[index], unitsPerCase };
-      return;
-    }
+    if (index >= 0) { if ((Number(result[index].unitsPerCase) || 0) <= 0) result[index] = { ...result[index], unitsPerCase }; return; }
     if (!factory && !ean) return;
     result.push({ sku: factory, ean, description: item.description || '', category: '', subcategory: '', brand: '', isLaunch: Boolean(item.isLaunch), boxPrice: 0, unitPrice: 0, unitsPerCase, line: '' });
   });
   return result;
 }
 
+function enrichMovementPackaging(result: StockPresentation): StockPresentation {
+  const factorByCode = new Map(result.products.map(product => [cleanCode(product.code), Number(product.unitsPerCase) || 0]));
+  const movements = result.movements.map(movement => {
+    const factor = factorByCode.get(cleanCode(movement.sku)) || 0;
+    if (factor <= 0 || movement.cases < 0 || !Number.isInteger(movement.cases)) return movement;
+    const looseUnits = movement.totalUnits - movement.cases * factor;
+    if (looseUnits < -0.001 || looseUnits >= factor + 0.001) return movement;
+    return { ...movement, looseUnits: Math.max(looseUnits, 0) };
+  });
+  return { ...result, movements };
+}
+
 export function buildStockPresentation(input: StockPresentationInputWithPackaging) {
   const { itemCodeSupport: _itemCodeSupport, ...coreInput } = input;
-  return buildCore({ ...coreInput, productSupport: augmentProductSupport(input) });
+  return enrichMovementPackaging(buildCore({ ...coreInput, productSupport: augmentProductSupport(input) }));
 }
