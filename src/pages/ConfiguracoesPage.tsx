@@ -182,7 +182,7 @@ export function ConfiguracoesPage() {
       </div>
     </PanelCard>)}
 
-    {canonical ? <ReconciliationAuditPanel checks={canonical.reconciliation?.checks || []} /> : null}
+    {canonical ? <ReconciliationAuditPanel checks={canonical.reconciliation?.checks||[]} /> : null}
 
     {canonical?.warnings.length ? <PanelCard>
       <PanelSectionHeader eyebrow="VALIDAÇÃO" title="Pendências conhecidas" description="Somente situações que ainda precisam de dado ou conciliação." />
