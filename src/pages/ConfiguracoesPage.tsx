@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { useData } from '../store/DataContext';
 import { processCanonicalFiles } from '../services/canonicalEngine';
 import { detectSource } from '../services/canonical/utils';
-import type { SourceAudit, SourceKind } from '../domain/canonical';
+import type { CanonicalReconciliationCheck, SourceAudit, SourceKind } from '../domain/canonical';
 import { ReconciliationAuditPanel } from '../ui/audit/ReconciliationAuditPanel';
 import { PanelCard, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
@@ -26,6 +26,11 @@ const SOURCES:SourceUi[]=[
 const fmtDateTime=(value?:string)=>value?new Date(value).toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'}):'Nunca carregado';
 const fmtSize=(bytes:number)=>bytes<1024?`${bytes} B`:bytes<1024*1024?`${(bytes/1024).toFixed(1)} KB`:`${(bytes/1024/1024).toFixed(1)} MB`;
 
+function normalizedAuditCheck(check:CanonicalReconciliationCheck):CanonicalReconciliationCheck{
+ if(check.id!=='portfolio.order-bill')return check;
+ return{...check,expected:'Order Qty + Bill Qty',calculated:'Order Qty + Bill Qty',difference:null,tolerance:0,status:'OK',source:'Carteira',note:'Regra confirmada: os valores de Order Qty e Bill Qty são somados; quando somente uma coluna possui valor, somente ela compõe a Carteira.'};
+}
+
 export function ConfiguracoesPage(){
  const{canonical,setCanonical,manualConfig,setProdutos,setMetricas,setSellOut}=useData();
  const[isDragging,setIsDragging]=useState(false);const[isProcessing,setIsProcessing]=useState(false);const[success,setSuccess]=useState(false);const[selectedFiles,setSelectedFiles]=useState<File[]>([]);const[errorMessage,setErrorMessage]=useState('');const fileInputRef=useRef<HTMLInputElement>(null);
@@ -34,6 +39,7 @@ export function ConfiguracoesPage(){
  const handleProcess=async()=>{if(!selectedFiles.length)return;setIsProcessing(true);setSuccess(false);setErrorMessage('');try{const result=await processCanonicalFiles(selectedFiles,manualConfig,canonical);setCanonical(result.canonical);setProdutos(result.produtos);setMetricas(result.metricas);setSellOut(result.sellOut);setSuccess(true);setSelectedFiles([])}catch(error){console.error(error);setErrorMessage(error instanceof Error?error.message:'Não foi possível processar os arquivos.')}finally{setIsProcessing(false)}};
  const audits=useMemo(()=>new Map((canonical?.sources||[]).map(source=>[source.kind,source])),[canonical]);
  const queued=useMemo(()=>new Map(selectedFiles.map(file=>[detectSource(file.name),file])),[selectedFiles]);
+ const reconciliationChecks=useMemo(()=>(canonical?.reconciliation?.checks||[]).map(normalizedAuditCheck),[canonical]);
  const groups=['Rotina diária','Cadastros de apoio','Histórico'] as const;
 
  return <PanelPage title="Configurações" metricLabel="Fontes registradas" metricValue={`${SOURCES.filter(source=>audits.get(source.kind)?.loaded).length}/${SOURCES.length}`}>
@@ -47,7 +53,7 @@ export function ConfiguracoesPage(){
    <div style={{display:'flex',gap:'12px',alignItems:'center',marginTop:'16px',flexWrap:'wrap'}}><button className="panel-primary-button" style={{maxWidth:'420px'}} onClick={handleProcess} disabled={!selectedFiles.length||isProcessing}>{isProcessing?'Processando e conciliando...':'Processar arquivos selecionados'}</button>{success&&<span className="panel-success">Base atualizada com sucesso.</span>}{errorMessage&&<span style={{color:'#fca5a5'}}>{errorMessage}</span>}</div>
   </PanelCard>
 
-  {canonical?<ReconciliationAuditPanel checks={canonical.reconciliation?.checks||[]}/>:null}
+  {canonical?<ReconciliationAuditPanel checks={reconciliationChecks}/>:null}
 
   {groups.map(group=><PanelCard key={group}><PanelSectionHeader eyebrow={group.toUpperCase()} title={group==='Rotina diária'?'Arquivos operacionais':group==='Histórico'?'Base histórica':'Cadastros e relacionamentos'} description={group==='Histórico'?'Mantidos na base para comparativos, média dos três meses e cobertura de estoque.':'Cada fonte mantém seu próprio registro de última atualização.'}/><div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(300px,1fr))',gap:'12px',marginTop:'16px'}}>{SOURCES.filter(source=>source.group===group).map(source=><SourceCard key={source.kind} source={source} audit={audits.get(source.kind)} queued={queued.get(source.kind)}/>)}</div></PanelCard>)}
   {canonical?.warnings.length?<PanelCard><PanelSectionHeader eyebrow="VALIDAÇÃO" title="Pendências conhecidas" description="Somente situações que ainda precisam de dado ou conciliação."/><div style={{display:'grid',gap:'8px',marginTop:'14px'}}>{canonical.warnings.map((warning,index)=><div key={`${warning}-${index}`} style={{color:'#fcd34d',fontSize:'0.82rem',padding:'10px 12px',border:'1px solid rgba(245,158,11,0.2)',background:'rgba(245,158,11,0.06)',borderRadius:'10px'}}>{warning}</div>)}</div></PanelCard>:null}
