@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useData } from '../store/DataContext';
 import { productMatchesStockCodeList } from '../domain/stockCodeFilter';
+import { classifyStockRisk } from '../domain/stockRisk';
 import {
   buildStockPresentation,
   DEFAULT_STOCK_ALERT_CONFIGURATION,
@@ -43,7 +44,8 @@ function alertBadge(alert: StockAlert) {
 }
 
 type PageTab = 'overview' | 'products' | 'movements';
-type ProductFilter = 'todos' | 'lancamento' | 'sem-winthor' | 'com-alerta';
+type CatalogFilter = 'todos' | 'lancamento' | 'sem-winthor';
+type RiskFilter = 'todos' | 'ruptura' | 'risco' | 'sem-giro' | 'ok';
 
 export function EstoquePage() {
   const { isLoaded, produtos, metricas, canonical } = useData();
@@ -51,7 +53,8 @@ export function EstoquePage() {
   const [direction, setDirection] = useState<StockMovementDirection>('ENTRADA');
   const [searchTerm, setSearchTerm] = useState('');
   const [movementSearch, setMovementSearch] = useState('');
-  const [productFilter, setProductFilter] = useState<ProductFilter>('todos');
+  const [activeFilter, setActiveFilter] = useState<CatalogFilter>('todos');
+  const [statusFilter, setStatusFilter] = useState<RiskFilter>('todos');
   const [importedCodes, setImportedCodes] = useState<Set<string>>(() => new Set());
   const [selectedCode, setSelectedCode] = useState('');
   const competence = canonical?.periodStart?.slice(0, 7) || 'global';
@@ -87,6 +90,7 @@ export function EstoquePage() {
   const presentation = useMemo(() => buildStockPresentation({
     inventory,
     productSupport: canonical?.support?.products || [],
+    itemCodeSupport: canonical?.support?.itemCodes || [],
     transactions: canonical?.transactions || [],
     businessDaysElapsed: canonical?.sellOut?.businessDaysElapsed || 0,
     stockCostValue: metricas.valorEstoqueCompra,
@@ -103,18 +107,34 @@ export function EstoquePage() {
     });
   };
 
+  const riskStatusByCode = useMemo(() => new Map(presentation.products.map(product => [product.code, classifyStockRisk({
+    hasWinthor: product.hasWinthor,
+    quantity: product.positionUnits,
+    soldUnits: product.soldUnits,
+    coverageDays: product.coverageDays,
+    pendingQty: product.pendingUnits,
+    coverageTargetDays: metricas.metaCobertura,
+  })])), [presentation.products, metricas.metaCobertura]);
+
+  const riskCounts = useMemo(() => ({
+    ruptura: presentation.products.filter(product => riskStatusByCode.get(product.code) === 'ruptura').length,
+    risco: presentation.products.filter(product => riskStatusByCode.get(product.code) === 'risco').length,
+    semGiro: presentation.products.filter(product => riskStatusByCode.get(product.code) === 'sem-giro').length,
+    ok: presentation.products.filter(product => riskStatusByCode.get(product.code) === 'ok').length,
+  }), [presentation.products, riskStatusByCode]);
+
   const filteredProducts = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
     return presentation.products.filter(product => {
       if (search && ![product.code, product.factoryCode, product.ean, product.description, product.brand, product.subcategory]
         .some(value => String(value || '').toLowerCase().includes(search))) return false;
       if (importedCodes.size && !productMatchesStockCodeList({ codigo: product.code, factoryCode: product.factoryCode, ean: product.ean }, importedCodes)) return false;
-      if (productFilter === 'lancamento' && !product.isLaunch) return false;
-      if (productFilter === 'sem-winthor' && product.hasWinthor) return false;
-      if (productFilter === 'com-alerta' && product.alerts.length === 0) return false;
+      if (activeFilter === 'lancamento' && !product.isLaunch) return false;
+      if (activeFilter === 'sem-winthor' && (product.hasWinthor || product.pendingUnits <= 0)) return false;
+      if (statusFilter !== 'todos' && riskStatusByCode.get(product.code) !== statusFilter) return false;
       return true;
     });
-  }, [presentation.products, searchTerm, importedCodes, productFilter]);
+  }, [presentation.products, searchTerm, importedCodes, activeFilter, statusFilter, riskStatusByCode]);
 
   const selectedProduct = useMemo(() => presentation.products.find(product => product.code === selectedCode) || null, [presentation.products, selectedCode]);
 
@@ -221,10 +241,11 @@ export function EstoquePage() {
     <PanelCard>
       <PanelSectionHeader eyebrow="PRODUTOS" title={`Posição por SKU · ${filteredProducts.length} de ${presentation.products.length}`} description="Caixas, unidades avulsas, total físico, reserva, disponível, Carteira e projeção são exibidos separadamente. Faturado mês considera somente movimentos FATURADOS do 8022." />
       <div className="panel-toolbar" style={{ marginBottom: '12px' }}>
-        <div className="panel-chips"><button className={`panel-chip${productFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setProductFilter('todos')}>Todos · {presentation.products.length}</button><button className={`panel-chip${productFilter === 'lancamento' ? ' is-active' : ''}`} onClick={() => setProductFilter('lancamento')}>Lançamentos · {presentation.summary.launchCount}</button><button className={`panel-chip is-warning${productFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setProductFilter('sem-winthor')}>Sem Winthor · {presentation.summary.noWinthorCount}</button><button className={`panel-chip${productFilter === 'com-alerta' ? ' is-active' : ''}`} onClick={() => setProductFilter('com-alerta')}>Com alerta</button></div>
+        <div className="panel-chips"><button className={`panel-chip${activeFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setActiveFilter('todos')}>Todos · {presentation.products.length}</button><button className={`panel-chip${activeFilter === 'lancamento' ? ' is-active' : ''}`} onClick={() => setActiveFilter('lancamento')}>Lançamentos · {presentation.summary.launchCount}</button><button className={`panel-chip is-warning${activeFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setActiveFilter('sem-winthor')}>Sem Winthor · {presentation.summary.noWinthorCount}</button></div>
         <input className="panel-input" value={searchTerm} placeholder="Buscar código, EAN, produto, marca..." onChange={event => setSearchTerm(event.target.value)} />
       </div>
-      <div className="panel-toolbar" style={{ marginBottom: '18px' }}><StockCodeListFilter products={produtos} codes={importedCodes} onChange={setImportedCodes} /><button className="panel-secondary-button" onClick={() => { setSearchTerm(''); setProductFilter('todos'); setImportedCodes(new Set()); }}>Limpar filtros</button></div>
+      <div className="panel-toolbar" style={{ marginBottom: '12px' }}><span className="panel-mini-label">Status de risco</span><div className="panel-chips"><button className={`panel-chip${statusFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setStatusFilter('todos')}>Todos</button><button className={`panel-chip${statusFilter === 'ruptura' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ruptura')}>Ruptura · {riskCounts.ruptura}</button><button className={`panel-chip${statusFilter === 'risco' ? ' is-active' : ''}`} onClick={() => setStatusFilter('risco')}>Risco · {riskCounts.risco}</button><button className={`panel-chip${statusFilter === 'sem-giro' ? ' is-active' : ''}`} onClick={() => setStatusFilter('sem-giro')}>Sem giro · {riskCounts.semGiro}</button><button className={`panel-chip${statusFilter === 'ok' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ok')}>OK · {riskCounts.ok}</button></div></div>
+      <div className="panel-toolbar" style={{ marginBottom: '18px' }}><StockCodeListFilter products={produtos} codes={importedCodes} onChange={setImportedCodes} /><button className="panel-secondary-button" onClick={() => { setSearchTerm(''); setActiveFilter('todos'); setStatusFilter('todos'); setImportedCodes(new Set()); }}>Limpar filtros</button></div>
       <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Código</th><th>EAN</th><th>Produto</th><th className="is-right">Cx</th><th className="is-right">Avulsas</th><th className="is-right">Total físico</th><th className="is-right">Cx equiv.</th><th className="is-right">Reservado</th><th className="is-right">Disponível</th><th className="is-right">Carteira</th><th className="is-right">Projetado</th><th className="is-right">Faturado mês</th><th className="is-right">Cobertura ritmo faturado</th><th className="is-right">Custo un.</th><th className="is-right">Venda ref.</th><th>Alertas</th><th></th></tr></thead>
         <tbody>{filteredProducts.map(product => <tr key={product.code}><td className="is-strong">{product.code}</td><td className="is-muted">{product.ean || '—'}</td><td><div className="panel-badges"><span className="is-strong">{product.description}</span>{product.isLaunch && <span className="panel-badge panel-badge-red">LANÇAMENTO</span>}{!product.hasWinthor && product.pendingUnits > 0 && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}</div></td><td className="is-right">{formatNumber(product.physicalCases, 2)}</td><td className="is-right">{formatNumber(product.looseUnits)}</td><td className="is-right is-strong">{formatNumber(product.physicalTotalUnits)}</td><td className="is-right">{product.equivalentCases === null ? '—' : formatNumber(product.equivalentCases, 2)}</td><td className="is-right">{formatNumber(product.reservedUnits)}</td><td className="is-right is-strong">{formatNumber(product.availableUnits)}</td><td className="is-right">{formatNumber(product.pendingUnits)}</td><td className="is-right is-strong">{formatNumber(product.projectedUnits)}</td><td className="is-right">{formatNumber(product.soldUnits)}</td><td className="is-right">{formatDays(product.coverageDays)}</td><td className="is-right">{product.costUnit > 0 ? formatCurrency(product.costUnit) : '—'}</td><td className="is-right">{product.saleUnit > 0 ? formatCurrency(product.saleUnit) : '—'}</td><td>{product.alerts.length ? <span className="panel-badge panel-badge-amber">{product.alerts.length}</span> : '—'}</td><td><button className="panel-secondary-button" onClick={() => setSelectedCode(product.code)}>Abrir</button></td></tr>)}</tbody>
       </table></div>
