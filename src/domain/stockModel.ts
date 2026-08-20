@@ -36,6 +36,11 @@ function augmentProductSupport(input: StockPresentationInputWithPackaging): Cano
   return result;
 }
 
+function normalizePortfolioWinthor(result: StockPresentation): StockPresentation {
+  const products = result.products.map(product => product.pendingUnits > 0 || product.pendingCases > 0 ? product : { ...product, hasWinthor: true });
+  return { ...result, products };
+}
+
 function enrichMovementPackaging(result: StockPresentation): StockPresentation {
   const factorByCode = new Map(result.products.map(product => [cleanCode(product.code), Number(product.unitsPerCase) || 0]));
   const movements = result.movements.map(movement => {
@@ -71,5 +76,5 @@ function enrichReconciliation(result: StockPresentation): StockPresentation {
 export function buildStockPresentation(input: StockPresentationInputWithPackaging) {
   const { itemCodeSupport: _itemCodeSupport, ...coreInput } = input;
   const result = buildCore({ ...coreInput, hasStock8013: hasPhysicalSnapshot(input), productSupport: augmentProductSupport(input) });
-  return enrichReconciliation(enrichMovementPackaging(result));
+  return enrichReconciliation(enrichMovementPackaging(normalizePortfolioWinthor(result)));
 }
