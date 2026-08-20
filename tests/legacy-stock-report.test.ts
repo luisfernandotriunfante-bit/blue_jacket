@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { strFromU8, unzipSync } from 'fflate';
 import * as XLSX from 'xlsx';
 import type { CanonicalInventoryProduct, CanonicalState } from '../src/domain/canonical.ts';
@@ -88,6 +89,21 @@ test('relatório não inventa múltiplo, ST ou estoque em caixas quando a fonte 
 test('lançamento do relatório segue o cadastro oficial canônico atual, não a lista antiga', () => {
   const [row] = buildLegacyStockReportRows(state([product({ isLaunch: true })]));
   assert.equal(row.launch, 'X');
+});
+
+test('relatório restaura lançamento persistido no suporte mesmo quando snapshot cru perdeu a flag', () => {
+  const current = state([product({ isLaunch: false })]);
+  current.support.products[0] = { ...current.support.products[0], isLaunch: true };
+  assert.equal(current.inventory.filter(item => item.isLaunch).length, 0);
+  const rows = buildLegacyStockReportRows(current);
+  assert.equal(rows.filter(row => row.launch).length, 1);
+});
+
+test('Documentos usa exatamente as linhas reconciliadas do relatório para contar lançamentos', () => {
+  const page = fs.readFileSync(new URL('../src/pages/DocumentosPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /const legacyStockRows = buildLegacyStockReportRows\(canonical\)/);
+  assert.match(page, /const launchCount = legacyStockRows\.filter\(row => row\.launch\)\.length/);
+  assert.doesNotMatch(page, /canonical\.inventory\.filter\(product => product\.hasWinthor && product\.isLaunch\)/);
 });
 
 test('arquivo gerado contém apenas o relatório PREÇO com as onze colunas A:K', () => {
