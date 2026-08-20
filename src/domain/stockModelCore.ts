@@ -39,7 +39,7 @@ export interface StockAlertConfiguration {
 }
 
 export const DEFAULT_STOCK_ALERT_CONFIGURATION: StockAlertConfiguration = {
-  zeroStockAsRupture: false,
+  zeroStockAsRupture: true,
   riskCoverageDays: null,
   lowCoverageDays: null,
   excessCoverageDays: null,
@@ -272,8 +272,8 @@ function buildAlertsForProduct(product: Omit<StockProductView, 'alerts'>, config
   if (product.isLaunch && product.physicalTotalUnits <= 0) alerts.push(createAlert('LANCAMENTO_SEM_ESTOQUE', 'warning', product, 'Lançamento oficial sem estoque físico identificado.'));
   if (product.isLaunch && product.physicalTotalUnits > 0 && product.soldUnits <= 0) alerts.push(createAlert('LANCAMENTO_SEM_VENDA', 'info', product, 'Lançamento com estoque e sem saída faturada na competência.'));
   if (product.physicalTotalUnits <= 0) {
-    if (configuration.zeroStockAsRupture) alerts.push(createAlert('RUPTURA', 'critical', product, 'Estoque zerado; classificado como ruptura porque essa regra foi ativada na configuração do Estoque.'));
-    else alerts.push(createAlert('ESTOQUE_ZERADO', 'warning', product, 'Estoque físico zerado. A classificação oficial de ruptura permanece desativada até existir regra confirmada.'));
+    if (configuration.zeroStockAsRupture) alerts.push(createAlert('RUPTURA', 'critical', product, 'Estoque zerado; classificado como ruptura conforme a regra validada do módulo de Estoque.'));
+    else alerts.push(createAlert('ESTOQUE_ZERADO', 'warning', product, 'Estoque físico zerado; a classificação de ruptura foi desativada explicitamente na configuração do Estoque.'));
   }
   const coverage = product.coverageDays;
   if (coverage !== null) {
