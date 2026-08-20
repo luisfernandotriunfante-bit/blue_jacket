@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useData } from '../store/DataContext';
 import { downloadSellOutDocument, downloadTopNetworksDocument } from '../services/documentGenerator';
-import { downloadLegacyStockReport } from '../services/legacyStockReport';
+import { buildLegacyStockReportRows, downloadLegacyStockReport } from '../services/legacyStockReport';
 import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -27,8 +27,9 @@ export function DocumentosPage() {
   const officialNetworks = canonical.networks.filter(network => network.key !== 'SEM REDE');
   const networkCount = officialNetworks.filter(network => network.networkTarget > 0 || network.topTarget > 0 || network.total > 0).length;
   const stock8013Loaded = canonical.sources.some(source => source.kind === 'stock8013' && source.loaded);
-  const stockWinthorCount = canonical.inventory.filter(product => product.hasWinthor).length;
-  const launchCount = canonical.inventory.filter(product => product.hasWinthor && product.isLaunch).length;
+  const legacyStockRows = buildLegacyStockReportRows(canonical);
+  const stockWinthorCount = legacyStockRows.length;
+  const launchCount = legacyStockRows.filter(row => row.launch).length;
 
   const generate = async (kind:'painel'|'redes'|'estoque') => {
     setGenerating(kind); setError('');
