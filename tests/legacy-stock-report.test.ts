@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { strFromU8, unzipSync } from 'fflate';
+import * as XLSX from 'xlsx';
 import type { CanonicalInventoryProduct, CanonicalState } from '../src/domain/canonical.ts';
 import { buildLegacyStockReportRows, buildLegacyStockReportXlsx } from '../src/services/legacyStockReport.ts';
 
@@ -104,4 +105,18 @@ test('arquivo gerado contém apenas o relatório PREÇO com as onze colunas A:K'
   assert.match(sheet, /ESTOQUE CX/);
   assert.match(sheet, /LANÇAMENTOS/);
   assert.doesNotMatch(sheet, /<c r="L\d+/);
+});
+
+test('XLSX consegue abrir o arquivo gerado e encontra os valores do relatório', () => {
+  const workbook = XLSX.read(buildLegacyStockReportXlsx(state()), { type: 'array' });
+  assert.deepEqual(workbook.SheetNames, ['PREÇO']);
+  const sheet = workbook.Sheets['PREÇO'];
+  assert.equal(sheet.A1.v, 'INFORMAÇÕES DO ITEM');
+  assert.equal(sheet.A2.v, 'COD');
+  assert.equal(sheet.K2.v, 'LANÇAMENTOS');
+  assert.equal(String(sheet.A3.v), '11100138');
+  assert.equal(String(sheet.B3.v), '7891024037973');
+  assert.equal(sheet.D3.v, 72);
+  assert.equal(sheet.E3.v, 1);
+  assert.equal(sheet.J3.v, 262);
 });
