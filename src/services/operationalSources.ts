@@ -125,8 +125,11 @@ function firstRows(workbook: XLSX.WorkBook): unknown[][] {
 }
 
 export function parseWinthorTablePrices(rows: unknown[][]): Record<string, number> {
-  const headerIndex = rows.findIndex(row => row.some(cell => normalizeText(cell) === 'CODPROD') && row.some(cell => normalizeText(cell) === 'PTABELA'));
-  if (headerIndex < 0) throw new Error('Tabela de Preços Winthor: cabeçalho CODPROD/PTABELA não encontrado.');
+  const headerIndex = rows.findIndex(row => {
+    const normalized = row.map(normalizeText);
+    return normalized.includes('CODPROD') && (normalized.includes('PVENDA1') || normalized.includes('PTABELA'));
+  });
+  if (headerIndex < 0) throw new Error('Tabela de Preços Winthor: cabeçalho CODPROD/PVENDA1 não encontrado.');
   const header = rows[headerIndex].map(normalizeText);
   const col = (name: string) => header.findIndex(value => value === name);
   const codeCol = col('CODPROD');
@@ -134,7 +137,9 @@ export function parseWinthorTablePrices(rows: unknown[][]): Record<string, numbe
   const branchCol = col('CODFILIAL');
   const regionNameCol = col('REGIAO');
   const statusCol = col('STATUSREGIAO');
-  const tableCol = col('PTABELA');
+  const price1Col = col('PVENDA1');
+  const legacyTableCol = col('PTABELA');
+  const tableCol = price1Col >= 0 ? price1Col : legacyTableCol;
   const prices: Record<string, number> = {};
   for (let i = headerIndex + 1; i < rows.length; i++) {
     const row = rows[i];
@@ -149,7 +154,7 @@ export function parseWinthorTablePrices(rows: unknown[][]): Record<string, numbe
     const price = parseNumber(row[tableCol]);
     if (price > 0) prices[code] = price;
   }
-  if (!Object.keys(prices).length) throw new Error('Tabela de Preços Winthor: nenhum PTABELA ativo da região MCD/Campo Grande foi encontrado.');
+  if (!Object.keys(prices).length) throw new Error('Tabela de Preços Winthor: nenhum Preço 1 (PVENDA1) ativo da região MCD/Campo Grande foi encontrado.');
   return prices;
 }
 
@@ -345,7 +350,7 @@ export function applyOperationalOverrides(canonical: CanonicalState, state: Oper
   const coverageCostProjectedDays = historyAverage > 0 ? Math.round((stockCost + pendingCost) / historyAverage * 30) : 0;
 
   const warnings = canonical.warnings.filter(warning => !warning.startsWith('Tabela PCTABPR:') && !warning.startsWith('Entrada de notas:') && !warning.startsWith('Abatimento da Carteira:'));
-  if (Object.keys(state.tablePrices).length) warnings.push(`Tabela PCTABPR: ${Object.keys(state.tablePrices).length} preço(s) ativo(s) carregado(s); ${priceMatched} SKU(s) do estoque receberam PTABELA como prioridade${priceDivergences ? `, com ${priceDivergences} divergência(s) contra a fonte anterior` : ', sem divergência nos SKUs comparáveis'}.`);
+  if (Object.keys(state.tablePrices).length) warnings.push(`Tabela PCTABPR: ${Object.keys(state.tablePrices).length} preço(s) ativo(s) carregado(s); ${priceMatched} SKU(s) do estoque receberam Preço 1 (PVENDA1) como prioridade${priceDivergences ? `, com ${priceDivergences} divergência(s) contra a fonte anterior` : ', sem divergência nos SKUs comparáveis'}.`);
   if (state.currentInvoices.length || state.legacyInvoices.length) warnings.push(`Entrada de notas: ${state.currentInvoices.length} NF(s) do 218 + ${state.legacyInvoices.length} NF(s) históricas do 12.322 registradas para controle de recebimento.`);
   if (portfolioBlocked) warnings.push('Abatimento da Carteira: BLOQUEADA POR FONTE AUSENTE — a Carteira carregada não expõe uma coluna de NF/Invoice/Billing Doc; nenhuma linha foi abatida por aproximação.');
   else if (canRebuildPortfolio && received.size) warnings.push(`Abatimento da Carteira: ${portfolioDeductedRows} linha(s) vinculada(s) a NF já recebida foram retiradas da carteira pendente (${portfolioDeductedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} a custo).`);
