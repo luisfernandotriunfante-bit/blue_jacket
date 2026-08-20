@@ -1,430 +1,244 @@
-import React, { useMemo, useState } from 'react';
-import { useData, ProdutoEstoque } from '../store/DataContext';
+import React, { useEffect, useMemo, useState } from 'react';
+import { useData } from '../store/DataContext';
 import { productMatchesStockCodeList } from '../domain/stockCodeFilter';
-import { classifyStockRisk, stockRiskLabel, StockRiskStatus } from '../domain/stockRisk';
-import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
+import {
+  buildStockPresentation,
+  DEFAULT_STOCK_ALERT_CONFIGURATION,
+  StockAlert,
+  StockAlertConfiguration,
+  StockMovementDirection,
+  StockProductView,
+  StockReconciliationStatus,
+} from '../domain/stockModel';
+import { loadStockAlertConfiguration, saveStockAlertConfiguration } from '../store/stockPreferences';
+import { PanelCard, PanelEmptyState, PanelKpi, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 import { StockCodeListFilter } from '../ui/stock/StockCodeListFilter';
 
-function formatCurrency(val: number) {
-  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
 }
 
-const digits = (value: string | undefined) => String(value || '').replace(/\D/g, '');
-
-function parseLocaleNumber(raw: string): number {
-  let value = raw.trim().replace(/r\$/gi, '').replace(/\s/g, '');
-  if (!value) return Number.NaN;
-  if (value.includes(',')) value = value.replace(/\./g, '').replace(',', '.');
-  else if (/^-?\d{1,3}(\.\d{3})+$/.test(value)) value = value.replace(/\./g, '');
-  return Number(value);
+function formatNumber(value: number, digits = 0) {
+  return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(Number(value) || 0);
 }
 
-function matchesNumericFilter(value: number | null | undefined, expression: string): boolean {
-  const filter = expression.trim();
-  if (!filter) return true;
-  if (value === null || value === undefined || !Number.isFinite(value)) return false;
-
-  const match = filter.match(/^(>=|<=|>|<|=)?\s*(.+)$/);
-  if (!match) return true;
-  const operator = match[1] || '=';
-  const target = parseLocaleNumber(match[2]);
-  if (!Number.isFinite(target)) return true;
-
-  if (operator === '>') return value > target;
-  if (operator === '<') return value < target;
-  if (operator === '>=') return value >= target;
-  if (operator === '<=') return value <= target;
-  return Math.abs(value - target) < 0.000001;
+function formatDays(value: number | null) {
+  return value === null ? '—' : `${formatNumber(value, 1)} dias`;
 }
 
-type CatalogItem = ProdutoEstoque & {
-  soldUnits: number;
-  averageDailyUnits: number;
-  coverageDays: number | null;
-  isNoWinthor: boolean;
-  stockStatus: StockRiskStatus;
-};
+function severityLabel(alert: StockAlert) {
+  if (alert.severity === 'critical') return 'CRÍTICO';
+  if (alert.severity === 'warning') return 'ATENÇÃO';
+  return 'INFO';
+}
 
-type SortKey = keyof ProdutoEstoque | 'totalCusto' | 'totalVenda' | 'soldUnits' | 'coverageDays';
-type CatalogFilter = 'todos' | 'lancamento' | 'sem-winthor';
-type RiskFilter = 'todos' | 'ruptura' | 'risco' | 'sem-giro' | 'ok';
+function statusBadge(status: StockReconciliationStatus) {
+  const className = status === 'DIVERGENT' ? 'panel-badge panel-badge-red' : status === 'BLOCKED' ? 'panel-badge panel-badge-amber' : 'panel-badge';
+  return <span className={className}>{status}</span>;
+}
 
-type ColumnFilters = {
-  codigo: string;
-  ean: string;
-  descricao: string;
-  quantidade: string;
-  soldUnits: string;
-  coverageDays: string;
-  saldoPedidoCaixas: string;
-  saldoPedido: string;
-  custoUnitario: string;
-  vendaUnitario: string;
-  totalCusto: string;
-  totalVenda: string;
-};
+function alertBadge(alert: StockAlert) {
+  const className = alert.severity === 'critical' ? 'panel-badge panel-badge-red' : alert.severity === 'warning' ? 'panel-badge panel-badge-amber' : 'panel-badge';
+  return <span className={className}>{severityLabel(alert)}</span>;
+}
 
-const EMPTY_COLUMN_FILTERS: ColumnFilters = {
-  codigo: '',
-  ean: '',
-  descricao: '',
-  quantidade: '',
-  soldUnits: '',
-  coverageDays: '',
-  saldoPedidoCaixas: '',
-  saldoPedido: '',
-  custoUnitario: '',
-  vendaUnitario: '',
-  totalCusto: '',
-  totalVenda: '',
-};
+type PageTab = 'overview' | 'products' | 'movements';
+type ProductFilter = 'todos' | 'lancamento' | 'sem-winthor' | 'com-alerta';
 
 export function EstoquePage() {
   const { isLoaded, produtos, metricas, canonical } = useData();
+  const [pageTab, setPageTab] = useState<PageTab>('overview');
+  const [direction, setDirection] = useState<StockMovementDirection>('ENTRADA');
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: 'asc' | 'desc' } | null>(null);
-  const [activeFilter, setActiveFilter] = useState<CatalogFilter>('todos');
-  const [statusFilter, setStatusFilter] = useState<RiskFilter>('todos');
-  const [columnFilters, setColumnFilters] = useState<ColumnFilters>(EMPTY_COLUMN_FILTERS);
+  const [movementSearch, setMovementSearch] = useState('');
+  const [productFilter, setProductFilter] = useState<ProductFilter>('todos');
   const [importedCodes, setImportedCodes] = useState<Set<string>>(() => new Set());
+  const [selectedCode, setSelectedCode] = useState('');
+  const competence = canonical?.periodStart?.slice(0, 7) || 'global';
+  const [alertConfiguration, setAlertConfiguration] = useState<StockAlertConfiguration>(DEFAULT_STOCK_ALERT_CONFIGURATION);
 
-  const catalog = useMemo<CatalogItem[]>(() => {
-    const soldByInternal = new Map<string, number>();
-    const soldByFactory = new Map<string, number>();
-    const soldByEan = new Map<string, number>();
+  useEffect(() => {
+    if (typeof localStorage === 'undefined') return;
+    setAlertConfiguration(loadStockAlertConfiguration(localStorage, competence));
+  }, [competence]);
 
-    (canonical?.transactions || []).forEach(tx => {
-      if (tx.status !== 'FATURADO') return;
-      const units = Math.max(Number(tx.units) || 0, 0);
-      if (units <= 0) return;
+  const inventory = useMemo(() => canonical?.inventory || produtos.map(product => ({
+    code: product.codigo,
+    description: product.descricao,
+    ean: product.ean,
+    quantity: product.quantidade,
+    costUnit: product.custoUnitario,
+    saleUnit: product.vendaUnitario,
+    pendingQty: product.saldoPedido,
+    pendingCases: product.saldoPedidoCaixas || 0,
+    pendingCost: product.saldoPedidoValorCusto || 0,
+    pendingSale: product.saldoPedidoValorVenda || 0,
+    isLaunch: Boolean(product.isLancamento),
+    hasWinthor: product.hasWinthor !== false,
+    factoryCode: product.factoryCode || '',
+    physicalCases: product.physicalCases || 0,
+    physicalUnits: product.physicalUnits || 0,
+    grossKg: product.grossKg || 0,
+  })), [canonical, produtos]);
 
-      if (tx.internalProductCode) soldByInternal.set(tx.internalProductCode, (soldByInternal.get(tx.internalProductCode) || 0) + units);
-      if (tx.manufacturerCode) soldByFactory.set(tx.manufacturerCode, (soldByFactory.get(tx.manufacturerCode) || 0) + units);
-      const ean = digits(tx.ean);
-      if (ean) soldByEan.set(ean, (soldByEan.get(ean) || 0) + units);
+  const hasStock8013 = Boolean(canonical?.sources?.some(source => source.kind === 'stock8013' && source.loaded))
+    || produtos.some(product => product.physicalUnits !== undefined || product.physicalCases !== undefined);
+
+  const presentation = useMemo(() => buildStockPresentation({
+    inventory,
+    productSupport: canonical?.support?.products || [],
+    transactions: canonical?.transactions || [],
+    businessDaysElapsed: canonical?.sellOut?.businessDaysElapsed || 0,
+    stockCostValue: metricas.valorEstoqueCompra,
+    stockSaleValue: metricas.valorEstoqueVenda,
+    hasStock8013,
+    alertConfiguration,
+  }), [inventory, canonical, metricas.valorEstoqueCompra, metricas.valorEstoqueVenda, hasStock8013, alertConfiguration]);
+
+  const updateAlertConfiguration = (patch: Partial<StockAlertConfiguration>) => {
+    setAlertConfiguration(current => {
+      const next = { ...current, ...patch };
+      if (typeof localStorage !== 'undefined') saveStockAlertConfiguration(localStorage, competence, next);
+      return next;
     });
+  };
 
-    const elapsed = canonical?.sellOut.businessDaysElapsed || 0;
-
-    return produtos.map(product => {
-      const productEan = digits(product.ean);
-      const soldUnits = soldByInternal.get(product.codigo)
-        ?? (product.factoryCode ? soldByFactory.get(product.factoryCode) : undefined)
-        ?? (productEan ? soldByEan.get(productEan) : undefined)
-        ?? 0;
-      const averageDailyUnits = elapsed > 0 ? soldUnits / elapsed : 0;
-      const coverageDays = averageDailyUnits > 0 ? product.quantidade / averageDailyUnits : null;
-
-      // SEM WINTHOR nasce exclusivamente da CARTEIRA Colgate.
-      const hasPortfolioPending = product.saldoPedido > 0 || (product.saldoPedidoValorCusto || 0) > 0;
-      const isNoWinthor = product.hasWinthor === false && hasPortfolioPending;
-      const stockStatus = classifyStockRisk({
-        hasWinthor: product.hasWinthor,
-        quantity: product.quantidade,
-        soldUnits,
-        coverageDays,
-        pendingQty: product.saldoPedido,
-        coverageTargetDays: metricas.metaCobertura,
-      });
-
-      return {
-        ...product,
-        soldUnits,
-        averageDailyUnits,
-        coverageDays,
-        isNoWinthor,
-        stockStatus,
-      };
-    });
-  }, [produtos, canonical, metricas.metaCobertura]);
-
-  const counts = useMemo(() => ({
-    todos: catalog.length,
-    lancamento: catalog.filter(p => p.isLancamento).length,
-    semWinthor: catalog.filter(p => p.isNoWinthor).length,
-    ruptura: catalog.filter(p => p.stockStatus === 'ruptura').length,
-    risco: catalog.filter(p => p.stockStatus === 'risco').length,
-    semGiro: catalog.filter(p => p.stockStatus === 'sem-giro').length,
-    ok: catalog.filter(p => p.stockStatus === 'ok').length,
-  }), [catalog]);
-
-  const sortedProdutos = useMemo(() => {
-    let sortableItems = [...catalog];
+  const filteredProducts = useMemo(() => {
     const search = searchTerm.trim().toLowerCase();
-
-    if (search) {
-      sortableItems = sortableItems.filter(p => [p.codigo, p.ean, p.descricao, p.factoryCode]
-        .some(value => String(value || '').toLowerCase().includes(search)));
-    }
-
-    if (importedCodes.size) {
-      sortableItems = sortableItems.filter(product => productMatchesStockCodeList(product, importedCodes));
-    }
-
-    if (activeFilter === 'lancamento') sortableItems = sortableItems.filter(p => p.isLancamento);
-    else if (activeFilter === 'sem-winthor') sortableItems = sortableItems.filter(p => p.isNoWinthor);
-
-    if (statusFilter !== 'todos') sortableItems = sortableItems.filter(p => p.stockStatus === statusFilter);
-
-    const codeFilter = columnFilters.codigo.trim().toLowerCase();
-    const eanFilter = columnFilters.ean.trim().toLowerCase();
-    const descriptionFilter = columnFilters.descricao.trim().toLowerCase();
-
-    if (codeFilter) sortableItems = sortableItems.filter(p => String(p.codigo || '').toLowerCase().includes(codeFilter));
-    if (eanFilter) sortableItems = sortableItems.filter(p => String(p.ean || '').toLowerCase().includes(eanFilter));
-    if (descriptionFilter) sortableItems = sortableItems.filter(p => String(p.descricao || '').toLowerCase().includes(descriptionFilter));
-
-    sortableItems = sortableItems.filter(p => {
-      const totalCusto = p.custoUnitario > 0 ? p.quantidade * p.custoUnitario : null;
-      const totalVenda = p.vendaUnitario > 0 ? p.quantidade * p.vendaUnitario : null;
-      return matchesNumericFilter(p.quantidade, columnFilters.quantidade)
-        && matchesNumericFilter(p.soldUnits, columnFilters.soldUnits)
-        && matchesNumericFilter(p.coverageDays, columnFilters.coverageDays)
-        && matchesNumericFilter(p.saldoPedidoCaixas || 0, columnFilters.saldoPedidoCaixas)
-        && matchesNumericFilter(p.saldoPedido, columnFilters.saldoPedido)
-        && matchesNumericFilter(p.custoUnitario > 0 ? p.custoUnitario : null, columnFilters.custoUnitario)
-        && matchesNumericFilter(p.vendaUnitario > 0 ? p.vendaUnitario : null, columnFilters.vendaUnitario)
-        && matchesNumericFilter(totalCusto, columnFilters.totalCusto)
-        && matchesNumericFilter(totalVenda, columnFilters.totalVenda);
+    return presentation.products.filter(product => {
+      if (search && ![product.code, product.factoryCode, product.ean, product.description, product.brand, product.subcategory]
+        .some(value => String(value || '').toLowerCase().includes(search))) return false;
+      if (importedCodes.size && !productMatchesStockCodeList({ codigo: product.code, factoryCode: product.factoryCode, ean: product.ean }, importedCodes)) return false;
+      if (productFilter === 'lancamento' && !product.isLaunch) return false;
+      if (productFilter === 'sem-winthor' && product.hasWinthor) return false;
+      if (productFilter === 'com-alerta' && product.alerts.length === 0) return false;
+      return true;
     });
+  }, [presentation.products, searchTerm, importedCodes, productFilter]);
 
-    if (sortConfig !== null) {
-      sortableItems.sort((a, b) => {
-        let valA: any = a[sortConfig.key as keyof CatalogItem];
-        let valB: any = b[sortConfig.key as keyof CatalogItem];
-        if (sortConfig.key === 'totalCusto') {
-          valA = a.quantidade * a.custoUnitario;
-          valB = b.quantidade * b.custoUnitario;
-        } else if (sortConfig.key === 'totalVenda') {
-          valA = a.quantidade * a.vendaUnitario;
-          valB = b.quantidade * b.vendaUnitario;
-        } else if (sortConfig.key === 'coverageDays') {
-          valA = a.coverageDays ?? Number.POSITIVE_INFINITY;
-          valB = b.coverageDays ?? Number.POSITIVE_INFINITY;
-        }
-        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
-        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
-        return 0;
-      });
-    }
+  const selectedProduct = useMemo(() => presentation.products.find(product => product.code === selectedCode) || null, [presentation.products, selectedCode]);
 
-    return sortableItems;
-  }, [catalog, searchTerm, sortConfig, activeFilter, statusFilter, columnFilters, importedCodes]);
-
-  const requestSort = (key: SortKey) => {
-    let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
-    setSortConfig({ key, direction });
-  };
-
-  const getSortIcon = (key: SortKey) => !sortConfig || sortConfig.key !== key
-    ? ' ↕'
-    : sortConfig.direction === 'asc' ? ' ↑' : ' ↓';
-
-  const setColumnFilter = (key: keyof ColumnFilters, value: string) => {
-    setColumnFilters(current => ({ ...current, [key]: value }));
-  };
-
-  const activeColumnFilterCount = Object.values(columnFilters).filter(value => value.trim()).length;
-  const hasAnyFilter = searchTerm.trim().length > 0 || activeFilter !== 'todos' || statusFilter !== 'todos' || activeColumnFilterCount > 0 || importedCodes.size > 0;
-
-  const clearFilters = () => {
-    setSearchTerm('');
-    setActiveFilter('todos');
-    setStatusFilter('todos');
-    setColumnFilters(EMPTY_COLUMN_FILTERS);
-    setImportedCodes(new Set());
-  };
-
-  const renderFilterInput = (
-    key: keyof ColumnFilters,
-    placeholder: string,
-    options?: { numeric?: boolean; minWidth?: number },
-  ) => (
-    <input
-      aria-label={`Filtro ${key}`}
-      className="panel-input"
-      type="text"
-      inputMode={options?.numeric ? 'decimal' : 'text'}
-      value={columnFilters[key]}
-      placeholder={placeholder}
-      onChange={event => setColumnFilter(key, event.target.value)}
-      style={{
-        width: '100%',
-        minWidth: `${options?.minWidth || 92}px`,
-        minHeight: '32px',
-        padding: '6px 8px',
-        fontSize: '0.72rem',
-        textAlign: options?.numeric ? 'right' : 'left',
-      }}
-    />
-  );
-
-  const renderRiskBadge = (status: StockRiskStatus) => {
-    if (status === 'sem-winthor') return <span style={{ color: 'var(--panel-muted)' }}>—</span>;
-    if (status === 'ruptura') return <span className="panel-badge panel-badge-red">{stockRiskLabel(status)}</span>;
-    if (status === 'risco') return <span className="panel-badge panel-badge-amber">{stockRiskLabel(status)}</span>;
-    if (status === 'sem-giro') return <span className="panel-badge">{stockRiskLabel(status)}</span>;
-    return <span className="panel-badge">{stockRiskLabel(status)}</span>;
-  };
+  const movements = useMemo(() => {
+    const search = movementSearch.trim().toLowerCase();
+    return presentation.movements.filter(movement => {
+      if (movement.direction !== direction) return false;
+      if (!search) return true;
+      return [movement.status, movement.movement, movement.document, movement.order, movement.invoice, movement.sku, movement.ean, movement.product, movement.partner, movement.partnerDocument, movement.origin]
+        .some(value => String(value || '').toLowerCase().includes(search));
+    });
+  }, [presentation.movements, direction, movementSearch]);
 
   if (!isLoaded) {
-    return <PanelEmptyState icon="◆" title="Nenhum dado carregado" description={<>Vá até <strong>Configurações</strong> e faça o upload das planilhas de estoque, itens e carteira.</>} />;
+    return <PanelEmptyState icon="◆" title="Nenhum dado carregado" description={<>Vá até <strong>Configurações</strong> e carregue Posição 105, Cadastro 286, Estoque 8013, Carteira e Vendas 8022.</>} />;
   }
 
-  const renderKpiSection = (
-    title: string,
-    estoqueAtualLabel: string,
-    estoqueAtualVal: number,
-    coberturaEstoque: number,
-    saldoPedidoVal: number,
-    estoqueMaisSaldoVal: number,
-    cobEstoqueMaisSaldo: number,
-    meta: number,
-    portfolioNote: string,
-  ) => {
-    const coverageAvailable = coberturaEstoque > 0 || cobEstoqueMaisSaldo > 0;
-    const variacao = coverageAvailable ? coberturaEstoque - meta : 0;
-    const isNegative = variacao < 0;
+  const tabButton = (tab: PageTab, label: string) => (
+    <button className={`panel-chip${pageTab === tab ? ' is-active' : ''}`} onClick={() => setPageTab(tab)}>{label}</button>
+  );
 
-    return (
-      <PanelCard style={{ borderLeft: '4px solid var(--panel-red)' }}>
-        <PanelSectionHeader eyebrow={title} title={estoqueAtualLabel} action={<span className="panel-badge">META COBERTURA · {meta} DIAS</span>} />
-        <div style={{ color: 'var(--panel-text)', fontSize: 'clamp(1.8rem, 4vw, 3rem)', fontWeight: 800, letterSpacing: '-0.04em', lineHeight: 1, marginBottom: '20px' }}>{formatCurrency(estoqueAtualVal)}</div>
+  const thresholdInput = (label: string, key: 'riskCoverageDays' | 'lowCoverageDays' | 'excessCoverageDays', value: number | null) => (
+    <label style={{ display: 'grid', gap: '6px', minWidth: '160px' }}>
+      <span className="panel-mini-label">{label}</span>
+      <input className="panel-input" type="number" min="0" step="1" value={value ?? ''} placeholder="Desativado"
+        onChange={event => updateAlertConfiguration({ [key]: event.target.value === '' ? null : Math.max(Number(event.target.value) || 0, 0) })} />
+    </label>
+  );
+
+  const renderOverview = () => (
+    <div className="panel-stack">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '12px' }}>
+        <PanelKpi label="Estoque a custo" value={formatCurrency(metricas.valorEstoqueCompra)} detail="Posição 105" />
+        <PanelKpi label="Estoque a venda" value={formatCurrency(metricas.valorEstoqueVenda)} detail="Preço de venda de referência do estoque" />
+        <PanelKpi label="Estoque físico" value={`${formatNumber(presentation.summary.physicalUnits)} un.`} detail={`${formatNumber(presentation.summary.physicalCases, 2)} cx + ${formatNumber(presentation.summary.looseUnits)} un. avulsas identificadas`} />
+        <PanelKpi label="Reservado" value={`${formatNumber(presentation.summary.reservedUnits)} un.`} detail="Pedidos 8022 ainda A Faturar" tone="amber" />
+        <PanelKpi label="Disponível" value={`${formatNumber(presentation.summary.availableUnits)} un.`} detail={presentation.reservation.mode === 'POSICAO_BRUTA' ? 'Posição menos reserva, uma única vez' : 'Posição exportada preservada'} tone="green" />
+        <PanelKpi label="Entradas previstas" value={`${formatNumber(presentation.summary.pendingUnits)} un.`} detail={`${formatNumber(presentation.summary.pendingCases, 2)} cx em Carteira`} tone="blue" />
+        <PanelKpi label="Estoque projetado" value={`${formatNumber(presentation.summary.projectedUnits)} un.`} detail="Disponível + entradas previstas" tone="purple" />
+        <PanelKpi label="SKUs" value={formatNumber(presentation.summary.skuCount)} detail={`${formatNumber(presentation.summary.zeroSkuCount)} com físico zerado · ${formatNumber(presentation.summary.launchCount)} lançamentos`} />
+      </div>
+
+      <PanelCard>
+        <PanelSectionHeader eyebrow="RESERVA" title="Reconciliação da posição do Winthor"
+          description="O 8022 A Faturar identifica o comprometimento. A reserva só é subtraída da posição quando 105 × 8013 × 8022 comprovam que a posição é bruta; caso contrário, a posição é preservada para impedir dupla subtração."
+          action={statusBadge(presentation.reservation.mode === 'POSICAO_BRUTA' || presentation.reservation.mode === 'POSICAO_LIQUIDA' ? 'OK' : 'BLOCKED')} />
         <div className="panel-subgrid">
-          <div className="panel-mini-stat">
-            <div className="panel-mini-label">Cobertura Atual</div>
-            <div className="panel-mini-value">{coverageAvailable ? `${coberturaEstoque} dias` : 'Aguardando histórico'}</div>
-            <div className="panel-mini-note" style={{ color: coverageAvailable ? (isNegative ? '#f87171' : 'var(--panel-red)') : 'var(--panel-muted)' }}>
-              {coverageAvailable ? `${isNegative ? '↓' : '↑'} ${Math.abs(variacao)} dias ${isNegative ? 'abaixo' : 'acima'} da meta` : 'Requer Sell Out médio dos 3 meses fechados.'}
-            </div>
-          </div>
-          <div className="panel-mini-stat">
-            <div className="panel-mini-label">Saldo Pedido · Em Trânsito</div>
-            <div className="panel-mini-value" style={{ color: 'var(--panel-red)' }}>{formatCurrency(saldoPedidoVal)}</div>
-            <div className="panel-mini-note">{portfolioNote}</div>
-          </div>
-          <div className="panel-mini-stat">
-            <div className="panel-mini-label">Projeção · Estoque + Pedido</div>
-            <div className="panel-mini-value">{formatCurrency(estoqueMaisSaldoVal)}</div>
-            <div className="panel-mini-note">Cobertura projetada: <strong style={{ color: 'var(--panel-text)' }}>{coverageAvailable ? `${cobEstoqueMaisSaldo} dias` : 'Aguardando histórico'}</strong></div>
-          </div>
+          <div className="panel-mini-stat"><div className="panel-mini-label">Modo detectado</div><div className="panel-mini-value">{presentation.reservation.mode.replaceAll('_', ' ')}</div><div className="panel-mini-note">{presentation.reservation.note}</div></div>
+          <div className="panel-mini-stat"><div className="panel-mini-label">SKUs com evidência</div><div className="panel-mini-value">{presentation.reservation.evidenceRows}</div><div className="panel-mini-note">Bruta: {presentation.reservation.grossMatches} · Líquida: {presentation.reservation.netMatches}</div></div>
+          <div className="panel-mini-stat"><div className="panel-mini-label">Reserva sem SKU</div><div className="panel-mini-value">{formatNumber(presentation.reservation.unresolvedReservedUnits)} un.</div><div className="panel-mini-note">Nunca é descartada silenciosamente.</div></div>
         </div>
       </PanelCard>
-    );
+
+      <PanelCard>
+        <PanelSectionHeader eyebrow="ALERTAS" title={`Central de alertas · ${presentation.alerts.length}`}
+          description="Ruptura, risco, baixo estoque e excesso só recebem classificação oficial quando seus parâmetros forem explicitamente configurados. Os alertas cadastrais e de reconciliação continuam automáticos." />
+        <div className="panel-toolbar" style={{ marginBottom: '18px', alignItems: 'end' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', minHeight: '42px' }}>
+            <input type="checkbox" checked={alertConfiguration.zeroStockAsRupture} onChange={event => updateAlertConfiguration({ zeroStockAsRupture: event.target.checked })} />
+            <span style={{ color: 'var(--panel-text-dim)', fontSize: '0.78rem' }}>Classificar estoque zero como ruptura</span>
+          </label>
+          {thresholdInput('Risco de ruptura · dias', 'riskCoverageDays', alertConfiguration.riskCoverageDays)}
+          {thresholdInput('Baixo estoque · dias', 'lowCoverageDays', alertConfiguration.lowCoverageDays)}
+          {thresholdInput('Excesso · dias', 'excessCoverageDays', alertConfiguration.excessCoverageDays)}
+        </div>
+        {presentation.alerts.length === 0 ? <div className="panel-mini-note">Nenhum alerta detectado com os dados e limites atuais.</div> : (
+          <div className="panel-table-wrap" style={{ maxHeight: '360px' }}><table className="panel-table">
+            <thead><tr><th>Nível</th><th>Alerta</th><th>SKU</th><th>Produto</th><th>Detalhe</th></tr></thead>
+            <tbody>{presentation.alerts.map(alert => <tr key={alert.id}><td>{alertBadge(alert)}</td><td className="is-strong">{alert.kind.replaceAll('_', ' ')}</td><td>{alert.sku}</td><td>{alert.product}</td><td className="is-muted">{alert.message}</td></tr>)}</tbody>
+          </table></div>
+        )}
+      </PanelCard>
+
+      <PanelCard>
+        <PanelSectionHeader eyebrow="AUDITORIA" title="Reconciliações automáticas do Estoque" description="Diferenças e regras ainda não comprovadas permanecem visíveis; um bloqueio não é convertido em OK por consistência interna." />
+        <div className="panel-table-wrap"><table className="panel-table">
+          <thead><tr><th>Status</th><th>Validação</th><th>Esperado</th><th>Calculado</th><th>Diferença</th><th>Fonte / observação</th></tr></thead>
+          <tbody>{presentation.reconciliation.map(check => <tr key={check.id}>
+            <td>{statusBadge(check.status)}</td><td className="is-strong">{check.label}</td><td>{typeof check.expected === 'number' ? formatNumber(check.expected, 2) : check.expected ?? '—'}</td><td>{typeof check.calculated === 'number' ? formatNumber(check.calculated, 2) : check.calculated ?? '—'}</td><td>{check.difference === null ? '—' : formatNumber(check.difference, 2)}</td><td className="is-muted">{check.source}{check.note ? ` · ${check.note}` : ''}</td>
+          </tr>)}</tbody>
+        </table></div>
+      </PanelCard>
+    </div>
+  );
+
+  const renderProductDetails = (product: StockProductView) => {
+    const timeline = presentation.movements.filter(movement => movement.sku === product.code).slice(0, 50);
+    return <PanelCard style={{ marginTop: '16px', borderLeft: '4px solid var(--panel-red)' }}>
+      <PanelSectionHeader eyebrow="FICHA DO SKU" title={product.description} description={`${product.code} · ${product.ean || 'SEM EAN'}${product.brand ? ` · ${product.brand}` : ''}`} action={<button className="panel-secondary-button" onClick={() => setSelectedCode('')}>Fechar</button>} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px', marginBottom: '18px' }}>
+        {[
+          ['Código Winthor', product.code], ['Código fabricante', product.factoryCode || '—'], ['EAN', product.ean || '—'], ['Marca', product.brand || '—'], ['Linha / sublinha', [product.line, product.subcategory].filter(Boolean).join(' · ') || '—'], ['Un/CX', product.unitsPerCase > 0 ? formatNumber(product.unitsPerCase, 2) : '—'], ['Caixas completas', formatNumber(product.physicalCases, 2)], ['Unidades avulsas', formatNumber(product.looseUnits)], ['Total físico', `${formatNumber(product.physicalTotalUnits)} un.`], ['Caixas equivalentes', product.equivalentCases === null ? '—' : formatNumber(product.equivalentCases, 2)], ['Reservado', `${formatNumber(product.reservedUnits)} un.`], ['Disponível', `${formatNumber(product.availableUnits)} un.`], ['Carteira', `${formatNumber(product.pendingUnits)} un. · ${formatNumber(product.pendingCases, 2)} cx`], ['Projetado', `${formatNumber(product.projectedUnits)} un.`], ['Custo unitário', product.costUnit > 0 ? formatCurrency(product.costUnit) : '—'], ['Venda referência', product.saleUnit > 0 ? formatCurrency(product.saleUnit) : '—'], ['Cobertura ritmo faturado', formatDays(product.coverageDays)], ['Cobertura projetada', formatDays(product.projectedCoverageDays)],
+        ].map(([label, value]) => <div key={label} className="panel-mini-stat"><div className="panel-mini-label">{label}</div><div className="panel-mini-value" style={{ fontSize: '1rem' }}>{value}</div></div>)}
+      </div>
+      <div className="panel-badges" style={{ marginBottom: '18px' }}>{product.isLaunch && <span className="panel-badge panel-badge-red">LANÇAMENTO</span>}{!product.hasWinthor && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}{product.alerts.map(alert => <span key={alert.id} title={alert.message}>{alertBadge(alert)}</span>)}</div>
+      <PanelSectionHeader eyebrow="LINHA DO TEMPO" title={`Movimentos comprovados · ${timeline.length}`} description="Enquanto o razão detalhado de movimentações não estiver disponível, aparecem somente 8022 e Carteira. NF, transferência, devolução e ajuste não são inventados." />
+      <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Data</th><th>Status</th><th>Movimento</th><th>Caixas</th><th>Total un.</th><th>Valor</th><th>Origem</th></tr></thead>
+        <tbody>{timeline.length ? timeline.map(movement => <tr key={movement.id}><td>{movement.date || 'Sem data na fonte'}</td><td>{movement.status}</td><td>{movement.movement}</td><td>{formatNumber(movement.cases, 2)}</td><td>{formatNumber(movement.totalUnits)}</td><td>{formatCurrency(movement.value)}</td><td>{movement.origin}</td></tr>) : <tr><td colSpan={7} className="is-muted">Nenhum movimento comprovado nas fontes atuais.</td></tr>}</tbody>
+      </table></div>
+    </PanelCard>;
   };
 
-  const costCoverageCurrent = canonical?.stock.coverageCostCurrentDays ?? metricas.coberturaDiasAtualCusto ?? metricas.coberturaDiasAtual;
-  const costCoverageProjected = canonical?.stock.coverageCostProjectedDays ?? metricas.coberturaEstoqueMaisSaldoCusto ?? metricas.coberturaEstoqueMaisSaldo;
-
-  return (
-    <PanelPage title="Estoque" metricLabel="Valor potencial de venda" metricValue={formatCurrency(metricas.valorEstoqueVenda)}>
-      <div className="panel-stack">
-        <div className="panel-grid panel-grid-2">
-          {renderKpiSection('VLR VENDA', 'Faturamento Potencial do Estoque Atual', metricas.valorEstoqueVenda, metricas.coberturaDiasAtual, metricas.saldoPedidoVenda, metricas.valorEstoqueVenda + metricas.saldoPedidoVenda, metricas.coberturaEstoqueMaisSaldo, metricas.metaCobertura, 'Carteira integral valorizada pelo acréscimo de venda configurado.')}
-          {renderKpiSection('VLR CUSTO', 'Custo de Aquisição do Estoque Atual', metricas.valorEstoqueCompra, costCoverageCurrent, metricas.saldoPedidoCusto, metricas.valorEstoqueCompra + metricas.saldoPedidoCusto, costCoverageProjected, metricas.metaCobertura, 'Valor integral informado na carteira.')}
-        </div>
-
-        <PanelCard>
-          <PanelSectionHeader
-            eyebrow="CATÁLOGO"
-            title={`Produtos (${sortedProdutos.length}${sortedProdutos.length !== catalog.length ? ` de ${catalog.length}` : ''})`}
-            description="Lançamento continua sendo lido exclusivamente pela lista oficial por EAN. Ruptura e risco são uma camada separada: ruptura = estoque zero; risco = cobertura abaixo da meta e sem o item na carteira Colgate."
-          />
-
-          <div className="panel-toolbar" style={{ marginBottom: '12px' }}>
-            <div className="panel-chips">
-              <button className={`panel-chip${activeFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setActiveFilter('todos')}>Todos · {counts.todos}</button>
-              <button className={`panel-chip${activeFilter === 'lancamento' ? ' is-active' : ''}`} onClick={() => setActiveFilter('lancamento')}>Lançamentos · {counts.lancamento}</button>
-              <button className={`panel-chip is-warning${activeFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setActiveFilter('sem-winthor')}>Sem Winthor · {counts.semWinthor}</button>
-            </div>
-            <input id="searchInput" className="panel-input" type="text" value={searchTerm} placeholder="Buscar por código, EAN ou descrição..." onChange={event => setSearchTerm(event.target.value)} />
-          </div>
-
-          <div className="panel-toolbar" style={{ marginBottom: '12px', alignItems: 'center' }}>
-            <div className="panel-chips">
-              <button className={`panel-chip${statusFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setStatusFilter('todos')}>Situação · Todas</button>
-              <button className={`panel-chip panel-chip-red${statusFilter === 'ruptura' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ruptura')}>Ruptura · {counts.ruptura}</button>
-              <button className={`panel-chip is-warning${statusFilter === 'risco' ? ' is-active' : ''}`} onClick={() => setStatusFilter('risco')}>Risco · {counts.risco}</button>
-              <button className={`panel-chip${statusFilter === 'sem-giro' ? ' is-active' : ''}`} onClick={() => setStatusFilter('sem-giro')}>Sem giro · {counts.semGiro}</button>
-              <button className={`panel-chip${statusFilter === 'ok' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ok')}>OK · {counts.ok}</button>
-            </div>
-            <span style={{ color: 'var(--panel-muted)', fontSize: '0.72rem', marginLeft: 'auto' }}>Meta usada no risco: <strong style={{ color: 'var(--panel-text)' }}>{metricas.metaCobertura} dias</strong></span>
-          </div>
-
-          <div className="panel-toolbar" style={{ marginBottom: '18px', alignItems: 'center' }}>
-            <StockCodeListFilter products={catalog} codes={importedCodes} onChange={setImportedCodes} />
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px', flexWrap: 'wrap', marginLeft: 'auto' }}>
-              <span style={{ color: 'var(--panel-muted)', fontSize: '0.72rem' }}>Filtros numéricos: use &gt;, &lt;, &gt;=, &lt;= ou =. Ex.: &gt;1000 ou &lt;R$ 5,00.</span>
-              <button className="panel-secondary-button" onClick={clearFilters} disabled={!hasAnyFilter}>Limpar filtros{activeColumnFilterCount > 0 ? ` · ${activeColumnFilterCount}` : ''}</button>
-            </div>
-          </div>
-
-          <div className="panel-table-wrap">
-            <table className="panel-table">
-              <thead>
-                <tr>
-                  <th className="is-sortable" onClick={() => requestSort('codigo')}>Código{getSortIcon('codigo')}</th>
-                  <th className="is-sortable" onClick={() => requestSort('ean')}>EAN{getSortIcon('ean')}</th>
-                  <th className="is-sortable" onClick={() => requestSort('descricao')}>Produto / Lançamento{getSortIcon('descricao')}</th>
-                  <th>Situação</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('quantidade')}>Estoque (Un){getSortIcon('quantidade')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('soldUnits')}>Venda mês (Un){getSortIcon('soldUnits')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('coverageDays')}>Cobertura ritmo{getSortIcon('coverageDays')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedidoCaixas')}>Carteira (Cx){getSortIcon('saldoPedidoCaixas')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedido')}>Carteira (Un){getSortIcon('saldoPedido')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('custoUnitario')}>Custo Un.{getSortIcon('custoUnitario')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('vendaUnitario')}>Venda Un.{getSortIcon('vendaUnitario')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('totalCusto')}>Total Custo{getSortIcon('totalCusto')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('totalVenda')}>Total Venda{getSortIcon('totalVenda')}</th>
-                </tr>
-                <tr>
-                  <th>{renderFilterInput('codigo', 'Código')}</th>
-                  <th>{renderFilterInput('ean', 'EAN', { minWidth: 128 })}</th>
-                  <th>{renderFilterInput('descricao', 'Produto', { minWidth: 190 })}</th>
-                  <th></th>
-                  <th>{renderFilterInput('quantidade', '>1000', { numeric: true })}</th>
-                  <th>{renderFilterInput('soldUnits', '>100', { numeric: true })}</th>
-                  <th>{renderFilterInput('coverageDays', '<5', { numeric: true })}</th>
-                  <th>{renderFilterInput('saldoPedidoCaixas', '>0', { numeric: true })}</th>
-                  <th>{renderFilterInput('saldoPedido', '>0', { numeric: true })}</th>
-                  <th>{renderFilterInput('custoUnitario', '<5,00', { numeric: true })}</th>
-                  <th>{renderFilterInput('vendaUnitario', '>10,00', { numeric: true })}</th>
-                  <th>{renderFilterInput('totalCusto', '>1000', { numeric: true })}</th>
-                  <th>{renderFilterInput('totalVenda', '>1000', { numeric: true })}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedProdutos.map(p => (
-                  <tr key={p.codigo}>
-                    <td className="is-strong">{p.codigo}</td>
-                    <td className="is-muted">{p.ean || '—'}</td>
-                    <td>
-                      <div className="panel-badges">
-                        <span className="is-strong">{p.descricao}</span>
-                        {p.isLancamento && <span className="panel-badge panel-badge-red">LANÇAMENTO</span>}
-                        {p.isNoWinthor && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}
-                      </div>
-                    </td>
-                    <td>{renderRiskBadge(p.stockStatus)}</td>
-                    <td className="is-right is-strong">{p.quantidade.toLocaleString('pt-BR')}</td>
-                    <td className="is-right">{Math.round(p.soldUnits).toLocaleString('pt-BR')}</td>
-                    <td className="is-right">
-                      {p.coverageDays === null ? '—' : <span style={{ color: 'var(--panel-text-dim)', fontWeight: 500 }}>{p.coverageDays.toFixed(1)} dias</span>}
-                    </td>
-                    <td className="is-right">{(p.saldoPedidoCaixas || 0).toLocaleString('pt-BR')}</td>
-                    <td className="is-right">{p.saldoPedido.toLocaleString('pt-BR')}</td>
-                    <td className="is-right is-muted">{p.custoUnitario > 0 ? formatCurrency(p.custoUnitario) : '—'}</td>
-                    <td className="is-right">{p.vendaUnitario > 0 ? <span className="is-strong">{formatCurrency(p.vendaUnitario)}</span> : '—'}</td>
-                    <td className="is-right" style={{ fontWeight: 700 }}>{p.custoUnitario > 0 ? formatCurrency(p.quantidade * p.custoUnitario) : '—'}</td>
-                    <td className="is-right" style={{ fontWeight: 700 }}>{p.vendaUnitario > 0 ? formatCurrency(p.quantidade * p.vendaUnitario) : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </PanelCard>
+  const renderProducts = () => <div className="panel-stack">
+    <PanelCard>
+      <PanelSectionHeader eyebrow="PRODUTOS" title={`Posição por SKU · ${filteredProducts.length} de ${presentation.products.length}`} description="Caixas, unidades avulsas, total físico, reserva, disponível, Carteira e projeção são exibidos separadamente. Faturado mês considera somente movimentos FATURADOS do 8022." />
+      <div className="panel-toolbar" style={{ marginBottom: '12px' }}>
+        <div className="panel-chips"><button className={`panel-chip${productFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setProductFilter('todos')}>Todos · {presentation.products.length}</button><button className={`panel-chip${productFilter === 'lancamento' ? ' is-active' : ''}`} onClick={() => setProductFilter('lancamento')}>Lançamentos · {presentation.summary.launchCount}</button><button className={`panel-chip is-warning${productFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setProductFilter('sem-winthor')}>Sem Winthor · {presentation.summary.noWinthorCount}</button><button className={`panel-chip${productFilter === 'com-alerta' ? ' is-active' : ''}`} onClick={() => setProductFilter('com-alerta')}>Com alerta</button></div>
+        <input className="panel-input" value={searchTerm} placeholder="Buscar código, EAN, produto, marca..." onChange={event => setSearchTerm(event.target.value)} />
       </div>
-    </PanelPage>
-  );
+      <div className="panel-toolbar" style={{ marginBottom: '18px' }}><StockCodeListFilter products={produtos} codes={importedCodes} onChange={setImportedCodes} /><button className="panel-secondary-button" onClick={() => { setSearchTerm(''); setProductFilter('todos'); setImportedCodes(new Set()); }}>Limpar filtros</button></div>
+      <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Código</th><th>EAN</th><th>Produto</th><th className="is-right">Cx</th><th className="is-right">Avulsas</th><th className="is-right">Total físico</th><th className="is-right">Cx equiv.</th><th className="is-right">Reservado</th><th className="is-right">Disponível</th><th className="is-right">Carteira</th><th className="is-right">Projetado</th><th className="is-right">Faturado mês</th><th className="is-right">Cobertura ritmo faturado</th><th className="is-right">Custo un.</th><th className="is-right">Venda ref.</th><th>Alertas</th><th></th></tr></thead>
+        <tbody>{filteredProducts.map(product => <tr key={product.code}><td className="is-strong">{product.code}</td><td className="is-muted">{product.ean || '—'}</td><td><div className="panel-badges"><span className="is-strong">{product.description}</span>{product.isLaunch && <span className="panel-badge panel-badge-red">LANÇAMENTO</span>}{!product.hasWinthor && product.pendingUnits > 0 && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}</div></td><td className="is-right">{formatNumber(product.physicalCases, 2)}</td><td className="is-right">{formatNumber(product.looseUnits)}</td><td className="is-right is-strong">{formatNumber(product.physicalTotalUnits)}</td><td className="is-right">{product.equivalentCases === null ? '—' : formatNumber(product.equivalentCases, 2)}</td><td className="is-right">{formatNumber(product.reservedUnits)}</td><td className="is-right is-strong">{formatNumber(product.availableUnits)}</td><td className="is-right">{formatNumber(product.pendingUnits)}</td><td className="is-right is-strong">{formatNumber(product.projectedUnits)}</td><td className="is-right">{formatNumber(product.soldUnits)}</td><td className="is-right">{formatDays(product.coverageDays)}</td><td className="is-right">{product.costUnit > 0 ? formatCurrency(product.costUnit) : '—'}</td><td className="is-right">{product.saleUnit > 0 ? formatCurrency(product.saleUnit) : '—'}</td><td>{product.alerts.length ? <span className="panel-badge panel-badge-amber">{product.alerts.length}</span> : '—'}</td><td><button className="panel-secondary-button" onClick={() => setSelectedCode(product.code)}>Abrir</button></td></tr>)}</tbody>
+      </table></div>
+    </PanelCard>
+    {selectedProduct ? renderProductDetails(selectedProduct) : null}
+  </div>;
+
+  const renderMovements = () => <PanelCard>
+    <PanelSectionHeader eyebrow="ENTRADAS E SAÍDAS" title={direction === 'ENTRADA' ? `Entradas · ${movements.length}` : `Saídas · ${movements.length}`} description="Uma única área de movimentações com dois módulos internos. A Carteira é Entrada prevista; o 8022 FATURADO é Saída realizada e A FATURAR é Saída reservada. Filtros são preservados ao alternar." />
+    <div className="panel-toolbar" style={{ marginBottom: '16px' }}><div className="panel-chips"><button className={`panel-chip${direction === 'ENTRADA' ? ' is-active' : ''}`} onClick={() => setDirection('ENTRADA')}>Entradas</button><button className={`panel-chip${direction === 'SAIDA' ? ' is-active' : ''}`} onClick={() => setDirection('SAIDA')}>Saídas</button></div><input className="panel-input" value={movementSearch} placeholder="Filtrar movimento, SKU, parceiro, origem..." onChange={event => setMovementSearch(event.target.value)} /></div>
+    <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Data</th><th>Status</th><th>Movimento</th><th>Documento</th><th>Pedido</th><th>NF</th><th>SKU</th><th>Produto</th><th>Parceiro</th><th className="is-right">Caixas</th><th className="is-right">Un. avulsas</th><th className="is-right">Total unidades</th><th className="is-right">Valor</th><th>Origem</th></tr></thead>
+      <tbody>{movements.length ? movements.map(movement => <tr key={movement.id}><td>{movement.date || '—'}</td><td><span className="panel-badge">{movement.status}</span></td><td className="is-strong">{movement.movement}</td><td>{movement.document || '—'}</td><td>{movement.order || '—'}</td><td>{movement.invoice || '—'}</td><td>{movement.sku}</td><td>{movement.product}</td><td>{movement.partner || '—'}</td><td className="is-right">{formatNumber(movement.cases, 2)}</td><td className="is-right">{formatNumber(movement.looseUnits)}</td><td className="is-right is-strong">{formatNumber(movement.totalUnits)}</td><td className="is-right">{formatCurrency(movement.value)}</td><td>{movement.origin}</td></tr>) : <tr><td colSpan={14} className="is-muted">Nenhum movimento comprovado para este módulo com os filtros atuais.</td></tr>}</tbody>
+    </table></div>
+  </PanelCard>;
+
+  return <PanelPage title="Estoque" metricLabel="Valor potencial de venda" metricValue={formatCurrency(metricas.valorEstoqueVenda)}><div className="panel-stack"><div className="panel-chips" style={{ marginBottom: '4px' }}>{tabButton('overview', 'Visão Geral')}{tabButton('products', 'Produtos')}{tabButton('movements', 'Entradas e Saídas')}</div>{pageTab === 'overview' ? renderOverview() : pageTab === 'products' ? renderProducts() : renderMovements()}</div></PanelPage>;
 }
