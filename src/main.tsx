@@ -11,6 +11,7 @@ import { MetasPage } from './pages/MetasPage'
 import { SellOutPage } from './pages/SellOutPage'
 import { DocumentosPage } from './pages/DocumentosPage'
 import { CriacaoComboPage } from './pages/CriacaoComboPage'
+import { ClientesSortimentoPage, type ClientesSortimentoView } from './pages/ClientesSortimentoPage'
 import { DataProvider } from './store/DataContext'
 import './ui/theme/foundation.css'
 
@@ -18,13 +19,13 @@ function App() {
   const [activeTab, setActiveTab] = useState('estoque')
   const [activeEstoqueTopTab, setActiveEstoqueTopTab] = useState('overview')
   const [activeAtividadesTopTab, setActiveAtividadesTopTab] = useState('combo')
+  const [activeClientesTopTab, setActiveClientesTopTab] = useState<ClientesSortimentoView>('overview')
 
   const sidebarItems = [
     { id: 'estoque', label: 'Estoque', active: activeTab === 'estoque', onSelect: () => setActiveTab('estoque') },
     { id: 'sellout', label: 'Sell Out', active: activeTab === 'sellout', onSelect: () => setActiveTab('sellout') },
     { id: 'pex', label: 'PEX', active: activeTab === 'pex', onSelect: () => setActiveTab('pex') },
-    { id: 'sortimento', label: 'Sortimento', active: activeTab === 'sortimento', onSelect: () => setActiveTab('sortimento') },
-    { id: 'clientes', label: 'Clientes', active: activeTab === 'clientes', onSelect: () => setActiveTab('clientes') },
+    { id: 'sortimento', label: 'Clientes & Sortimento', active: activeTab === 'sortimento', onSelect: () => setActiveTab('sortimento') },
     { id: 'atividades', label: 'Atividades', active: activeTab === 'atividades', onSelect: () => setActiveTab('atividades') },
     { id: 'relatorios', label: 'Documentos', active: activeTab === 'relatorios', onSelect: () => setActiveTab('relatorios') },
     { id: 'metas', label: 'Metas', active: activeTab === 'metas', onSelect: () => setActiveTab('metas') },
@@ -49,10 +50,24 @@ function App() {
     { id: 'combo', label: 'Criação de Combo' },
   ]
 
+  const clientesTopTabs = [
+    { id: 'overview', label: 'Visão Geral' },
+    { id: 'assortment', label: 'Sortimento' },
+    { id: 'opportunities', label: 'Oportunidades' },
+    { id: 'launches', label: 'Lançamentos' },
+    { id: 'outside', label: 'Comprado Fora' },
+    { id: 'promotions', label: 'Promoções' },
+    { id: 'pricing', label: 'Preços' },
+    { id: 'history', label: 'Histórico' },
+    { id: 'export', label: 'Exportar' },
+  ]
+
   const topNavigation = activeTab === 'estoque' ? (
     <TopTabs tabs={estoqueTopTabs} activeId={activeEstoqueTopTab} onChange={setActiveEstoqueTopTab} />
   ) : activeTab === 'atividades' ? (
     <TopTabs tabs={atividadesTopTabs} activeId={activeAtividadesTopTab} onChange={setActiveAtividadesTopTab} />
+  ) : activeTab === 'sortimento' ? (
+    <TopTabs tabs={clientesTopTabs} activeId={activeClientesTopTab} onChange={value => setActiveClientesTopTab(value as ClientesSortimentoView)} />
   ) : null
 
   const currentLabel = sidebarItems.find(i => i.id === activeTab)?.label ?? activeTab
@@ -64,6 +79,8 @@ function App() {
         activeEstoqueTopTab === 'launches' ? <LancamentosPage /> : <EstoquePage view={estoqueView} />
       ) : activeTab === 'sellout' ? (
         <SellOutPage />
+      ) : activeTab === 'sortimento' ? (
+        <ClientesSortimentoPage view={activeClientesTopTab} />
       ) : activeTab === 'atividades' && activeAtividadesTopTab === 'combo' ? (
         <CriacaoComboPage />
       ) : activeTab === 'relatorios' ? (
