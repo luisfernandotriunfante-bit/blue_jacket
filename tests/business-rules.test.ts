@@ -10,14 +10,24 @@ import { DEFAULT_MANUAL_CONFIGURATION } from '../src/domain/canonical.ts';
 
 function master(sku:string,ean:string,unitsPerCase:number):ProductMaster{return{sku,ean,description:sku,category:'',subcategory:'',brand:'',isLaunch:false,boxPrice:0,unitPrice:0,unitsPerCase,line:''}}
 
-test('carteira converte caixas em unidades pelo Un/CX e mantém custo integral',()=>{
+test('carteira converte a soma de Order Qty e Bill Qty em unidades pelo Un/CX e mantém custo integral',()=>{
   const ean=gtin13('789000000001');const price=master('MAT1',ean,12);
   const products=new Map<string,ProdutoEstoque>();
   const cadastro={byInternal:new Map([['100',{description:'Produto',ean,factoryCode:'MAT1'}]]),factoryToInternal:new Map([['MAT1','100']])};
   const priceList={bySku:new Map([['MAT1',price]]),byEan:new Map([[ean,price]])};
   const row=Array(9).fill('');row[4]='MAT1';row[6]=10;row[7]=8;row[8]=1000;
   const result=applyPortfolio([[],row],products,cadastro,priceList,0.3);
-  assert.equal(result.cost,1000);assert.equal(result.sale,1300);assert.equal(products.get('100')?.saldoPedidoCaixas,10);assert.equal(products.get('100')?.saldoPedido,120);assert.equal(products.get('100')?.hasWinthor,true);
+  assert.equal(result.cost,1000);assert.equal(result.sale,1300);assert.equal(products.get('100')?.saldoPedidoCaixas,18);assert.equal(products.get('100')?.saldoPedido,216);assert.equal(products.get('100')?.hasWinthor,true);
+});
+
+test('carteira usa somente a coluna preenchida quando a outra está vazia e soma ambas quando coexistem',()=>{
+  const ean=gtin13('789000000011');const price=master('MAT-SOMA',ean,12);
+  const products=new Map<string,ProdutoEstoque>();
+  const cadastro={byInternal:new Map([['110',{description:'Produto Soma',ean,factoryCode:'MAT-SOMA'}]]),factoryToInternal:new Map([['MAT-SOMA','110']])};
+  const priceList={bySku:new Map([['MAT-SOMA',price]]),byEan:new Map([[ean,price]])};
+  const row=(orderQty:number,billQty:number,cost:number)=>{const value=Array(9).fill('');value[4]='MAT-SOMA';value[6]=orderQty;value[7]=billQty;value[8]=cost;return value;};
+  const result=applyPortfolio([[],row(5,0,100),row(0,7,200),row(3,2,300)],products,cadastro,priceList,0);
+  assert.equal(result.cost,600);assert.equal(result.sale,600);assert.equal(products.get('110')?.saldoPedidoCaixas,17);assert.equal(products.get('110')?.saldoPedido,204);
 });
 
 test('acréscimo padrão da carteira reproduz a entrada L24 da planilha fórmula',()=>{
@@ -63,4 +73,3 @@ test('redes usam fallback do Roteiro e preservam vendas sem rede em grupo explí
 
 test.todo('Meta Redes redistribui ajustes e preserva exatamente o total geral');
 test.todo('Cobertura reproduz a fórmula original depois de confirmar faturado versus Sell Out');
-test.todo('Carteira confirma na planilha a precedência exata entre Order Qty e Bill Qty');
