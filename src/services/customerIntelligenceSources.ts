@@ -74,9 +74,9 @@ function parseAssortmentSheet(data: Row[], sheetName: string, key: string, label
   const expectedTotalsByChannel: Record<string, { total: number; mandatory: number; important: number }> = {};
   channelColumns.forEach(({ index, channel }) => {
     expectedTotalsByChannel[channel] = {
-      total: parseNumber(data[Math.max(headerIndex - 4, 0)]?.[index]),
-      mandatory: parseNumber(data[Math.max(headerIndex - 3, 0)]?.[index]),
-      important: parseNumber(data[Math.max(headerIndex - 2, 0)]?.[index]),
+      total: parseNumber(data[Math.max(headerIndex - 3, 0)]?.[index]),
+      mandatory: parseNumber(data[Math.max(headerIndex - 2, 0)]?.[index]),
+      important: parseNumber(data[Math.max(headerIndex - 1, 0)]?.[index]),
     };
   });
   const products: OfficialAssortmentSku[] = [];
