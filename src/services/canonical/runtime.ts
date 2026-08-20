@@ -12,6 +12,8 @@ export type SalesTransaction = CanonicalSalesTransaction;
 export type PortfolioSourceLine = {
   sourceRow: number;
   materialCode: string;
+  orderDate: string;
+  billingDate: string;
   orderQty: number;
   billQty: number;
   totalCases: number;
