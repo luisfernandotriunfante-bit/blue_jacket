@@ -2,7 +2,7 @@ export * from './stockModelCore';
 
 import type { CanonicalInventoryProduct, CanonicalProductSupport } from './canonical';
 import { buildStockPresentation as buildCore } from './stockModelCore';
-import type { StockPresentationInput as CoreStockPresentationInput, StockPresentation } from './stockModelCore';
+import type { StockPresentationInput as CoreStockPresentationInput, StockPresentation, StockReconciliationCheck } from './stockModelCore';
 
 export interface StockItemCodeSupport { internalCode: string; ean: string; factoryCode: string; unitsPerCase?: number; }
 type InventoryWithPackaging = CanonicalInventoryProduct & { unitsPerCase?: number };
@@ -53,7 +53,23 @@ function hasPhysicalSnapshot(input: StockPresentationInputWithPackaging): boolea
   return input.inventory.some(item => (Number(item.physicalUnits) || 0) > 0 || (Number(item.physicalCases) || 0) > 0 || (Number(item.grossKg) || 0) > 0);
 }
 
+function portfolioReconciliation(result: StockPresentation): StockReconciliationCheck[] {
+  const pending = result.products.filter(product => product.pendingCases > 0 || product.pendingUnits > 0);
+  const rows = pending.map<StockReconciliationCheck>(product => {
+    if (product.unitsPerCase <= 0) return { id: `stock.portfolio.sku.${product.code}`, label: `Carteira ${product.code}: caixas × Un/CX = unidades`, expected: null, calculated: product.pendingUnits, difference: null, status: 'BLOCKED', source: 'Carteira + Master 105/286', note: 'Fator Un/CX não confirmado para este SKU.' };
+    const expected = product.pendingCases * product.unitsPerCase; const difference = product.pendingUnits - expected;
+    return { id: `stock.portfolio.sku.${product.code}`, label: `Carteira ${product.code}: caixas × Un/CX = unidades`, expected, calculated: product.pendingUnits, difference, status: Math.abs(difference) <= 0.001 ? 'OK' : 'DIVERGENT', source: 'Carteira + Master 105/286', note: `${product.pendingCases.toLocaleString('pt-BR')} cx × ${product.unitsPerCase.toLocaleString('pt-BR')} Un/CX` };
+  });
+  rows.push({ id: 'stock.portfolio.quantity.rule', label: 'Regra de quantidade da Carteira: Order Qty x Bill Qty', expected: null, calculated: 'Order Qty > 0 ? Order Qty : Bill Qty', difference: null, status: 'BLOCKED', source: 'Carteira', note: 'A precedência já existia no motor e foi preservada, mas não é declarada validada sem a regra/planilha que comprove qual campo representa a entrada prevista em cada status.' });
+  return rows;
+}
+
+function enrichReconciliation(result: StockPresentation): StockPresentation {
+  return { ...result, reconciliation: [...result.reconciliation, ...portfolioReconciliation(result)] };
+}
+
 export function buildStockPresentation(input: StockPresentationInputWithPackaging) {
   const { itemCodeSupport: _itemCodeSupport, ...coreInput } = input;
-  return enrichMovementPackaging(buildCore({ ...coreInput, hasStock8013: hasPhysicalSnapshot(input), productSupport: augmentProductSupport(input) }));
+  const result = buildCore({ ...coreInput, hasStock8013: hasPhysicalSnapshot(input), productSupport: augmentProductSupport(input) });
+  return enrichReconciliation(enrichMovementPackaging(result));
 }
