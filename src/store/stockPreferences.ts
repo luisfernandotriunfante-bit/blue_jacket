@@ -17,7 +17,9 @@ const nullableNonNegative = (value: unknown): number | null => {
 export function normalizeStockAlertConfiguration(value: Partial<StockAlertConfiguration> | null | undefined): StockAlertConfiguration {
   const source = value || {};
   return {
-    zeroStockAsRupture: source.zeroStockAsRupture === true,
+    zeroStockAsRupture: source.zeroStockAsRupture === undefined
+      ? DEFAULT_STOCK_ALERT_CONFIGURATION.zeroStockAsRupture
+      : source.zeroStockAsRupture === true,
     riskCoverageDays: nullableNonNegative(source.riskCoverageDays),
     lowCoverageDays: nullableNonNegative(source.lowCoverageDays),
     excessCoverageDays: nullableNonNegative(source.excessCoverageDays),
