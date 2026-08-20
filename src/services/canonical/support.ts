@@ -13,16 +13,12 @@ function validEan(value: unknown): string {
   const body = digits.slice(0, -1);
   const expected = Number(digits.at(-1));
   let sum = 0;
-  for (let i = body.length - 1, pos = 0; i >= 0; i--, pos++) {
-    sum += Number(body[i]) * (pos % 2 === 0 ? 3 : 1);
-  }
+  for (let i = body.length - 1, pos = 0; i >= 0; i--, pos++) sum += Number(body[i]) * (pos % 2 === 0 ? 3 : 1);
   const check = (10 - (sum % 10)) % 10;
   return check === expected ? digits : '';
 }
 
 function cadastroEan(row: Row): string {
-  // Posições observadas no relatório 286. Priorizamos EAN-13 e sempre exigimos
-  // dígito verificador válido; assim um SAP como 61052478 nunca vira EAN.
   const preferred = [20, 21, 22, 19, 24];
   const candidates = preferred.map(index => validEan(row[index])).filter(Boolean);
   return candidates.find(value => value.length === 13) || candidates[0] || '';
@@ -65,8 +61,6 @@ export function parsePremises(rows: Row[]): PremiseClient[] {
     if (!cnpj) continue;
     const profile = String(row[12] ?? '').trim();
     const rawNetwork = String(row[15] ?? '').trim();
-    // Rede vazia na base de premissas não significa "SEM REDE" de forma
-    // definitiva: o Roteiro Ativo pode trazer a rede oficial dessa loja.
     result.push({ cnpj, cnpjRaw:normalizedCnpj.raw, cnpjNormalizationStatus:normalizedCnpj.status, name: String(row[3] ?? '').trim(), city: String(row[6] ?? '').trim(), network: rawNetwork ? displayNetwork(rawNetwork) : '', profile, isTop: normalizeText(profile).includes('TOP VAREJISTA') });
   }
   return result;
@@ -151,7 +145,6 @@ export function parseLegacyClientOwners(workbook: XLSX.WorkBook): Map<string, { 
       if (vendor) teamByVendor.set(vendor, team);
     }
   }
-
   const rows = sheetRows(workbook, '319');
   const result = new Map<string, { teamCode:string; vendorCode:string }>();
   const headerIndex = rows.findIndex(row => row.some(cell => normalizeText(cell) === 'CNPJ') && row.some(cell => normalizeText(cell) === 'REP'));
@@ -186,7 +179,7 @@ export function parsePriceList(rows: Row[]): { bySku: Map<string, ProductMaster>
 }
 
 export function parseCadastro286(rows: Row[]) {
-  const byInternal = new Map<string, { description: string; ean: string; factoryCode: string }>();
+  const byInternal = new Map<string, { description: string; ean: string; factoryCode: string; unitsPerCase?: number }>();
   const factoryToInternal = new Map<string, string>();
   for (const row of rows) {
     if (String(row[0] ?? '').trim() !== '11') continue;
@@ -194,7 +187,8 @@ export function parseCadastro286(rows: Row[]) {
     if (!code || !/^\d+$/.test(code)) continue;
     const factoryCode = cleanCode(row[23]);
     const ean = cadastroEan(row);
-    byInternal.set(code, { description: String(row[2] ?? '').trim(), ean, factoryCode });
+    const unitsPerCase = Math.max(parseNumber(row[24]), 0);
+    byInternal.set(code, { description: String(row[2] ?? '').trim(), ean, factoryCode, ...(unitsPerCase > 0 ? { unitsPerCase } : {}) });
     if (factoryCode) factoryToInternal.set(factoryCode, code);
   }
   return { byInternal, factoryToInternal };

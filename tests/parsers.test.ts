@@ -29,17 +29,17 @@ test('Posição 105 compacta é normalizada antes do parser',async()=>{
   assert.equal(products.size,50);assert.equal(products.get('50')?.custoUnitario,2);
 });
 
-test('Cadastro 286 completo reconhece código Winthor, fábrica e EAN válido',()=>{
-  const ean=gtin13('789123456789');const row=Array(26).fill('');row[0]='11';row[1]='100';row[2]='Produto';row[20]=ean;row[23]='MAT1';
+test('Cadastro 286 completo reconhece código Winthor, fábrica, EAN válido e Master/Un-CX',()=>{
+  const ean=gtin13('789123456789');const row=Array(26).fill('');row[0]='11';row[1]='100';row[2]='Produto';row[20]=ean;row[23]='MAT1';row[24]='12';
   const cadastro=parseCadastro286([row]);
-  assert.deepEqual(cadastro.byInternal.get('100'),{description:'Produto',ean,factoryCode:'MAT1'});assert.equal(cadastro.factoryToInternal.get('MAT1'),'100');
+  assert.deepEqual(cadastro.byInternal.get('100'),{description:'Produto',ean,factoryCode:'MAT1',unitsPerCase:12});assert.equal(cadastro.factoryToInternal.get('MAT1'),'100');
 });
 
-test('Cadastro 286 compacto é expandido antes do parser',async()=>{
+test('Cadastro 286 compacto é expandido antes do parser e preserva Master/Un-CX',async()=>{
   const ean=gtin13('789123456788');const row=Array(21).fill('');row[0]='11';row[1]='200';row[2]='Compacto';row[17]=ean;row[18]='MAT2';row[19]='12';row[20]='S';
   const workbook=await readWorkbook(workbookFile([row],'cadastro-itens-286.xlsx'),'items286');
   const cadastro=parseCadastro286(sheetRows(workbook));
-  assert.equal(cadastro.byInternal.get('200')?.ean,ean);assert.equal(cadastro.factoryToInternal.get('MAT2'),'200');
+  assert.equal(cadastro.byInternal.get('200')?.ean,ean);assert.equal(cadastro.factoryToInternal.get('MAT2'),'200');assert.equal(cadastro.byInternal.get('200')?.unitsPerCase,12);
 });
 
 test('8022 mantém Faturado e A Faturar e exclui tipo diferente de Venda',()=>{
