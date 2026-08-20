@@ -48,7 +48,12 @@ function enrichMovementPackaging(result: StockPresentation): StockPresentation {
   return { ...result, movements };
 }
 
+function hasPhysicalSnapshot(input: StockPresentationInputWithPackaging): boolean {
+  if (!input.hasStock8013) return false;
+  return input.inventory.some(item => (Number(item.physicalUnits) || 0) > 0 || (Number(item.physicalCases) || 0) > 0 || (Number(item.grossKg) || 0) > 0);
+}
+
 export function buildStockPresentation(input: StockPresentationInputWithPackaging) {
   const { itemCodeSupport: _itemCodeSupport, ...coreInput } = input;
-  return enrichMovementPackaging(buildCore({ ...coreInput, productSupport: augmentProductSupport(input) }));
+  return enrichMovementPackaging(buildCore({ ...coreInput, hasStock8013: hasPhysicalSnapshot(input), productSupport: augmentProductSupport(input) }));
 }
