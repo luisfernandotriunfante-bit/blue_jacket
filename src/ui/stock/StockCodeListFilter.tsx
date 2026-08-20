@@ -16,7 +16,8 @@ export function StockCodeListFilter({ products, codes, onChange, allowManual = f
   const [error, setError] = useState('');
   const [manualCode, setManualCode] = useState('');
 
-  const matchedCount = useMemo(() => matchedStockCodes(products, codes).size, [products, codes]);
+  const matchedCodes = useMemo(() => matchedStockCodes(products, codes), [products, codes]);
+  const matchedCount = matchedCodes.size;
   const missingCount = Math.max(codes.size - matchedCount, 0);
 
   const importFile = async (file: File) => {
@@ -72,6 +73,14 @@ export function StockCodeListFilter({ products, codes, onChange, allowManual = f
     onChange(new Set([...codes, code]));
   };
 
+  const removeCode = (code: string) => {
+    const next = new Set(codes);
+    next.delete(code);
+    if (!next.size) setFileName('');
+    setError('');
+    onChange(next);
+  };
+
   const clearList = () => {
     setFileName('');
     setError('');
@@ -80,7 +89,7 @@ export function StockCodeListFilter({ products, codes, onChange, allowManual = f
   };
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', width: '100%' }}>
       {allowManual ? (
         <>
           <input
@@ -124,6 +133,18 @@ export function StockCodeListFilter({ products, codes, onChange, allowManual = f
           {missingCount > 0 ? <span style={{ color: '#fca5a5', fontSize: '0.7rem' }}>{missingCount} não encontrado{missingCount === 1 ? '' : 's'}</span> : null}
           <button type="button" className="panel-secondary-button" onClick={clearList}>{allowManual ? 'Limpar itens' : 'Remover lista'}</button>
         </>
+      ) : null}
+
+      {allowManual && codes.size > 0 ? (
+        <div style={{ width: '100%', maxHeight: '180px', overflowY: 'auto', border: '1px solid rgba(255,255,255,.08)', borderRadius: '10px', marginTop: '4px' }}>
+          {Array.from(codes).map(code => (
+            <div key={code} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '10px', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,.055)' }}>
+              <span className="is-strong" style={{ fontSize: '.75rem' }}>{code}</span>
+              <span className="panel-badge" style={{ color: matchedCodes.has(code) ? '#86efac' : '#fca5a5' }}>{matchedCodes.has(code) ? 'ENCONTRADO' : 'NÃO ENCONTRADO'}</span>
+              <button type="button" className="panel-secondary-button" aria-label={`Excluir código ${code}`} onClick={() => removeCode(code)} style={{ minHeight: '28px', padding: '4px 9px' }}>Excluir</button>
+            </div>
+          ))}
+        </div>
       ) : null}
 
       {error ? <span style={{ color: '#fca5a5', fontSize: '0.7rem' }}>{error}</span> : null}
