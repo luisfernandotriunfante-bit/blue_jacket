@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useData } from '../store/DataContext';
 import { downloadSellOutDocument, downloadTopNetworksDocument } from '../services/documentGenerator';
 import { downloadLegacyStockReport } from '../services/legacyStockReport';
+import { summarizeLegacyStockReport } from '../services/legacyStockReportSummary';
 import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -26,9 +27,7 @@ export function DocumentosPage() {
   const sourceCount = canonical.sources.filter(source => source.loaded).length;
   const officialNetworks = canonical.networks.filter(network => network.key !== 'SEM REDE');
   const networkCount = officialNetworks.filter(network => network.networkTarget > 0 || network.topTarget > 0 || network.total > 0).length;
-  const stock8013Loaded = canonical.sources.some(source => source.kind === 'stock8013' && source.loaded);
-  const stockWinthorCount = canonical.inventory.filter(product => product.hasWinthor).length;
-  const launchCount = canonical.inventory.filter(product => product.hasWinthor && product.isLaunch).length;
+  const stockReportSummary = summarizeLegacyStockReport(canonical);
 
   const generate = async (kind:'painel'|'redes'|'estoque') => {
     setGenerating(kind); setError('');
@@ -91,9 +90,9 @@ export function DocumentosPage() {
             description="Gera somente COD, EAN, descrição, embalagem, múltiplo, preços, estoque em caixas e lançamentos no formato antigo. O painel de Estoque não é alterado."
           />
           <div style={{ display: 'grid', gap: '8px', margin: '20px 0' }}>
-            <Info label="SKUs Winthor" value={stockWinthorCount.toLocaleString('pt-BR')} />
-            <Info label="Estoque CX" value={stock8013Loaded ? '8013 carregado' : '8013 não carregado · coluna ficará vazia'} />
-            <Info label="Lançamentos oficiais conciliados" value={launchCount.toLocaleString('pt-BR')} />
+            <Info label="SKUs Winthor" value={stockReportSummary.skuWinthorCount.toLocaleString('pt-BR')} />
+            <Info label="Estoque CX" value={stockReportSummary.stock8013Loaded ? '8013 carregado' : '8013 não carregado · coluna ficará vazia'} />
+            <Info label="Lançamentos oficiais conciliados" value={stockReportSummary.launchCount.toLocaleString('pt-BR')} />
             <Info label="Múltiplo / ST" value="Referência da Tabela Oficial Colgate antiga" />
           </div>
           <button className="panel-primary-button" disabled={generating!==null} onClick={() => void generate('estoque')}>
