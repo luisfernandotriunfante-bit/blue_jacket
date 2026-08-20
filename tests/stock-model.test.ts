@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildStockPresentation, DEFAULT_STOCK_ALERT_CONFIGURATION } from '../src/domain/stockModel.ts';
-import { loadStockAlertConfiguration, saveStockAlertConfiguration } from '../src/store/stockPreferences.ts';
+import { loadStockAlertConfiguration, normalizeStockAlertConfiguration, saveStockAlertConfiguration } from '../src/store/stockPreferences.ts';
 import type { CanonicalInventoryProduct, CanonicalProductSupport, CanonicalSalesTransaction } from '../src/domain/canonical.ts';
 
 function inventory(overrides: Partial<CanonicalInventoryProduct> = {}): CanonicalInventoryProduct {
@@ -85,14 +85,17 @@ test('8022 gera saídas faturadas e reservadas sem inventar documento ou NF', ()
   assert.ok(result.movements.every(item => item.document === '' && item.invoice === '' && item.order === ''));
 });
 
-test('ruptura e limites de cobertura permanecem desativados até configuração explícita', () => {
+test('estoque zero com Winthor permanece ruptura por padrão e limites de cobertura continuam configuráveis', () => {
   const zero = inventory({ quantity: 0, physicalUnits: 0, physicalCases: 0, pendingQty: 0, pendingCases: 0, pendingCost: 0, pendingSale: 0, isLaunch: true });
   const defaultResult = buildStockPresentation({ inventory: [zero], productSupport: [master()], hasStock8013: true, alertConfiguration: DEFAULT_STOCK_ALERT_CONFIGURATION });
-  assert.ok(defaultResult.alerts.some(alert => alert.kind === 'ESTOQUE_ZERADO'));
+  assert.ok(defaultResult.alerts.some(alert => alert.kind === 'RUPTURA'));
+  assert.ok(!defaultResult.alerts.some(alert => alert.kind === 'ESTOQUE_ZERADO'));
   assert.ok(defaultResult.alerts.some(alert => alert.kind === 'LANCAMENTO_SEM_ESTOQUE'));
-  assert.ok(!defaultResult.alerts.some(alert => alert.kind === 'RUPTURA' || alert.kind === 'RISCO_RUPTURA' || alert.kind === 'BAIXO_ESTOQUE' || alert.kind === 'EXCESSO_ESTOQUE'));
-  const configured = buildStockPresentation({ inventory: [zero], productSupport: [master()], hasStock8013: true, alertConfiguration: { ...DEFAULT_STOCK_ALERT_CONFIGURATION, zeroStockAsRupture: true } });
-  assert.ok(configured.alerts.some(alert => alert.kind === 'RUPTURA'));
+  assert.ok(!defaultResult.alerts.some(alert => alert.kind === 'RISCO_RUPTURA' || alert.kind === 'BAIXO_ESTOQUE' || alert.kind === 'EXCESSO_ESTOQUE'));
+
+  const explicitlyDisabled = buildStockPresentation({ inventory: [zero], productSupport: [master()], hasStock8013: true, alertConfiguration: { ...DEFAULT_STOCK_ALERT_CONFIGURATION, zeroStockAsRupture: false } });
+  assert.ok(explicitlyDisabled.alerts.some(alert => alert.kind === 'ESTOQUE_ZERADO'));
+  assert.ok(!explicitlyDisabled.alerts.some(alert => alert.kind === 'RUPTURA'));
 });
 
 test('reconciliação não esconde ausência de conversão nem reserva sem SKU', () => {
@@ -108,7 +111,10 @@ test('reconciliação não esconde ausência de conversão nem reserva sem SKU',
 test('configuração de alertas de estoque é persistida por competência', () => {
   const data = new Map<string, string>();
   const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } };
-  saveStockAlertConfiguration(storage, '2026-08', { zeroStockAsRupture: true, riskCoverageDays: 7, lowCoverageDays: 15, excessCoverageDays: 90 });
+  saveStockAlertConfiguration(storage, '2026-08', { zeroStockAsRupture: false, riskCoverageDays: 7, lowCoverageDays: 15, excessCoverageDays: 90 });
+  assert.equal(loadStockAlertConfiguration(storage, '2026-08').zeroStockAsRupture, false);
   assert.equal(loadStockAlertConfiguration(storage, '2026-08').riskCoverageDays, 7);
+  assert.equal(loadStockAlertConfiguration(storage, '2026-09').zeroStockAsRupture, true);
   assert.equal(loadStockAlertConfiguration(storage, '2026-09').riskCoverageDays, null);
+  assert.equal(normalizeStockAlertConfiguration({}).zeroStockAsRupture, true);
 });
