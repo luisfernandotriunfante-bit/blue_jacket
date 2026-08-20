@@ -53,6 +53,12 @@
 .stock-stat-blue .stock-stat-value { color: #93c5fd; }
 .stock-stat-purple .stock-stat-value { color: #c4b5fd; }
 
+.panel-badge-blue {
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.30);
+  background: rgba(59, 130, 246, 0.10);
+}
+
 .stock-product-cell {
   min-width: 220px;
 }
