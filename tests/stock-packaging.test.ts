@@ -36,10 +36,12 @@ test('flag legado de 8013 sem evidência física não zera a posição 105', () 
   assert.equal(result.reservation.mode, 'SEM_EVIDENCIA');
 });
 
-test('Carteira é reconciliada por SKU e regra Order Qty/Bill Qty permanece explicitamente bloqueada', () => {
+test('Carteira é reconciliada por SKU e regra Order Qty + Bill Qty está validada', () => {
   const result = buildStockPresentation({ inventory: [packaged({ pendingCases: 2, pendingQty: 24, pendingCost: 50 })], productSupport: [], hasStock8013: true });
+  const rule = result.reconciliation.find(check => check.id === 'stock.portfolio.quantity.rule');
   assert.equal(result.reconciliation.find(check => check.id === 'stock.portfolio.sku.100')?.status, 'OK');
-  assert.equal(result.reconciliation.find(check => check.id === 'stock.portfolio.quantity.rule')?.status, 'BLOCKED');
+  assert.equal(rule?.status, 'OK');
+  assert.equal(rule?.calculated, 'Order Qty + Bill Qty');
 });
 
 test('movimento usa caixas e calcula somente o residual comprovável como unidade avulsa', () => {

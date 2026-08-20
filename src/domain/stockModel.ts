@@ -66,7 +66,7 @@ function portfolioReconciliation(result: StockPresentation): StockReconciliation
     const expected = product.pendingCases * product.unitsPerCase; const difference = product.pendingUnits - expected;
     return { id: `stock.portfolio.sku.${product.code}`, label: `Carteira ${product.code}: caixas × Un/CX = unidades`, expected, calculated: product.pendingUnits, difference, status: Math.abs(difference) <= 0.001 ? 'OK' : 'DIVERGENT', source: 'Carteira + Master 105/286', note: `${product.pendingCases.toLocaleString('pt-BR')} cx × ${product.unitsPerCase.toLocaleString('pt-BR')} Un/CX` };
   });
-  rows.push({ id: 'stock.portfolio.quantity.rule', label: 'Regra de quantidade da Carteira: Order Qty x Bill Qty', expected: null, calculated: 'Order Qty > 0 ? Order Qty : Bill Qty', difference: null, status: 'BLOCKED', source: 'Carteira', note: 'A precedência já existia no motor e foi preservada, mas não é declarada validada sem a regra/planilha que comprove qual campo representa a entrada prevista em cada status.' });
+  rows.push({ id: 'stock.portfolio.quantity.rule', label: 'Regra de quantidade da Carteira: Order Qty + Bill Qty', expected: 'Order Qty + Bill Qty', calculated: 'Order Qty + Bill Qty', difference: null, status: 'OK', source: 'Carteira', note: 'Regra confirmada: a Carteira é atualizada continuamente e tudo que permanece nela está pendente. Se houver valor nas duas colunas, ambos são somados porque podem representar notas distintas do mesmo item.' });
   return rows;
 }
 

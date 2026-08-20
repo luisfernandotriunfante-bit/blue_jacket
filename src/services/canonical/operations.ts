@@ -61,8 +61,9 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
   cadastro.byInternal.forEach((item, internalCode) => { const ean = cleanDigits(item.ean); if (ean && !cadastroByEan.has(ean)) cadastroByEan.set(ean, internalCode); });
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i]; const orderedQty = Math.max(parseNumber(row[6]), 0); const billedQty = Math.max(parseNumber(row[7]), 0);
-    // A precedência Order Qty/Bill Qty já existia no motor; permanece auditada como regra bloqueada até confirmação na planilha.
-    const portfolioCases = orderedQty > 0 ? orderedQty : billedQty;
+    // A Carteira é atualizada continuamente e tudo que permanece nela ainda está pendente.
+    // Order Qty e Bill Qty podem representar notas distintas do mesmo item; por isso as duas colunas são somadas.
+    const portfolioCases = orderedQty + billedQty;
     const portfolioCost = Math.max(parseNumber(row[8]), 0); const rawMaterial = cleanCode(row[4]);
     if (portfolioCases <= 0 && portfolioCost <= 0) continue; totalCost += portfolioCost;
     if (!rawMaterial) { unresolved += 1; continue; }
