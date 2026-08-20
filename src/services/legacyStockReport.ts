@@ -198,7 +198,9 @@ export function buildLegacyStockReportXlsx(state: CanonicalState): Uint8Array {
 
 export function downloadLegacyStockReport(state: CanonicalState) {
   const bytes = buildLegacyStockReportXlsx(state);
-  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const copied = new Uint8Array(bytes.byteLength);
+  copied.set(bytes);
+  const blob = new Blob([copied.buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
