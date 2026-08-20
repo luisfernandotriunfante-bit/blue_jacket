@@ -4,6 +4,7 @@ import { strFromU8, unzipSync } from 'fflate';
 import * as XLSX from 'xlsx';
 import type { CanonicalInventoryProduct, CanonicalState } from '../src/domain/canonical.ts';
 import { buildLegacyStockReportRows, buildLegacyStockReportXlsx } from '../src/services/legacyStockReport.ts';
+import { summarizeLegacyStockReport } from '../src/services/legacyStockReportSummary.ts';
 
 function product(overrides: Partial<CanonicalInventoryProduct> = {}): CanonicalInventoryProduct {
   return {
@@ -88,6 +89,16 @@ test('relatório não inventa múltiplo, ST ou estoque em caixas quando a fonte 
 test('lançamento do relatório segue o cadastro oficial canônico atual, não a lista antiga', () => {
   const [row] = buildLegacyStockReportRows(state([product({ isLaunch: true })]));
   assert.equal(row.launch, 'X');
+});
+
+test('contador de Documentos usa o mesmo lançamento restaurado do relatório, mesmo com snapshot cru zerado', () => {
+  const current = state([product({ isLaunch: false })]);
+  current.support.products[0].isLaunch = true;
+  const [row] = buildLegacyStockReportRows(current);
+  const summary = summarizeLegacyStockReport(current);
+  assert.equal(row.launch, 'X');
+  assert.equal(summary.launchCount, 1);
+  assert.equal(summary.skuWinthorCount, 1);
 });
 
 test('arquivo gerado contém apenas o relatório PREÇO com as onze colunas A:K', () => {
