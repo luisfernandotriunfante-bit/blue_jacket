@@ -49,3 +49,15 @@ test('movimento usa caixas e calcula somente o residual comprovável como unidad
   assert.equal(movement?.totalUnits, 15);
   assert.equal(movement?.looseUnits, 3);
 });
+
+test('Sem Winthor só permanece para item efetivamente presente na Carteira', () => {
+  const catalogOnly = buildStockPresentation({ inventory: [packaged({ hasWinthor: false, pendingCases: 0, pendingQty: 0 })], productSupport: [], hasStock8013: true });
+  assert.equal(catalogOnly.products[0].hasWinthor, true);
+  assert.equal(catalogOnly.summary.noWinthorCount, 0);
+  assert.equal(catalogOnly.alerts.some(alert => alert.kind === 'SEM_WINTHOR'), false);
+
+  const portfolioItem = buildStockPresentation({ inventory: [packaged({ hasWinthor: false, pendingCases: 1, pendingQty: 12, pendingCost: 30 })], productSupport: [], hasStock8013: true });
+  assert.equal(portfolioItem.products[0].hasWinthor, false);
+  assert.equal(portfolioItem.summary.noWinthorCount, 1);
+  assert.equal(portfolioItem.alerts.some(alert => alert.kind === 'SEM_WINTHOR'), true);
+});
