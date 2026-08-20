@@ -1,4 +1,4 @@
-import type * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx';
 import type { AssortmentCompetence } from '../domain/customerIntelligenceTypes';
 import { cleanCode, cleanDigits, normalizeText } from './canonical/utils';
 
