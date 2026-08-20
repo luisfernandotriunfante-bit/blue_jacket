@@ -16,7 +16,7 @@ import './ui/theme/foundation.css'
 
 function App() {
   const [activeTab, setActiveTab] = useState('estoque')
-  const [activeEstoqueTopTab, setActiveEstoqueTopTab] = useState('geral')
+  const [activeEstoqueTopTab, setActiveEstoqueTopTab] = useState('overview')
   const [activeAtividadesTopTab, setActiveAtividadesTopTab] = useState('combo')
 
   const sidebarItems = [
@@ -39,8 +39,10 @@ function App() {
   )
 
   const estoqueTopTabs = [
-    { id: 'geral', label: 'Visão Geral' },
-    { id: 'lancamentos', label: 'Lançamentos' },
+    { id: 'overview', label: 'Visão Geral' },
+    { id: 'products', label: 'Produtos' },
+    { id: 'launches', label: 'Lançamentos' },
+    { id: 'movements', label: 'Entradas e Saídas' },
   ]
 
   const atividadesTopTabs = [
@@ -54,11 +56,12 @@ function App() {
   ) : null
 
   const currentLabel = sidebarItems.find(i => i.id === activeTab)?.label ?? activeTab
+  const estoqueView = activeEstoqueTopTab === 'products' ? 'products' : activeEstoqueTopTab === 'movements' ? 'movements' : 'overview'
 
   return (
     <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
       {activeTab === 'estoque' ? (
-        activeEstoqueTopTab === 'lancamentos' ? <LancamentosPage /> : <EstoquePage />
+        activeEstoqueTopTab === 'launches' ? <LancamentosPage /> : <EstoquePage view={estoqueView} />
       ) : activeTab === 'sellout' ? (
         <SellOutPage />
       ) : activeTab === 'atividades' && activeAtividadesTopTab === 'combo' ? (
