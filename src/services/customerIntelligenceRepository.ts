@@ -1,5 +1,6 @@
 import type { CustomerIntelligenceSupport } from '../domain/customerIntelligenceTypes';
 import { EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT } from '../domain/customerIntelligenceTypes';
+import { enrichAssortmentWith322 } from './customerIntelligence322';
 import {
   detectCustomerIntelligenceSource,
   mergeCustomerIntelligenceSupport,
@@ -60,10 +61,11 @@ export async function processCustomerIntelligenceFiles(files: File[], previous: 
     const kind = detectCustomerIntelligenceSource(workbook);
     if (kind === 'OFFICIAL_ASSORTMENT') {
       const parsed = parseOfficialAssortmentWorkbook(workbook);
+      const auxiliary322 = enrichAssortmentWith322(workbook, parsed.competences);
       result = mergeCustomerIntelligenceSupport(result, {
-        assortmentCompetences: parsed.competences,
+        assortmentCompetences: auxiliary322.competences,
         lineage: parsed.lineage,
-        source: { kind, fileName: file.name, note: `${parsed.competences.length} competência(s) oficial(is); ${parsed.lineage.length} vínculo(s) de migração/descontinuação.` },
+        source: { kind, fileName: file.name, note: `${parsed.competences.length} competência(s) oficial(is); ${parsed.lineage.length} vínculo(s) de migração/descontinuação; ${auxiliary322.matchedByEan} correspondência(s) complementada(s) pelo 322 sem alterar recomendação.` },
       });
       continue;
     }
