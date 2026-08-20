@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildStockPresentation } from '../src/domain/stockModel.ts';
-import type { CanonicalInventoryProduct, CanonicalSalesTransaction } from '../src/domain/canonical.ts';
+import type { StockPortfolioLine, StockPortfolioMovement } from '../src/domain/stockModel.ts';
+import type { CanonicalInventoryProduct, CanonicalProductSupport, CanonicalSalesTransaction } from '../src/domain/canonical.ts';
 
 function packaged(overrides: Partial<CanonicalInventoryProduct & { unitsPerCase: number }> = {}) {
   return {
@@ -19,6 +20,10 @@ function sale(overrides: Partial<CanonicalSalesTransaction> = {}): CanonicalSale
     internalProductCode: '100', productDescription: 'Produto', cases: 1, units: 15, value: 100, saleType: 'VENDA', line: '',
     ...overrides,
   };
+}
+
+function launchMaster(ean = '7891024999999'): CanonicalProductSupport {
+  return { sku: 'MAT-LANC', ean, description: 'Lançamento persistido', category: '', subcategory: '', brand: 'Marca', isLaunch: true, boxPrice: 0, unitPrice: 9.9, unitsPerCase: 12, line: '' };
 }
 
 test('motor de estoque usa Master/Un-CX carregado no inventário mesmo sem Lista de Preços', () => {
@@ -42,6 +47,36 @@ test('Carteira é reconciliada por SKU e regra Order Qty + Bill Qty está valida
   assert.equal(result.reconciliation.find(check => check.id === 'stock.portfolio.sku.100')?.status, 'OK');
   assert.equal(rule?.status, 'OK');
   assert.equal(rule?.calculated, 'Order Qty + Bill Qty');
+});
+
+test('Carteira preserva Order Qty e Bill Qty linha a linha na movimentação', () => {
+  const item = packaged({ pendingCases: 12, pendingQty: 144, pendingCost: 100, pendingSale: 130 }) as CanonicalInventoryProduct & { unitsPerCase: number; portfolioLines: StockPortfolioLine[] };
+  item.portfolioLines = [{ sourceRow: 7, materialCode: 'MAT1', orderQty: 5, billQty: 7, totalCases: 12, unitsPerCase: 12, totalUnits: 144, costValue: 100, saleValue: 130, internalCode: '100', ean: item.ean, description: item.description, hasWinthor: true }];
+  const result = buildStockPresentation({ inventory: [item], productSupport: [], hasStock8013: true });
+  const entries = result.movements.filter(movement => movement.kind === 'ENTRADA_PREVISTA_CARTEIRA') as StockPortfolioMovement[];
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].sourceRow, 7);
+  assert.equal(entries[0].orderQtyCases, 5);
+  assert.equal(entries[0].billQtyCases, 7);
+  assert.equal(entries[0].cases, 12);
+  assert.equal(entries[0].unitsPerCase, 12);
+  assert.equal(entries[0].totalUnits, 144);
+});
+
+test('lançamento persistido no suporte reaparece após novo snapshot de estoque', () => {
+  const ean = '7891024999999';
+  const result = buildStockPresentation({ inventory: [packaged({ ean: '7891024000001', factoryCode: 'MAT1', isLaunch: false })], productSupport: [launchMaster(ean)], hasStock8013: true });
+  const restored = result.products.find(product => product.ean === ean);
+  assert.ok(restored);
+  assert.equal(restored?.isLaunch, true);
+  assert.equal(result.summary.launchCount, 1);
+});
+
+test('lançamento marcado no suporte prevalece sobre flag zerada do snapshot', () => {
+  const ean = '7891024888888';
+  const result = buildStockPresentation({ inventory: [packaged({ ean, factoryCode: 'MAT-LANC', isLaunch: false })], productSupport: [launchMaster(ean)], hasStock8013: true });
+  assert.equal(result.products.find(product => product.ean === ean)?.isLaunch, true);
+  assert.equal(result.summary.launchCount, 1);
 });
 
 test('movimento usa caixas e calcula somente o residual comprovável como unidade avulsa', () => {

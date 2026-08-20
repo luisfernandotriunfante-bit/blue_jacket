@@ -1,192 +1,104 @@
 import React, { useMemo, useState } from 'react';
-import { useData, ProdutoEstoque } from '../store/DataContext';
-import {
-  PanelCard,
-  PanelEmptyState,
-  PanelKpi,
-  PanelPage,
-  PanelSectionHeader,
-} from '../ui/pattern/PanelVisual';
+import { useData } from '../store/DataContext';
+import { buildStockPresentation } from '../domain/stockModel';
+import { PanelCard, PanelEmptyState, PanelKpi, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
+import '../ui/stock/stock-layout.css';
 
-function formatCurrency(val: number) {
-  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
 }
 
-type SortKey = keyof ProdutoEstoque | 'totalCusto' | 'totalVenda';
-
-function hasPortfolioPending(product: ProdutoEstoque) {
-  return product.saldoPedido > 0 || (product.saldoPedidoValorCusto || 0) > 0;
-}
-
-function isUnresolvedLaunch(product: ProdutoEstoque) {
-  return product.hasWinthor === false
-    && !hasPortfolioPending(product)
-    && product.custoUnitario === 0
-    && product.vendaUnitario === 0
-    && product.quantidade === 0;
+function formatNumber(value: number, digits = 0) {
+  return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(Number(value) || 0);
 }
 
 export function LancamentosPage() {
-  const { isLoaded, produtos } = useData();
+  const { isLoaded, produtos, metricas, canonical } = useData();
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortConfig, setSortConfig] = useState<{ key: SortKey; direction: 'asc' | 'desc' } | null>(null);
 
-  const todosLancamentos = useMemo(() => [...produtos].filter(p => p.isLancamento), [produtos]);
+  const inventory = useMemo(() => canonical?.inventory || produtos.map(product => ({
+    code: product.codigo,
+    description: product.descricao,
+    ean: product.ean,
+    quantity: product.quantidade,
+    costUnit: product.custoUnitario,
+    saleUnit: product.vendaUnitario,
+    pendingQty: product.saldoPedido,
+    pendingCases: product.saldoPedidoCaixas || 0,
+    pendingCost: product.saldoPedidoValorCusto || 0,
+    pendingSale: product.saldoPedidoValorVenda || 0,
+    isLaunch: Boolean(product.isLancamento),
+    hasWinthor: product.hasWinthor !== false,
+    factoryCode: product.factoryCode || '',
+    physicalCases: product.physicalCases || 0,
+    physicalUnits: product.physicalUnits || 0,
+    grossKg: product.grossKg || 0,
+  })), [canonical, produtos]);
 
-  const sortedProdutos = useMemo(() => {
-    let sortableItems = [...todosLancamentos];
+  const hasStock8013 = Boolean(canonical?.sources?.some(source => source.kind === 'stock8013' && source.loaded))
+    || produtos.some(product => product.physicalUnits !== undefined || product.physicalCases !== undefined);
 
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      sortableItems = sortableItems.filter(p =>
-        p.codigo.toLowerCase().includes(term) ||
-        p.descricao.toLowerCase().includes(term) ||
-        p.ean.includes(searchTerm)
-      );
-    }
+  const presentation = useMemo(() => buildStockPresentation({
+    inventory,
+    productSupport: canonical?.support?.products || [],
+    itemCodeSupport: canonical?.support?.itemCodes || [],
+    transactions: canonical?.transactions || [],
+    businessDaysElapsed: canonical?.sellOut?.businessDaysElapsed || 0,
+    stockCostValue: metricas.valorEstoqueCompra,
+    stockSaleValue: metricas.valorEstoqueVenda,
+    hasStock8013,
+  }), [inventory, canonical, metricas.valorEstoqueCompra, metricas.valorEstoqueVenda, hasStock8013]);
 
-    if (sortConfig !== null) {
-      sortableItems.sort((a, b) => {
-        let valA: any = a[sortConfig.key as keyof ProdutoEstoque];
-        let valB: any = b[sortConfig.key as keyof ProdutoEstoque];
+  const launches = useMemo(() => presentation.products.filter(product => product.isLaunch), [presentation.products]);
+  const filtered = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return launches;
+    return launches.filter(product => [product.code, product.factoryCode, product.ean, product.description, product.brand]
+      .some(value => String(value || '').toLowerCase().includes(term)));
+  }, [launches, searchTerm]);
 
-        if (sortConfig.key === 'totalCusto') {
-          valA = a.quantidade * a.custoUnitario;
-          valB = b.quantidade * b.custoUnitario;
-        } else if (sortConfig.key === 'totalVenda') {
-          valA = a.quantidade * a.vendaUnitario;
-          valB = b.quantidade * b.vendaUnitario;
-        }
-
-        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
-        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
-        return 0;
-      });
-    }
-
-    return sortableItems;
-  }, [todosLancamentos, searchTerm, sortConfig]);
-
-  const totais = useMemo(() => {
-    let custo = 0;
-    let venda = 0;
-
-    for (const p of todosLancamentos) {
-      custo += (p.quantidade * p.custoUnitario) + (p.saldoPedidoValorCusto || 0);
-      venda += (p.quantidade * p.vendaUnitario) + (p.saldoPedidoValorVenda || 0);
-    }
-
-    return { custo, venda };
-  }, [todosLancamentos]);
-
-  const pendingCount = useMemo(
-    () => todosLancamentos.filter(isUnresolvedLaunch).length,
-    [todosLancamentos],
-  );
-
-  const requestSort = (key: SortKey) => {
-    let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
-    setSortConfig({ key, direction });
-  };
-
-  const getSortIcon = (key: SortKey) => {
-    if (!sortConfig || sortConfig.key !== key) return ' ↕';
-    return sortConfig.direction === 'asc' ? ' ↑' : ' ↓';
-  };
+  const inventoryByCode = useMemo(() => new Map(inventory.map(item => [item.code, item])), [inventory]);
+  const inventoryByEan = useMemo(() => new Map(inventory.filter(item => item.ean).map(item => [String(item.ean).replace(/\D/g, ''), item])), [inventory]);
+  const totals = useMemo(() => launches.reduce((acc, product) => {
+    const source = inventoryByCode.get(product.code) || inventoryByEan.get(String(product.ean || '').replace(/\D/g, ''));
+    const pendingCost = Number(source?.pendingCost) || 0;
+    const pendingSale = Number(source?.pendingSale) || (product.saleUnit > 0 ? product.pendingUnits * product.saleUnit : 0);
+    acc.currentCost += product.positionCostValue;
+    acc.currentSale += product.positionSaleValue;
+    acc.projectedCost += product.positionCostValue + pendingCost;
+    acc.projectedSale += product.positionSaleValue + pendingSale;
+    return acc;
+  }, { currentCost: 0, currentSale: 0, projectedCost: 0, projectedSale: 0 }), [launches, inventoryByCode, inventoryByEan]);
 
   if (!isLoaded) {
-    return (
-      <PanelEmptyState
-        icon="◆"
-        title="Nenhum dado carregado"
-        description={<>Vá até <strong>Configurações</strong> e faça o upload das planilhas.</>}
-      />
-    );
+    return <PanelEmptyState icon="◆" title="Nenhum dado carregado" description={<>Vá até <strong>Configurações</strong> e carregue a Lista Oficial de Lançamentos junto das bases operacionais.</>} />;
   }
 
-  return (
-    <PanelPage title="Lançamentos" metricLabel="Valor potencial de venda" metricValue={formatCurrency(totais.venda)}>
-      <div className="panel-stack">
-        <div className="panel-grid panel-grid-2">
-          <PanelKpi label="VLR VENDA LANÇAMENTOS" value={formatCurrency(totais.venda)} tone="red" />
-          <PanelKpi label="VLR CUSTO LANÇAMENTOS" value={formatCurrency(totais.custo)} tone="blue" />
-        </div>
+  const withStock = launches.filter(product => product.physicalTotalUnits > 0).length;
+  const inPortfolio = launches.filter(product => product.pendingUnits > 0 || product.pendingCases > 0).length;
+  const withSales = launches.filter(product => product.soldUnits > 0).length;
 
-        <PanelCard>
-          <PanelSectionHeader
-            eyebrow="PORTFÓLIO"
-            title={`Catálogo de Lançamentos (${todosLancamentos.length})`}
-            description={pendingCount > 0
-              ? `${pendingCount} EAN(s) da lista oficial ainda não possuem conciliação completa com os dados operacionais. Eles permanecem no catálogo e não entram nos valores enquanto não houver dado real.`
-              : 'Lançamento é definido exclusivamente pela lista oficial de EANs.'}
-            action={(
-              <input
-                className="panel-input"
-                type="text"
-                value={searchTerm}
-                placeholder="Buscar por código, EAN ou descrição..."
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            )}
-          />
-
-          <div className="panel-table-wrap">
-            <table className="panel-table">
-              <thead>
-                <tr>
-                  <th className="is-sortable" onClick={() => requestSort('codigo')}>Código{getSortIcon('codigo')}</th>
-                  <th className="is-sortable" onClick={() => requestSort('ean')}>EAN{getSortIcon('ean')}</th>
-                  <th className="is-sortable" onClick={() => requestSort('descricao')}>Descrição{getSortIcon('descricao')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('quantidade')}>Estoque (Un){getSortIcon('quantidade')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedidoCaixas')}>Carteira (Cx){getSortIcon('saldoPedidoCaixas')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('saldoPedido')}>Carteira (Un){getSortIcon('saldoPedido')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('custoUnitario')}>Custo Un.{getSortIcon('custoUnitario')}</th>
-                  <th className="is-sortable is-right" onClick={() => requestSort('vendaUnitario')}>Venda Un.{getSortIcon('vendaUnitario')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedProdutos.length === 0 ? (
-                  <tr><td colSpan={8} style={{ textAlign: 'center', padding: '32px' }} className="is-muted">Nenhum lançamento encontrado para o filtro informado.</td></tr>
-                ) : (
-                  sortedProdutos.map((p) => {
-                    const semWinthor = p.hasWinthor === false && hasPortfolioPending(p);
-                    const unresolved = isUnresolvedLaunch(p);
-                    return (
-                      <tr key={`${p.ean}-${p.codigo}`}>
-                        <td className="is-strong">{p.codigo.startsWith('EAN-') ? '—' : p.codigo}</td>
-                        <td className="is-muted">{p.ean || '—'}</td>
-                        <td>
-                          <div className="panel-badges">
-                            <span className="is-strong">{p.descricao}</span>
-                            <span className="panel-badge panel-badge-purple">LANÇAMENTO</span>
-                            {semWinthor && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}
-                            {unresolved && <span className="panel-badge">PENDENTE DE CONCILIAÇÃO</span>}
-                          </div>
-                        </td>
-                        <td className="is-right is-strong">{p.quantidade.toLocaleString('pt-BR')}</td>
-                        <td className="is-right is-amber">{(p.saldoPedidoCaixas || 0).toLocaleString('pt-BR')}</td>
-                        <td className="is-right is-amber">{p.saldoPedido.toLocaleString('pt-BR')}</td>
-                        <td className="is-right is-muted">{p.custoUnitario > 0 ? formatCurrency(p.custoUnitario) : '—'}</td>
-                        <td className="is-right">
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                            <span className="is-strong">{p.vendaUnitario > 0 ? formatCurrency(p.vendaUnitario) : '—'}</span>
-                            {p.vendaUnitario > 0 && p.custoUnitario > 0 && (
-                              <span className="is-green" style={{ fontSize: '0.7rem', fontWeight: 800 }}>
-                                {(((p.vendaUnitario - p.custoUnitario) / p.vendaUnitario) * 100).toFixed(1)}% M
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </PanelCard>
+  return <PanelPage title="Lançamentos" metricLabel="Potencial projetado" metricValue={formatCurrency(totals.projectedSale)}>
+    <div className="panel-stack">
+      <div className="stock-financial-grid">
+        <PanelKpi label="Lançamentos" value={formatNumber(launches.length)} detail={`${formatNumber(withStock)} com estoque · ${formatNumber(withSales)} com venda`} tone="purple" />
+        <PanelKpi label="Com estoque" value={formatNumber(withStock)} detail={`${formatNumber(Math.max(launches.length - withStock, 0))} sem estoque físico`} tone="green" />
+        <PanelKpi label="Na Carteira" value={formatNumber(inPortfolio)} detail="Entrada prevista ainda pendente" tone="blue" />
+        <PanelKpi label="Potencial projetado" value={formatCurrency(totals.projectedSale)} detail={`Atual: ${formatCurrency(totals.currentSale)} · Custo proj.: ${formatCurrency(totals.projectedCost)}`} tone="red" />
       </div>
-    </PanelPage>
-  );
+
+      <PanelCard>
+        <PanelSectionHeader eyebrow="PORTFÓLIO" title={`Catálogo oficial · ${filtered.length} de ${launches.length}`} description="Lançamento continua sendo definido exclusivamente pela lista oficial por EAN. O catálogo é reaplicado mesmo quando um novo snapshot de estoque é carregado sem reenviar a lista." action={<input className="panel-input" type="text" value={searchTerm} placeholder="Buscar código, EAN, fabricante, produto..." onChange={event => setSearchTerm(event.target.value)} />} />
+        <div className="panel-table-wrap stock-table-compact"><table className="panel-table">
+          <thead><tr><th>Código</th><th>Produto</th><th className="is-right">Un/CX</th><th className="is-right">Cx físicas</th><th className="is-right">Avulsas</th><th className="is-right">Físico un.</th><th className="is-right">Carteira cx</th><th className="is-right">Carteira un.</th><th className="is-right">Projetado</th><th className="is-right">Venda mês</th><th className="is-right">Cobertura</th><th className="is-right">Custo un.</th><th className="is-right">Venda ref.</th><th className="is-right">Potencial atual</th><th>Status</th></tr></thead>
+          <tbody>{filtered.length ? filtered.map(product => <tr key={`${product.ean}-${product.code}`}>
+            <td className="is-strong">{product.code.startsWith('EAN-') ? '—' : product.code}</td>
+            <td className="stock-product-cell"><div className="stock-product-name">{product.description}</div><div className="stock-product-meta">EAN: {product.ean || '—'} · Fab: {product.factoryCode || '—'}{product.brand ? ` · ${product.brand}` : ''}</div></td>
+            <td className="is-right">{product.unitsPerCase > 0 ? formatNumber(product.unitsPerCase, 2) : '—'}</td><td className="is-right">{formatNumber(product.physicalCases, 2)}</td><td className="is-right">{formatNumber(product.looseUnits)}</td><td className="is-right is-strong">{formatNumber(product.physicalTotalUnits)}</td><td className="is-right">{formatNumber(product.pendingCases, 2)}</td><td className="is-right is-blue">{formatNumber(product.pendingUnits)}</td><td className="is-right is-strong">{formatNumber(product.projectedUnits)}</td><td className="is-right">{formatNumber(product.soldUnits)}</td><td className="is-right">{product.coverageDays === null ? '—' : `${formatNumber(product.coverageDays, 1)} dias`}</td><td className="is-right is-muted">{product.costUnit > 0 ? formatCurrency(product.costUnit) : '—'}</td><td className="is-right">{product.saleUnit > 0 ? formatCurrency(product.saleUnit) : '—'}</td><td className="is-right is-strong">{formatCurrency(product.positionSaleValue)}</td>
+            <td><div className="panel-badges"><span className="panel-badge panel-badge-purple">LANÇAMENTO</span>{product.physicalTotalUnits > 0 ? <span className="panel-badge panel-badge-green">COM ESTOQUE</span> : <span className="panel-badge panel-badge-red">SEM ESTOQUE</span>}{product.pendingUnits > 0 && <span className="panel-badge panel-badge-blue">EM CARTEIRA</span>}{!product.hasWinthor && product.pendingUnits > 0 && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}</div></td>
+          </tr>) : <tr><td colSpan={15} className="is-muted" style={{ textAlign: 'center', padding: '30px' }}>Nenhum lançamento encontrado para o filtro informado.</td></tr>}</tbody>
+        </table></div>
+      </PanelCard>
+    </div>
+  </PanelPage>;
 }

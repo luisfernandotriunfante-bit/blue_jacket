@@ -1,0 +1,122 @@
+.stock-financial-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.stock-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stock-health-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.stock-stat {
+  min-width: 0;
+  padding: 16px 17px;
+  border: 1px solid var(--panel-card-border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.025));
+}
+
+.stock-stat-label {
+  margin-bottom: 7px;
+  color: var(--panel-muted);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.stock-stat-value {
+  color: var(--panel-text);
+  font-size: clamp(1.05rem, 1.8vw, 1.45rem);
+  font-weight: 820;
+  letter-spacing: -0.025em;
+}
+
+.stock-stat-note {
+  margin-top: 5px;
+  color: var(--panel-muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.stock-stat-red .stock-stat-value { color: #fca5a5; }
+.stock-stat-amber .stock-stat-value { color: #fcd34d; }
+.stock-stat-green .stock-stat-value { color: #86efac; }
+.stock-stat-blue .stock-stat-value { color: #93c5fd; }
+.stock-stat-purple .stock-stat-value { color: #c4b5fd; }
+
+.panel-badge-blue {
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.30);
+  background: rgba(59, 130, 246, 0.10);
+}
+
+.stock-product-cell {
+  min-width: 220px;
+}
+
+.stock-product-name {
+  color: var(--panel-text);
+  font-weight: 750;
+}
+
+.stock-product-meta {
+  margin-top: 4px;
+  color: var(--panel-muted);
+  font-size: 0.68rem;
+}
+
+.stock-inline-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--panel-separator);
+  border-radius: 12px;
+  color: var(--panel-muted);
+  background: rgba(0,0,0,0.14);
+  font-size: 0.72rem;
+}
+
+.stock-table-compact .panel-table td,
+.stock-table-compact .panel-table th {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.stock-alert-params {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--panel-separator);
+}
+
+.stock-alert-params summary {
+  width: fit-content;
+  color: var(--panel-muted-light);
+  font-size: 0.74rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+@media (max-width: 1200px) {
+  .stock-financial-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stock-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stock-health-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  .stock-financial-grid,
+  .stock-stat-grid,
+  .stock-health-grid { grid-template-columns: 1fr; }
+  .stock-inline-note { align-items: flex-start; flex-direction: column; }
+}

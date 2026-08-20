@@ -1,5 +1,5 @@
 import type { CanonicalInventoryProduct } from '../../domain/canonical';
-import type { Row, SalesTransaction, StockProduct } from './runtime';
+import type { PortfolioSourceLine, Row, SalesTransaction, StockProduct } from './runtime';
 import { canonicalCoordinatorName, cleanCode, cleanDigits, classifyLine, normalizeCnpj, normalizeText, parseNumber, toIsoDate } from './utils';
 import { parseCadastro286, parsePriceList } from './support';
 
@@ -54,8 +54,8 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
 }
 
 /** CARTEIRA Colgate: única origem do status SEM WINTHOR. */
-export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>, saleMarkup: number): { cost: number; sale: number; unresolved: number } {
-  let totalCost = 0; let totalSale = 0; let unresolved = 0;
+export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>, saleMarkup: number): { cost: number; sale: number; unresolved: number; lines: PortfolioSourceLine[] } {
+  let totalCost = 0; let totalSale = 0; let unresolved = 0; const lines: PortfolioSourceLine[] = [];
   const productsByEan = new Map<string, StockProduct>(); const productsByFactory = new Map<string, StockProduct>(); const cadastroByEan = new Map<string, string>();
   products.forEach(product => { const ean = cleanDigits(product.ean); const factory = cleanCode(product.factoryCode); if (ean) productsByEan.set(ean, product); if (factory) productsByFactory.set(factory, product); });
   cadastro.byInternal.forEach((item, internalCode) => { const ean = cleanDigits(item.ean); if (ean && !cadastroByEan.has(ean)) cadastroByEan.set(ean, internalCode); });
@@ -78,15 +78,17 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
     if (product && mappedInternal) { product.hasWinthor = true; if (!product.ean && cad?.ean) product.ean = cleanDigits(cad.ean); if (!product.factoryCode && cad?.factoryCode) product.factoryCode = cad.factoryCode; }
     if (!product) {
       const code = mappedInternal || `PORTFOLIO-${rawMaterial}`; product = products.get(code);
-      if (!product) { const initialUnitsPerCase = Math.max(master?.unitsPerCase || cad?.unitsPerCase || preliminaryCad?.unitsPerCase || 0, 0); product = { codigo: code, descricao: cad?.description || master?.description || `Item da carteira · ${rawMaterial}`, ean: cleanDigits(cad?.ean || master?.ean || ''), quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: Boolean(master?.isLaunch), hasWinthor: Boolean(mappedInternal), factoryCode: cad?.factoryCode || rawMaterial, unitsPerCase: initialUnitsPerCase }; products.set(code, product); productsByFactory.set(rawMaterial, product); if (product.ean) productsByEan.set(cleanDigits(product.ean), product); }
+      if (!product) { const initialUnitsPerCase = Math.max(master?.unitsPerCase || cad?.unitsPerCase || preliminaryCad?.unitsPerCase || 0, 0); product = { codigo: code, descricao: cad?.description || master?.description || `Item da carteira · ${rawMaterial}`, ean: cleanDigits(cad?.ean || master?.ean || ''), quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: Boolean(master?.isLaunch), hasWinthor: Boolean(mappedInternal), factoryCode: cad?.factoryCode || rawMaterial, unitsPerCase: initialUnitsPerCase, portfolioLines: [] }; products.set(code, product); productsByFactory.set(rawMaterial, product); if (product.ean) productsByEan.set(cleanDigits(product.ean), product); }
     }
     if (!product) { unresolved += 1; continue; }
     const unitsPerCase = Math.max(master?.unitsPerCase || cad?.unitsPerCase || preliminaryCad?.unitsPerCase || product.unitsPerCase || 0, 0); const portfolioUnits = unitsPerCase > 0 ? portfolioCases * unitsPerCase : 0;
     if (portfolioCases > 0 && unitsPerCase <= 0) unresolved += 1; if (unitsPerCase > 0 && !product.unitsPerCase) product.unitsPerCase = unitsPerCase;
     const portfolioSale = portfolioCost * (1 + Math.max(Number(saleMarkup) || 0, 0)); totalSale += portfolioSale;
+    const line: PortfolioSourceLine = { sourceRow: i + 1, materialCode: rawMaterial, orderQty: orderedQty, billQty: billedQty, totalCases: portfolioCases, unitsPerCase, totalUnits: portfolioUnits, costValue: portfolioCost, saleValue: portfolioSale, internalCode: mappedInternal || product.codigo, ean: product.ean || resolvedEan, description: product.descricao, hasWinthor: product.hasWinthor !== false };
+    lines.push(line); product.portfolioLines = [...(product.portfolioLines || []), line];
     product.saldoPedidoCaixas = (product.saldoPedidoCaixas || 0) + portfolioCases; product.saldoPedido += portfolioUnits; product.saldoPedidoValorCusto = (product.saldoPedidoValorCusto || 0) + portfolioCost; product.saldoPedidoValorVenda = (product.saldoPedidoValorVenda || 0) + portfolioSale; if (!product.factoryCode) product.factoryCode = rawMaterial;
   }
-  return { cost: totalCost, sale: totalSale, unresolved };
+  return { cost: totalCost, sale: totalSale, unresolved, lines };
 }
 
 /** Lista oficial carregada: única autoridade para LANÇAMENTO, por EAN. */
@@ -116,12 +118,15 @@ export function parseSales(rows: Row[], priceList: ReturnType<typeof parsePriceL
 }
 
 export function inventoryToCanonical(products: Map<string, StockProduct>): CanonicalInventoryProduct[] {
-  return Array.from(products.values()).map(product => ({ code: product.codigo, description: product.descricao, ean: product.ean, quantity: product.quantidade, costUnit: product.custoUnitario, saleUnit: product.vendaUnitario, pendingQty: product.saldoPedido, pendingCases: product.saldoPedidoCaixas || 0, pendingCost: product.saldoPedidoValorCusto || 0, pendingSale: product.saldoPedidoValorVenda || 0, isLaunch: Boolean(product.isLancamento), hasWinthor: product.hasWinthor !== false, factoryCode: product.factoryCode || '', physicalCases: product.physicalCases || 0, physicalUnits: product.physicalUnits || 0, grossKg: product.grossKg || 0, unitsPerCase: product.unitsPerCase || 0 } as CanonicalInventoryProduct & { unitsPerCase: number }));
+  return Array.from(products.values()).map(product => ({ code: product.codigo, description: product.descricao, ean: product.ean, quantity: product.quantidade, costUnit: product.custoUnitario, saleUnit: product.vendaUnitario, pendingQty: product.saldoPedido, pendingCases: product.saldoPedidoCaixas || 0, pendingCost: product.saldoPedidoValorCusto || 0, pendingSale: product.saldoPedidoValorVenda || 0, isLaunch: Boolean(product.isLancamento), hasWinthor: product.hasWinthor !== false, factoryCode: product.factoryCode || '', physicalCases: product.physicalCases || 0, physicalUnits: product.physicalUnits || 0, grossKg: product.grossKg || 0, unitsPerCase: product.unitsPerCase || 0, portfolioLines: (product.portfolioLines || []).map(line => ({ ...line })) } as CanonicalInventoryProduct & { unitsPerCase: number; portfolioLines?: PortfolioSourceLine[] }));
 }
 
 export function canonicalToInventory(items: CanonicalInventoryProduct[] | undefined): Map<string, StockProduct> {
   const result = new Map<string, StockProduct>();
-  (items || []).forEach(item => result.set(item.code, { codigo: item.code, descricao: item.description, ean: item.ean, quantidade: item.quantity, saldoMinimo: 0, custoUnitario: item.costUnit, vendaUnitario: item.saleUnit, entradas: 0, saidas: 0, saldoPedido: item.pendingQty, saldoPedidoCaixas: item.pendingCases || 0, saldoPedidoValorCusto: item.pendingCost, saldoPedidoValorVenda: item.pendingSale, isLancamento: item.isLaunch, hasWinthor: item.hasWinthor, factoryCode: item.factoryCode, physicalCases: item.physicalCases, physicalUnits: item.physicalUnits, grossKg: item.grossKg, unitsPerCase: (item as CanonicalInventoryProduct & { unitsPerCase?: number }).unitsPerCase || 0 }));
+  (items || []).forEach(item => {
+    const extended = item as CanonicalInventoryProduct & { unitsPerCase?: number; portfolioLines?: PortfolioSourceLine[] };
+    result.set(item.code, { codigo: item.code, descricao: item.description, ean: item.ean, quantidade: item.quantity, saldoMinimo: 0, custoUnitario: item.costUnit, vendaUnitario: item.saleUnit, entradas: 0, saidas: 0, saldoPedido: item.pendingQty, saldoPedidoCaixas: item.pendingCases || 0, saldoPedidoValorCusto: item.pendingCost, saldoPedidoValorVenda: item.pendingSale, isLancamento: item.isLaunch, hasWinthor: item.hasWinthor, factoryCode: item.factoryCode, physicalCases: item.physicalCases, physicalUnits: item.physicalUnits, grossKg: item.grossKg, unitsPerCase: extended.unitsPerCase || 0, portfolioLines: (extended.portfolioLines || []).map(line => ({ ...line })) });
+  });
   return result;
 }
 
@@ -132,9 +137,9 @@ export function refreshTransactionLines(transactions: SalesTransaction[], priceL
 export function mergePriorPhysical(products: Map<string, StockProduct>, prior: Map<string, StockProduct>) {
   const priorByEan = new Map(Array.from(prior.values()).filter(p => p.ean).map(p => [cleanDigits(p.ean), p]));
   products.forEach(product => { const old = prior.get(product.codigo) || (product.ean ? priorByEan.get(cleanDigits(product.ean)) : undefined); if (!old) return; product.physicalCases = old.physicalCases; product.physicalUnits = old.physicalUnits; product.grossKg = old.grossKg; product.isLancamento = Boolean(old.isLancamento) || Boolean(product.isLancamento); if (!product.ean && old.ean) product.ean = old.ean; if (!product.factoryCode && old.factoryCode) product.factoryCode = old.factoryCode; if (!product.unitsPerCase && old.unitsPerCase) product.unitsPerCase = old.unitsPerCase; });
-  prior.forEach((old, code) => { if (products.has(code)) return; if (!(old.physicalUnits || old.physicalCases || old.grossKg || old.isLancamento) && old.hasWinthor !== false) return; products.set(code, { ...old, quantidade: 0, saldoPedido: 0, saldoPedidoCaixas: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0 }); });
+  prior.forEach((old, code) => { if (products.has(code)) return; if (!(old.physicalUnits || old.physicalCases || old.grossKg || old.isLancamento) && old.hasWinthor !== false) return; products.set(code, { ...old, quantidade: 0, saldoPedido: 0, saldoPedidoCaixas: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, portfolioLines: [] }); });
 }
 
 export function clearPortfolio(products: Map<string, StockProduct>) {
-  for (const [code, product] of products.entries()) { if (code.startsWith('PORTFOLIO-')) { products.delete(code); continue; } product.saldoPedido = 0; product.saldoPedidoCaixas = 0; product.saldoPedidoValorCusto = 0; product.saldoPedidoValorVenda = 0; }
+  for (const [code, product] of products.entries()) { if (code.startsWith('PORTFOLIO-')) { products.delete(code); continue; } product.saldoPedido = 0; product.saldoPedidoCaixas = 0; product.saldoPedidoValorCusto = 0; product.saldoPedidoValorVenda = 0; product.portfolioLines = []; }
 }
