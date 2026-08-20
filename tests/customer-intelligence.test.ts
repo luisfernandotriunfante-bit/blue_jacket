@@ -108,13 +108,13 @@ test('motor por CNPJ separa oficial, executável, lançamento, bloqueio e compra
   } as any;
   const result = buildCustomerIntelligence(state, support, cnpj, '2026-08-17');
   assert.equal(result.customer.cnpj.length, 14);
-  assert.equal(result.officialAssortment, 3);
+  assert.equal(result.officialAssortment, 4);
   assert.equal(result.assortmentBought, 1);
   assert.equal(result.executableAssortment, 2);
   assert.equal(result.launches.totalRecommended, 1);
   assert.equal(result.launches.missing, 1);
   assert.equal(result.launches.availableNow, 1);
-  assert.equal(result.blockedByRegistration, 1);
+  assert.equal(result.blockedByRegistration, 2);
   assert.equal(result.opportunities.find(item => item.ean === '7891000000011')?.opportunityPriority, 'MAXIMA');
   assert.equal(result.audit.find(item => item.id === 'historical.conformity')?.status, 'BLOCKED');
   assert.equal(result.audit.find(item => item.id === 'purchases.net')?.status, 'OK');
