@@ -3,6 +3,7 @@ export * from './stockModelCore';
 import type { CanonicalInventoryProduct, CanonicalProductSupport } from './canonical';
 import { buildStockPresentation as buildCore } from './stockModelCore';
 import type { StockMovement, StockPresentationInput as CoreStockPresentationInput, StockPresentation, StockReconciliationCheck } from './stockModelCore';
+import { operationalReceiptMovements } from '../services/operationalSources';
 
 export interface StockItemCodeSupport { internalCode: string; ean: string; factoryCode: string; unitsPerCase?: number; }
 export interface StockPortfolioLine {
@@ -132,6 +133,15 @@ function enrichPortfolioMovements(result: StockPresentation, inventory: Canonica
   return { ...result, movements };
 }
 
+function enrichRealizedReceiptMovements(result: StockPresentation): StockPresentation {
+  const receipts = operationalReceiptMovements();
+  if (!receipts.length) return result;
+  const existingIds = new Set(result.movements.map(movement => movement.id));
+  const movements = [...receipts.filter(movement => !existingIds.has(movement.id)), ...result.movements]
+    .sort((left, right) => { if (left.date && right.date && left.date !== right.date) return right.date.localeCompare(left.date); if (left.date && !right.date) return -1; if (!left.date && right.date) return 1; return left.id.localeCompare(right.id); });
+  return { ...result, movements };
+}
+
 function hasPhysicalSnapshot(input: StockPresentationInputWithPackaging): boolean {
   if (!input.hasStock8013) return false;
   return input.inventory.some(item => (Number(item.physicalUnits) || 0) > 0 || (Number(item.physicalCases) || 0) > 0 || (Number(item.grossKg) || 0) > 0);
@@ -157,5 +167,5 @@ export function buildStockPresentation(input: StockPresentationInputWithPackagin
   const augmentedInput = { ...input, inventory: restoredInventory };
   const { itemCodeSupport: _itemCodeSupport, ...coreInput } = augmentedInput;
   const result = buildCore({ ...coreInput, hasStock8013: hasPhysicalSnapshot(augmentedInput), productSupport: augmentProductSupport(augmentedInput) });
-  return enrichReconciliation(enrichPortfolioMovements(enrichMovementPackaging(normalizePortfolioWinthor(result)), restoredInventory));
+  return enrichReconciliation(enrichRealizedReceiptMovements(enrichPortfolioMovements(enrichMovementPackaging(normalizePortfolioWinthor(result)), restoredInventory)));
 }
