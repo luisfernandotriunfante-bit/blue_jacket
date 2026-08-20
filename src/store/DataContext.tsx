@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useMemo, useState, ReactNode } from 'react';
 import { applyManualConfiguration, CanonicalState, CanonicalVendorResult, DEFAULT_MANUAL_CONFIGURATION, ManualConfiguration } from '../domain/canonical';
+import { applyOperationalOverrides, loadOperationalSourceState } from '../services/operationalSources';
+import { clearCanonicalState, LEGACY_CANONICAL_KEY, loadCanonicalState, safeLocalStorageWrite, saveCanonicalState } from './canonicalPersistence';
 import { competenceFromCanonical, loadManualConfiguration, normalizeManualConfiguration, saveManualConfiguration } from './competencePersistence';
 
 export interface ProdutoEstoque { codigo:string; descricao:string; ean:string; quantidade:number; saldoMinimo:number; custoUnitario:number; vendaUnitario:number; entradas:number; saidas:number; saldoPedido:number; saldoPedidoCaixas?:number; saldoPedidoValorCusto?:number; saldoPedidoValorVenda?:number; isLancamento?:boolean; hasWinthor?:boolean; factoryCode?:string; physicalCases?:number; physicalUnits?:number; grossKg?:number; }
@@ -78,43 +80,58 @@ function normalizeCanonicalTeam(state:CanonicalState|null,config:ManualConfigura
 export const DataProvider=({children}:{children:ReactNode})=>{
   const[produtosState,setProdutosState]=useState<ProdutoEstoque[]>([]);const[metricasState,setMetricasState]=useState<MetricasEstoque>(defaultMetricas);const[sellOut,setSellOutState]=useState<SellOutData|null>(null);const[canonicalBase,setCanonicalBase]=useState<CanonicalState|null>(null);const[manualConfig,setManualConfigState]=useState<ManualConfiguration>(DEFAULT_MANUAL_CONFIGURATION);const[isLoaded,setIsLoaded]=useState(false);
   React.useEffect(()=>{
-    const storedProdutos=readStored<ProdutoEstoque[]>('bj_produtos',[]);
-    const storedMetricas=readStored<MetricasEstoque>('bj_metricas',defaultMetricas);
-    const storedSellOut=readStored<SellOutData|null>('bj_sellout',null);
-    const storedCanonical=readStored<CanonicalState|null>('bj_canonical',null);
-    const competence=competenceFromCanonical(storedCanonical);
-    const storedManual=loadManualConfiguration(localStorage,competence,{migrateLegacy:Boolean(storedCanonical)}).config;
-    setProdutosState(storedProdutos);
-    setMetricasState({...defaultMetricas,...storedMetricas,metaCobertura:storedManual.coverageTargetDays});
-    setSellOutState(storedSellOut);
-    setCanonicalBase(storedCanonical);
-    setManualConfigState(storedManual);
-    setIsLoaded(Boolean(storedCanonical||storedSellOut||storedProdutos.length));
+    let cancelled=false;
+    const hydrate=async()=>{
+      const storedProdutos=readStored<ProdutoEstoque[]>('bj_produtos',[]);
+      const storedMetricas=readStored<MetricasEstoque>('bj_metricas',defaultMetricas);
+      const storedSellOut=readStored<SellOutData|null>('bj_sellout',null);
+      const storedCanonical=await loadCanonicalState(localStorage);
+      const competence=competenceFromCanonical(storedCanonical);
+      const storedManual=loadManualConfiguration(localStorage,competence,{migrateLegacy:Boolean(storedCanonical)}).config;
+      const operational=loadOperationalSourceState(localStorage);
+      const hydratedCanonical=storedCanonical?applyOperationalOverrides(storedCanonical,operational,storedManual).canonical:null;
+      if(hydratedCanonical){
+        void saveCanonicalState(hydratedCanonical).catch(error=>console.error('Não foi possível atualizar o cache canônico no IndexedDB.',error));
+      }
+      if(cancelled)return;
+      setProdutosState(storedProdutos);
+      setMetricasState({...defaultMetricas,...storedMetricas,metaCobertura:storedManual.coverageTargetDays});
+      setSellOutState(storedSellOut);
+      setCanonicalBase(hydratedCanonical);
+      setManualConfigState(storedManual);
+      setIsLoaded(Boolean(hydratedCanonical||storedSellOut||storedProdutos.length));
+    };
+    void hydrate().catch(error=>console.error('Não foi possível restaurar a base salva.',error));
+    return()=>{cancelled=true};
   },[]);
   const activeCompetence=useMemo(()=>competenceFromCanonical(canonicalBase),[canonicalBase]);
   const canonical=useMemo(()=>normalizeCanonicalTeam(applyManualConfiguration(canonicalBase,manualConfig),manualConfig),[canonicalBase,manualConfig]);
   const produtos=useMemo<ProdutoEstoque[]>(()=>canonical?canonical.inventory.map(item=>({codigo:item.code,descricao:item.description,ean:item.ean,quantidade:item.quantity,saldoMinimo:0,custoUnitario:item.costUnit,vendaUnitario:item.saleUnit,entradas:0,saidas:0,saldoPedido:item.pendingQty,saldoPedidoCaixas:item.pendingCases,saldoPedidoValorCusto:item.pendingCost,saldoPedidoValorVenda:item.pendingSale,isLancamento:item.isLaunch,hasWinthor:item.hasWinthor,factoryCode:item.factoryCode,physicalCases:item.physicalCases,physicalUnits:item.physicalUnits,grossKg:item.grossKg})):produtosState,[canonical,produtosState]);
   const metricas=useMemo<MetricasEstoque>(()=>canonical?{valorEstoqueCompra:canonical.stock.costValue,valorEstoqueVenda:canonical.stock.saleValue,saldoPedidoCusto:canonical.stock.pendingPurchaseCost,saldoPedidoVenda:canonical.stock.pendingPurchaseSale,coberturaDiasAtual:canonical.stock.coverageCurrentDays,coberturaEstoqueMaisSaldo:canonical.stock.coverageProjectedDays,coberturaDiasAtualCusto:canonical.stock.coverageCostCurrentDays,coberturaEstoqueMaisSaldoCusto:canonical.stock.coverageCostProjectedDays,produtosRuptura:canonical.inventory.filter(item=>item.hasWinthor&&item.quantity<=0).length,metaCobertura:canonical.stock.coverageTargetDays}:metricasState,[canonical,metricasState]);
-  const setProdutos=(newProdutos:ProdutoEstoque[])=>{setProdutosState(newProdutos);localStorage.setItem('bj_produtos',JSON.stringify(newProdutos));if(newProdutos.length>0)setIsLoaded(true)};
-  const setMetricas=(newMetricas:MetricasEstoque)=>{const normalized={...defaultMetricas,...newMetricas,metaCobertura:manualConfig.coverageTargetDays};setMetricasState(normalized);localStorage.setItem('bj_metricas',JSON.stringify(normalized))};
-  const setSellOut=(data:SellOutData|null)=>{setSellOutState(data);if(data){localStorage.setItem('bj_sellout',JSON.stringify(data));setIsLoaded(true)}else localStorage.removeItem('bj_sellout')};
+  const setProdutos=(newProdutos:ProdutoEstoque[])=>{setProdutosState(newProdutos);safeLocalStorageWrite(localStorage,'bj_produtos',JSON.stringify(newProdutos));if(newProdutos.length>0)setIsLoaded(true)};
+  const setMetricas=(newMetricas:MetricasEstoque)=>{const normalized={...defaultMetricas,...newMetricas,metaCobertura:manualConfig.coverageTargetDays};setMetricasState(normalized);safeLocalStorageWrite(localStorage,'bj_metricas',JSON.stringify(normalized))};
+  const setSellOut=(data:SellOutData|null)=>{setSellOutState(data);if(data){safeLocalStorageWrite(localStorage,'bj_sellout',JSON.stringify(data));setIsLoaded(true)}else localStorage.removeItem('bj_sellout')};
   const setCanonical=(data:CanonicalState|null)=>{
     const nextCompetence=competenceFromCanonical(data);
     setCanonicalBase(data);
     if(data){
-      localStorage.setItem('bj_canonical',JSON.stringify(data));
+      // Libera imediatamente a quota ocupada pela versão antiga e persiste a base grande no IndexedDB.
+      localStorage.removeItem(LEGACY_CANONICAL_KEY);
+      void saveCanonicalState(data).catch(error=>console.error('Não foi possível persistir a base canônica no IndexedDB.',error));
       if(nextCompetence&&nextCompetence!==activeCompetence){
         const nextConfig=loadManualConfiguration(localStorage,nextCompetence).config;
         setManualConfigState(nextConfig);
         setMetricasState(current=>({...current,metaCobertura:nextConfig.coverageTargetDays}));
       }
       setIsLoaded(true);
-    }else localStorage.removeItem('bj_canonical');
+    }else{
+      void clearCanonicalState(localStorage);
+    }
   };
   const setManualConfig=(config:ManualConfiguration)=>{
     const normalized=normalizeManualConfiguration(config);
     setManualConfigState(normalized);
-    if(activeCompetence)saveManualConfiguration(localStorage,activeCompetence,normalized);
+    if(activeCompetence){try{saveManualConfiguration(localStorage,activeCompetence,normalized)}catch(error){console.error('Não foi possível salvar as configurações da competência.',error)}}
     setMetricasState(current=>({...current,metaCobertura:normalized.coverageTargetDays}));
   };
   return <DataContext.Provider value={{produtos,setProdutos,metricas,setMetricas,sellOut,setSellOut,canonical,setCanonical,manualConfig,setManualConfig,isLoaded}}>{children}</DataContext.Provider>;
