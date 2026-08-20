@@ -27,10 +27,11 @@ test('cobertura igual ou acima da meta é OK', () => {
   assert.equal(classifyStockRisk({ hasWinthor:true, quantity:100, soldUnits:100, coverageDays:15, pendingQty:0, coverageTargetDays:15 }), 'ok');
 });
 
-test('filtro de risco é independente do filtro de lançamentos na tela', () => {
+test('filtro de risco continua independente do filtro de catálogo na tela reformulada', () => {
   const source = readFileSync(new URL('../src/pages/EstoquePage.tsx', import.meta.url), 'utf8');
   assert.match(source, /const \[activeFilter, setActiveFilter\]/);
   assert.match(source, /const \[statusFilter, setStatusFilter\]/);
-  assert.match(source, /p\.isLancamento &&/);
+  assert.match(source, /activeFilter === 'lancamento' && !product\.isLaunch/);
   assert.match(source, /statusFilter !== 'todos'/);
+  assert.match(source, /riskStatusByCode\.get\(product\.code\) !== statusFilter/);
 });
