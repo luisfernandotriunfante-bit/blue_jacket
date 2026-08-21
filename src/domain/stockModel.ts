@@ -79,10 +79,18 @@ function augmentProductSupport(input: StockPresentationInputWithPackaging): Cano
   return result;
 }
 
-/** hasWinthor é fato cadastral. O KPI operacional Sem Winthor continua restrito a itens com Carteira, sem alterar esse fato. */
+/** hasWinthor é fato cadastral. O KPI e o alerta operacional Sem Winthor só dependem da presença real na Carteira. */
 function refreshOperationalNoWinthorCount(result: StockPresentation): StockPresentation {
-  const noWinthorCount = result.products.filter(product => !product.hasWinthor && (product.pendingUnits > 0 || product.pendingCases > 0)).length;
-  return { ...result, summary: { ...result.summary, noWinthorCount } };
+  const products = result.products.map(product => {
+    const operationalNoWinthor = !product.hasWinthor && (product.pendingUnits > 0 || product.pendingCases > 0);
+    const withoutOldAlert = product.alerts.filter(alert => alert.kind !== 'SEM_WINTHOR');
+    const alerts = operationalNoWinthor
+      ? [...withoutOldAlert, { id: `SEM_WINTHOR:${product.code}`, kind: 'SEM_WINTHOR' as const, severity: 'warning' as const, sku: product.code, ean: product.ean, product: product.description, message: 'Item da Carteira sem correspondência confirmada no Cadastro 286 / Winthor.' }]
+      : withoutOldAlert;
+    return { ...product, alerts };
+  });
+  const noWinthorCount = products.filter(product => !product.hasWinthor && (product.pendingUnits > 0 || product.pendingCases > 0)).length;
+  return { ...result, products, alerts: products.flatMap(product => product.alerts), summary: { ...result.summary, noWinthorCount } };
 }
 
 function enrichMovementPackaging(result: StockPresentation): StockPresentation {
