@@ -54,26 +54,10 @@ export function parseStock105(rows: Row[], cadastro: ReturnType<typeof parseCada
     const quantity = parseNumber(row[columns.quantity]);
     const packaging = deriveUnitsPerCaseFrom105(quantity, columns.masterEquivalent >= 0 ? parseNumber(row[columns.masterEquivalent]) : 0);
     products.set(code, {
-      codigo: code,
-      descricao: String(row[columns.description] ?? '').trim() || cad?.description || '',
-      ean: cad?.ean || '',
-      quantidade: quantity,
-      saldoMinimo: 0,
-      custoUnitario: parseNumber(row[columns.cost]),
-      vendaUnitario: parseNumber(row[columns.sale]),
-      entradas: 0,
-      saidas: 0,
-      saldoPedido: 0,
-      saldoPedidoValorCusto: 0,
-      saldoPedidoValorVenda: 0,
-      isLancamento: false,
-      hasWinthor: true,
-      factoryCode: cad?.factoryCode,
-      unitsPerCase: packaging.unitsPerCase,
-      unitsPerCaseSource: packaging.source,
-      unitsPerCaseCandidates: packaging.candidates,
-      unitsPerCaseConflict: packaging.conflict,
-      unitsPerCaseNote: packaging.note,
+      codigo: code, descricao: String(row[columns.description] ?? '').trim() || cad?.description || '', ean: cad?.ean || '', quantidade: quantity,
+      saldoMinimo: 0, custoUnitario: parseNumber(row[columns.cost]), vendaUnitario: parseNumber(row[columns.sale]), entradas: 0, saidas: 0,
+      saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: false, hasWinthor: true, factoryCode: cad?.factoryCode,
+      unitsPerCase: packaging.unitsPerCase, unitsPerCaseSource: packaging.source, unitsPerCaseCandidates: packaging.candidates, unitsPerCaseConflict: packaging.conflict, unitsPerCaseNote: packaging.note,
     });
   }
   const items = Array.from(products.values());
@@ -90,12 +74,7 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i]; const ean = cleanDigits(row[4]); if (!ean) continue;
     const master = priceList.byEan.get(ean); const existing = productsByEan.get(ean) || (master?.sku ? productsByFactory.get(cleanCode(master.sku)) : undefined);
-    if (existing) {
-      existing.physicalCases = parseNumber(row[12]); existing.physicalUnits = parseNumber(row[11]); existing.grossKg = parseNumber(row[13]);
-      if (!existing.ean) existing.ean = ean;
-      if (master?.unitsPerCase) applyPackagingCandidate(existing, master.unitsPerCase, 'PRICE_LIST');
-      productsByEan.set(ean, existing); continue;
-    }
+    if (existing) { existing.physicalCases = parseNumber(row[12]); existing.physicalUnits = parseNumber(row[11]); existing.grossKg = parseNumber(row[13]); if (!existing.ean) existing.ean = ean; if (master?.unitsPerCase) applyPackagingCandidate(existing, master.unitsPerCase, 'PRICE_LIST'); productsByEan.set(ean, existing); continue; }
     let code = master?.sku || `EAN-${ean}`; if (products.has(code)) code = `EAN-${ean}`;
     const product: StockProduct = { codigo: code, descricao: String(row[6] ?? '').trim() || master?.description || '', ean, quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: false, hasWinthor: false, physicalCases: parseNumber(row[12]), physicalUnits: parseNumber(row[11]), grossKg: parseNumber(row[13]), factoryCode: master?.sku, unitsPerCase: 0, unitsPerCaseSource: 'UNKNOWN', unitsPerCaseCandidates: [], unitsPerCaseConflict: false };
     if (master?.unitsPerCase) applyPackagingCandidate(product, master.unitsPerCase, 'PRICE_LIST');
@@ -103,16 +82,35 @@ export function mergeStock8013(rows: Row[], products: Map<string, StockProduct>,
   }
 }
 
+function portfolioColumns(rows: Row[]) {
+  const headerIndex = rows.findIndex(row => {
+    const values=row.map(normalizeText);
+    return values.some(value=>value==='MATERIAL'||value.includes('MATERIAL CODE')) && values.some(value=>value.includes('ORDER QTY')) && values.some(value=>value.includes('BILL QTY')) && values.some(value=>value.includes('NET VALUE'));
+  });
+  if (headerIndex < 0) throw new Error('Carteira: layout não reconhecido pelo motor canônico. MATERIAL, ORDER QTY, BILL QTY e NET VALUE são obrigatórios; nenhum fallback posicional foi aplicado.');
+  const header=rows[headerIndex].map(normalizeText);
+  const required=(label:string,predicate:(value:string)=>boolean)=>{const index=header.findIndex(predicate);if(index<0)throw new Error(`Carteira: coluna obrigatória ${label} ausente.`);return index};
+  return {
+    headerIndex,
+    material:required('MATERIAL',value=>value==='MATERIAL'||value.includes('MATERIAL CODE')),
+    description:header.findIndex(value=>value.includes('MATERIAL DESC')||value==='DESCRIPTION'||value==='DESCRICAO'),
+    orderQty:required('ORDER QTY',value=>value.includes('ORDER QTY')),
+    billQty:required('BILL QTY',value=>value.includes('BILL QTY')),
+    cost:required('NET VALUE',value=>value.includes('NET VALUE')),
+  };
+}
+
 /** CARTEIRA Colgate: única origem do status SEM WINTHOR. */
 export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>, cadastro: ReturnType<typeof parseCadastro286>, priceList: ReturnType<typeof parsePriceList>, saleMarkup: number): { cost: number; sale: number; unresolved: number; lines: PortfolioSourceLine[] } {
   let totalCost = 0; let totalSale = 0; let unresolved = 0; const lines: PortfolioSourceLine[] = [];
+  const columns=portfolioColumns(rows);
   const productsByEan = new Map<string, StockProduct>(); const productsByFactory = new Map<string, StockProduct>(); const cadastroByEan = new Map<string, string>();
   products.forEach(product => { const ean = cleanDigits(product.ean); const factory = cleanCode(product.factoryCode); if (ean) productsByEan.set(ean, product); if (factory) productsByFactory.set(factory, product); });
   cadastro.byInternal.forEach((item, internalCode) => { const ean = cleanDigits(item.ean); if (ean && !cadastroByEan.has(ean)) cadastroByEan.set(ean, internalCode); });
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i]; const orderedQty = Math.max(parseNumber(row[6]), 0); const billedQty = Math.max(parseNumber(row[7]), 0);
+  for (let i = columns.headerIndex+1; i < rows.length; i++) {
+    const row = rows[i]; const orderedQty = Math.max(parseNumber(row[columns.orderQty]), 0); const billedQty = Math.max(parseNumber(row[columns.billQty]), 0);
     const portfolioCases = orderedQty + billedQty;
-    const portfolioCost = Math.max(parseNumber(row[8]), 0); const rawMaterial = cleanCode(row[4]);
+    const portfolioCost = Math.max(parseNumber(row[columns.cost]), 0); const rawMaterial = cleanCode(row[columns.material]);
     if (portfolioCases <= 0 && portfolioCost <= 0) continue; totalCost += portfolioCost;
     if (!rawMaterial) { unresolved += 1; continue; }
     const directInternal = cadastro.byInternal.has(rawMaterial) ? rawMaterial : ''; const factoryInternal = cadastro.factoryToInternal.get(rawMaterial) || ''; const preliminaryInternal = directInternal || factoryInternal;
@@ -126,11 +124,7 @@ export function applyPortfolio(rows: Row[], products: Map<string, StockProduct>,
     if (product && mappedInternal) { product.hasWinthor = true; if (!product.ean && cad?.ean) product.ean = cleanDigits(cad.ean); if (!product.factoryCode && cad?.factoryCode) product.factoryCode = cad.factoryCode; }
     if (!product) {
       const code = mappedInternal || `PORTFOLIO-${rawMaterial}`; product = products.get(code);
-      if (!product) {
-        product = { codigo: code, descricao: cad?.description || master?.description || `Item da carteira · ${rawMaterial}`, ean: cleanDigits(cad?.ean || master?.ean || ''), quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: Boolean(master?.isLaunch), hasWinthor: Boolean(mappedInternal), factoryCode: cad?.factoryCode || rawMaterial, unitsPerCase: 0, unitsPerCaseSource: 'UNKNOWN', unitsPerCaseCandidates: [], unitsPerCaseConflict: false, portfolioLines: [] };
-        if (master?.unitsPerCase) applyPackagingCandidate(product, master.unitsPerCase, 'PRICE_LIST');
-        products.set(code, product); productsByFactory.set(rawMaterial, product); if (product.ean) productsByEan.set(cleanDigits(product.ean), product);
-      }
+      if (!product) { product = { codigo: code, descricao: cad?.description || master?.description || `Item da carteira · ${rawMaterial}`, ean: cleanDigits(cad?.ean || master?.ean || ''), quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: Boolean(master?.isLaunch), hasWinthor: Boolean(mappedInternal), factoryCode: cad?.factoryCode || rawMaterial, unitsPerCase: 0, unitsPerCaseSource: 'UNKNOWN', unitsPerCaseCandidates: [], unitsPerCaseConflict: false, portfolioLines: [] }; if (master?.unitsPerCase) applyPackagingCandidate(product, master.unitsPerCase, 'PRICE_LIST'); products.set(code, product); productsByFactory.set(rawMaterial, product); if (product.ean) productsByEan.set(cleanDigits(product.ean), product); }
     }
     if (!product) { unresolved += 1; continue; }
     if (master?.unitsPerCase) applyPackagingCandidate(product, master.unitsPerCase, 'PRICE_LIST');
@@ -152,12 +146,7 @@ export function applyLaunchList(rows: Row[], products: Map<string, StockProduct>
   for (let i = start; i < rows.length; i++) {
     const row = rows[i]; const ean = cleanDigits(eanColumn >= 0 ? row[eanColumn] : row[3]); if (!ean || seen.has(ean)) continue; seen.add(ean);
     let product = productsByEan.get(ean); const master = priceList.byEan.get(ean); const sourceDescription = descriptionColumn >= 0 ? String(row[descriptionColumn] ?? '').trim() : '';
-    if (!product && master) {
-      let catalogCode = master.sku || `EAN-${ean}`; if (products.has(catalogCode)) catalogCode = `EAN-${ean}`;
-      product = { codigo: catalogCode, descricao: master.description || sourceDescription || `Lançamento ${ean}`, ean, quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: true, hasWinthor: false, factoryCode: master.sku, unitsPerCase: 0, unitsPerCaseSource: 'UNKNOWN', unitsPerCaseCandidates: [], unitsPerCaseConflict: false };
-      if (master.unitsPerCase) applyPackagingCandidate(product, master.unitsPerCase, 'PRICE_LIST');
-      products.set(catalogCode, product); productsByEan.set(ean, product);
-    }
+    if (!product && master) { let catalogCode = master.sku || `EAN-${ean}`; if (products.has(catalogCode)) catalogCode = `EAN-${ean}`; product = { codigo: catalogCode, descricao: master.description || sourceDescription || `Lançamento ${ean}`, ean, quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: true, hasWinthor: false, factoryCode: master.sku, unitsPerCase: 0, unitsPerCaseSource: 'UNKNOWN', unitsPerCaseCandidates: [], unitsPerCaseConflict: false }; if (master.unitsPerCase) applyPackagingCandidate(product, master.unitsPerCase, 'PRICE_LIST'); products.set(catalogCode, product); productsByEan.set(ean, product); }
     if (!product) { const catalogCode = `EAN-${ean}`; product = { codigo: catalogCode, descricao: sourceDescription || `Lançamento sem cadastro · ${ean}`, ean, quantidade: 0, saldoMinimo: 0, custoUnitario: 0, vendaUnitario: 0, entradas: 0, saidas: 0, saldoPedido: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, isLancamento: true, hasWinthor: false, factoryCode: '', unitsPerCase: 0, unitsPerCaseSource: 'UNKNOWN', unitsPerCaseCandidates: [], unitsPerCaseConflict: false }; products.set(catalogCode, product); productsByEan.set(ean, product); unresolved += 1; } else { product.isLancamento = true; matched += 1; }
     if (master) master.isLaunch = true;
   }
@@ -170,7 +159,10 @@ export function parseSales(rows: Row[], priceList: ReturnType<typeof parsePriceL
     const row = rows[i]; const statusRaw = normalizeText(row[15]); const status = statusRaw === 'FATURADO' ? 'FATURADO' : statusRaw === 'A FATURAR' ? 'A FATURAR' : ''; if (!status) continue;
     const saleType = normalizeText(row[32]); if (saleType && saleType !== 'VENDA') continue; const value = parseNumber(row[31]); if (!value) continue;
     const ean = cleanDigits(row[22] || row[23]); const manufacturerCode = cleanCode(row[21]); const description = String(row[25] ?? '').trim(); const master = priceList.byEan.get(ean) || priceList.bySku.get(manufacturerCode); const normalizedCnpj=normalizeCnpj(row[5]);
-    transactions.push({ date: toIsoDate(row[2] || row[12]), status, clientCode: cleanCode(row[3]), clientName: String(row[4] ?? '').trim(), cnpj: normalizedCnpj.canonical || `CLIENTE:${cleanCode(row[3])}`, cnpjRaw: normalizedCnpj.raw, cnpjNormalizationStatus: normalizedCnpj.status, city: String(row[7] ?? '').trim(), vendorCode: cleanCode(row[17]), vendorName: String(row[18] ?? '').trim(), supervisorCode: cleanCode(row[19]), supervisorName: canonicalCoordinatorName(row[20]), manufacturerCode, ean, internalProductCode: cleanCode(row[24]), productDescription: description, cases: parseNumber(row[26]), units: parseNumber(row[27]), value, saleType, line: master?.line || classifyLine(description, master?.category, master?.subcategory) });
+    const clientCode=cleanCode(row[3]); const clientName=String(row[4] ?? '').trim();
+    const cnpj=/^\d{14}$/.test(normalizedCnpj.canonical)?normalizedCnpj.canonical:'';
+    const customerKey=cnpj || (clientCode?`CLIENTE:${clientCode}`:`NOME:${normalizeText(clientName)}`);
+    transactions.push({ date: toIsoDate(row[2] || row[12]), status, clientCode, clientName, customerKey, cnpj, cnpjRaw: normalizedCnpj.raw, cnpjNormalizationStatus: normalizedCnpj.status, city: String(row[7] ?? '').trim(), vendorCode: cleanCode(row[17]), vendorName: String(row[18] ?? '').trim(), supervisorCode: cleanCode(row[19]), supervisorName: canonicalCoordinatorName(row[20]), manufacturerCode, ean, internalProductCode: cleanCode(row[24]), productDescription: description, cases: parseNumber(row[26]), units: parseNumber(row[27]), value, saleType, line: master?.line || classifyLine(description, master?.category, master?.subcategory) });
   }
   return transactions;
 }
@@ -194,14 +186,7 @@ export function refreshTransactionLines(transactions: SalesTransaction[], priceL
 
 export function mergePriorPhysical(products: Map<string, StockProduct>, prior: Map<string, StockProduct>) {
   const priorByEan = new Map(Array.from(prior.values()).filter(p => p.ean).map(p => [cleanDigits(p.ean), p]));
-  products.forEach(product => {
-    const old = prior.get(product.codigo) || (product.ean ? priorByEan.get(cleanDigits(product.ean)) : undefined); if (!old) return;
-    product.physicalCases = old.physicalCases; product.physicalUnits = old.physicalUnits; product.grossKg = old.grossKg; product.isLancamento = Boolean(old.isLancamento) || Boolean(product.isLancamento);
-    if (!product.ean && old.ean) product.ean = old.ean; if (!product.factoryCode && old.factoryCode) product.factoryCode = old.factoryCode;
-    if ((!product.unitsPerCase || product.unitsPerCaseSource === 'UNKNOWN') && old.unitsPerCase && old.unitsPerCaseSource && old.unitsPerCaseSource !== 'UNKNOWN') {
-      product.unitsPerCase = old.unitsPerCase; product.unitsPerCaseSource = old.unitsPerCaseSource; product.unitsPerCaseCandidates = (old.unitsPerCaseCandidates || []).map(candidate => ({ ...candidate })); product.unitsPerCaseConflict = Boolean(old.unitsPerCaseConflict); product.unitsPerCaseNote = old.unitsPerCaseNote;
-    }
-  });
+  products.forEach(product => { const old = prior.get(product.codigo) || (product.ean ? priorByEan.get(cleanDigits(product.ean)) : undefined); if (!old) return; product.physicalCases = old.physicalCases; product.physicalUnits = old.physicalUnits; product.grossKg = old.grossKg; product.isLancamento = Boolean(old.isLancamento) || Boolean(product.isLancamento); if (!product.ean && old.ean) product.ean = old.ean; if (!product.factoryCode && old.factoryCode) product.factoryCode = old.factoryCode; if ((!product.unitsPerCase || product.unitsPerCaseSource === 'UNKNOWN') && old.unitsPerCase && old.unitsPerCaseSource && old.unitsPerCaseSource !== 'UNKNOWN') { product.unitsPerCase = old.unitsPerCase; product.unitsPerCaseSource = old.unitsPerCaseSource; product.unitsPerCaseCandidates = (old.unitsPerCaseCandidates || []).map(candidate => ({ ...candidate })); product.unitsPerCaseConflict = Boolean(old.unitsPerCaseConflict); product.unitsPerCaseNote = old.unitsPerCaseNote; } });
   prior.forEach((old, code) => { if (products.has(code)) return; if (!(old.physicalUnits || old.physicalCases || old.grossKg || old.isLancamento) && old.hasWinthor !== false) return; products.set(code, { ...old, quantidade: 0, saldoPedido: 0, saldoPedidoCaixas: 0, saldoPedidoValorCusto: 0, saldoPedidoValorVenda: 0, portfolioLines: [] }); });
 }
 
