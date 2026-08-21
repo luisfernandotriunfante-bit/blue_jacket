@@ -1,4 +1,4 @@
-import type { CanonicalNetworkResult, CanonicalSalesTransaction, CanonicalState } from '../domain/canonical';
+import type { CanonicalNetworkResult, CanonicalState } from '../domain/canonical';
 import { TemplateWorkbook, type TemplateCellValue } from './templateWorkbook';
 
 const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
@@ -52,17 +52,6 @@ function currentVendorFor(state:CanonicalState, code:string) {
   return state.vendors.find(vendor => vendor.newCode === code || vendor.oldCode === code);
 }
 
-function dominantVendorByClient(transactions:CanonicalSalesTransaction[]):Map<string,string> {
-  const values = new Map<string,Map<string,number>>();
-  transactions.forEach(transaction => {
-    if (!transaction.cnpj || !transaction.vendorCode) return;
-    if (!values.has(transaction.cnpj)) values.set(transaction.cnpj,new Map());
-    const vendors = values.get(transaction.cnpj)!;
-    vendors.set(transaction.vendorCode,(vendors.get(transaction.vendorCode)||0)+transaction.value);
-  });
-  return new Map(Array.from(values.entries()).map(([cnpj,vendors]) => [cnpj,Array.from(vendors.entries()).sort((a,b)=>b[1]-a[1])[0]?.[0]||'']));
-}
-
 function fillPanelSummary(workbook:TemplateWorkbook,state:CanonicalState) {
   const sheet = 'SELL OUT - Milenio 2026';
   const summary = state.sellOut;
@@ -77,7 +66,7 @@ function fillPanelSummary(workbook:TemplateWorkbook,state:CanonicalState) {
     M5: summary.neededDailyAverage, N5: ratio(summary.neededDailyAverage,dailyTarget),
     M8: summary.sellOutTarget, M9: summary.invoiced, N9: ratio(summary.invoiced,summary.sellOutTarget),
     M10: summary.invoicedTrend, N10: ratio(summary.invoicedTrend,summary.sellOutTarget),
-    M11: summary.total, N11: ratio(summary.total,summary.sellOutTarget),
+    M11: summary.total, N11: summary.attainment,
     M12: summary.totalTrend, N12: ratio(summary.totalTrend,summary.sellOutTarget),
     M15: state.history.sameMonthLastYear ?? '', N15: state.history.sameMonthLastYear ? summary.invoicedTrend/state.history.sameMonthLastYear-1 : '',
     M16: state.history.average3ClosedMonths ?? '', N16: state.history.average3ClosedMonths ? summary.invoicedTrend/state.history.average3ClosedMonths-1 : '',
@@ -85,7 +74,7 @@ function fillPanelSummary(workbook:TemplateWorkbook,state:CanonicalState) {
     L21: state.stock.pendingPurchaseSale, L22: state.stock.projectedSaleValue, L23: state.stock.coverageProjectedDays,
     L26: state.stock.costValue, L27: state.stock.coverageCostCurrentDays, M27: state.stock.coverageTargetDays, N27: state.stock.coverageTargetDays-state.stock.coverageCostCurrentDays,
     L28: state.stock.pendingPurchaseCost, L29: state.stock.projectedCostValue, L30: state.stock.coverageCostProjectedDays,
-    L33: state.industryPositivityTarget, L34: summary.totalPositivation, M34: ratio(summary.totalPositivation,state.industryPositivityTarget),
+    L33: state.industryPositivityTarget, L34: summary.totalPositivation, M34: summary.positivityAttainment,
     L35: positivityTrend, M35: ratio(positivityTrend,state.industryPositivityTarget), L36: '', M36: '',
     E39: summary.total, F39: summary.invoiced, G39: summary.totalPositivation, F40: summary.invoiced, G40: summary.totalPositivation,
     E41: summary.toInvoice, F41: 0, G41: 0, L24:'', B27:'',
@@ -131,7 +120,7 @@ function fillPanelSummary(workbook:TemplateWorkbook,state:CanonicalState) {
     values[ref('Q',start+2)] = target; values[ref('R',start+2)] = '';
     values[ref('Q',start+3)] = network.invoiced; values[ref('R',start+3)] = ratio(network.invoiced,target);
     values[ref('Q',start+4)] = invTrend; values[ref('R',start+4)] = ratio(invTrend,target);
-    values[ref('Q',start+5)] = network.total; values[ref('R',start+5)] = ratio(network.total,target);
+    values[ref('Q',start+5)] = network.total; values[ref('R',start+5)] = target === network.networkTarget ? network.networkAttainment : network.topAttainment;
     values[ref('Q',start+6)] = totalTrend; values[ref('R',start+6)] = ratio(totalTrend,target);
   });
   workbook.patchCells(sheet,values);
@@ -185,7 +174,7 @@ function fillTopNetworks(workbook:TemplateWorkbook,state:CanonicalState) {
   const invoiced = networks.reduce((sum,network)=>sum+network.invoiced,0); const toInvoice = networks.reduce((sum,network)=>sum+network.toInvoice,0); const total = invoiced+toInvoice;
   const values:Record<string,TemplateCellValue> = {
     B2:parts.monthName.toUpperCase(), D2:networkTarget, E2:topTarget, F2:invoiced, G2:ratio(invoiced,networkTarget), H2:ratio(invoiced,topTarget),
-    I2:toInvoice, J2:networks.reduce((sum,network)=>sum+gap(network.networkTarget,network.total),0), K2:ratio(total,networkTarget), L2:ratio(total,topTarget), M2:generatedDate(state),
+    I2:toInvoice, J2:networks.reduce((sum,network)=>sum+network.gapToNetworkTarget,0), K2:ratio(total,networkTarget), L2:ratio(total,topTarget), M2:generatedDate(state),
   };
   workbook.clearRows(sheet,4,1000,1,13);
   networks.forEach((network,index) => {
@@ -196,30 +185,17 @@ function fillTopNetworks(workbook:TemplateWorkbook,state:CanonicalState) {
     values[ref('C',row)] = owner?.newCode || network.vendorCode;
     values[ref('D',row)] = network.networkTarget; values[ref('E',row)] = network.topTarget; values[ref('F',row)] = network.invoiced;
     values[ref('G',row)] = ratio(network.invoiced,network.networkTarget); values[ref('H',row)] = ratio(network.invoiced,network.topTarget);
-    values[ref('I',row)] = network.toInvoice; values[ref('J',row)] = gap(network.networkTarget,network.total);
-    // Os cabeçalhos definem K como REDES e L como TOPS. O detalhe deve seguir a
-    // mesma regra da linha-resumo: K = (Faturado + A Faturar) / Meta Redes;
-    // L = (Faturado + A Faturar) / Meta Tops.
-    values[ref('K',row)] = ratio(network.total,network.networkTarget); values[ref('L',row)] = ratio(network.total,network.topTarget); values[ref('M',row)] = '';
+    values[ref('I',row)] = network.toInvoice; values[ref('J',row)] = network.gapToNetworkTarget;
+    // K/L consomem os derivados materializados do motor canônico. A exportação
+    // não possui uma terceira regra para atingimento total de Redes/Tops.
+    values[ref('K',row)] = network.networkAttainment; values[ref('L',row)] = network.topAttainment; values[ref('M',row)] = '';
   });
   workbook.patchCells(sheet,values,4);
 
-  // K4 é uma célula do próprio modelo com o formato percentual validado. O
-  // TemplateWorkbook preserva cor/borda/alinhamento da célula de destino e
-  // corrige também estilos que tinham o mesmo numFmtId com aplicação desativada.
   const detailRows = networks.map((_,index) => 4+index);
-  const networkPercentageRefs = [
-    'G2','H2',
-    ...detailRows.flatMap(row => [ref('G',row),ref('H',row)]),
-  ];
-  const attainmentPercentageRefs = [
-    'K2','L2',
-    ...detailRows.flatMap(row => [ref('K',row),ref('L',row)]),
-  ];
-  const currencyRefs = [
-    'D2','E2','F2','I2','J2',
-    ...detailRows.flatMap(row => [ref('D',row),ref('E',row),ref('F',row),ref('I',row),ref('J',row)]),
-  ];
+  const networkPercentageRefs = ['G2','H2', ...detailRows.flatMap(row => [ref('G',row),ref('H',row)])];
+  const attainmentPercentageRefs = ['K2','L2', ...detailRows.flatMap(row => [ref('K',row),ref('L',row)])];
+  const currencyRefs = ['D2','E2','F2','I2','J2', ...detailRows.flatMap(row => [ref('D',row),ref('E',row),ref('F',row),ref('I',row),ref('J',row)])];
   workbook.copyNumberFormat(sheet,'K4',networkPercentageRefs);
   workbook.copyNumberFormat(sheet,'K4',attainmentPercentageRefs);
   workbook.copyNumberFormat(sheet,'F4',currencyRefs);
@@ -247,8 +223,6 @@ function fillNetworkClients(workbook:TemplateWorkbook,state:CanonicalState) {
   clients.forEach((client,index) => {
     const row = 2+index; const result = results.get(client.cnpj);
     values[ref('A',row)] = client.cnpj; values[ref('B',row)] = client.name; values[ref('C',row)] = client.city;
-    // A rede exibida precisa ser a resolução canônica validada (Premissas → Roteiro
-    // → referência), e não voltar à rede crua da Premissas no momento da exportação.
     values[ref('D',row)] = result?.network || client.network;
     values[ref('E',row)] = route.get(client.cnpj)?.fantasyName || client.name; values[ref('F',row)] = result?.invoiced || 0; values[ref('G',row)] = result?.toInvoice || 0;
   });
@@ -267,16 +241,15 @@ function fillNetworkTeam(workbook:TemplateWorkbook,state:CanonicalState) {
 }
 
 function fillNetworkAuxiliarySheets(workbook:TemplateWorkbook,state:CanonicalState) {
-  const dominantVendor = dominantVendorByClient(state.transactions);
-  const clients:Record<string,TemplateCellValue> = { Q1:state.sellOut.invoiced, R1:state.clients.length, S1:state.sellOut.invoiced };
+  // 319 e 12.326 exigem campos que o estado canônico ainda não preserva
+  // (peso/caixa e razão completo de pedido/setor, respectivamente). Manter uma
+  // aproximação por CNPJ/RCA fabricaria um documento operacional. As áreas de
+  // dados são limpas e ficam explicitamente pendentes até a fonte correta existir.
   workbook.clearRows('319',2,50000,1,19);
-  state.clients.forEach((client,index) => {
-    const row = 2+index;
-    clients[ref('A',row)] = index+1; clients[ref('B',row)] = client.cnpj; clients[ref('C',row)] = client.name; clients[ref('D',row)] = client.city;
-    clients[ref('H',row)] = client.invoiced; clients[ref('N',row)] = dominantVendor.get(client.cnpj)||'';
-  });
-  workbook.patchCells('319',clients,2);
+  workbook.clearRows('12.326',2,50000,1,22);
 
+  // 12.326ana usa somente granularidade item-a-item efetivamente preservada pelo
+  // 8022. Não preenche campos ausentes nem sintetiza pedido/setor.
   const pending = state.transactions.filter(transaction=>transaction.status==='A FATURAR');
   const pendingRows:Record<string,TemplateCellValue> = {};
   workbook.clearRows('12.326ana',2,50000,1,13);
@@ -288,21 +261,6 @@ function fillNetworkAuxiliarySheets(workbook:TemplateWorkbook,state:CanonicalSta
     pendingRows[ref('L',row)] = transaction.vendorCode; pendingRows[ref('M',row)] = transaction.cnpj;
   });
   workbook.patchCells('12.326ana',pendingRows,2);
-
-  const grouped = new Map<string,{clientName:string;cnpj:string;vendorCode:string;city:string;value:number}>();
-  pending.forEach(transaction => {
-    const key = `${transaction.cnpj}.${transaction.vendorCode}`;
-    const current = grouped.get(key)||{clientName:transaction.clientName,cnpj:transaction.cnpj,vendorCode:transaction.vendorCode,city:transaction.city,value:0};
-    current.value += transaction.value; grouped.set(key,current);
-  });
-  const orders:Record<string,TemplateCellValue> = {};
-  workbook.clearRows('12.326',2,50000,1,22);
-  Array.from(grouped.entries()).forEach(([key,order],index) => {
-    const row = 2+index;
-    orders[ref('A',row)] = key; orders[ref('B',row)] = index+1; orders[ref('C',row)] = order.clientName; orders[ref('D',row)] = order.cnpj;
-    orders[ref('K',row)] = order.value; orders[ref('Q',row)] = order.vendorCode; orders[ref('U',row)] = order.city; orders[ref('V',row)] = 'A';
-  });
-  workbook.patchCells('12.326',orders,2);
 }
 
 export async function downloadTopNetworksDocument(state:CanonicalState) {
