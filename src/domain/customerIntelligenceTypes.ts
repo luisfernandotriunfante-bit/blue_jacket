@@ -3,6 +3,7 @@ export type OpportunityPriority = 'MAXIMA' | 'MUITO_ALTA' | 'ALTA' | 'MEDIA' | '
 export type AvailabilityStatus = 'DISPONIVEL' | 'SOMENTE_CARTEIRA' | 'SEM_ESTOQUE' | 'SEM_WINTHOR' | 'DESCONTINUADO' | 'MIGRACAO';
 export type LineageStatus = 'MIGRACAO_VIGENTE' | 'MIGRACAO_FUTURA' | 'DESCONTINUADO';
 export type PromotionStatus = 'ATIVA' | 'FUTURA' | 'EXPIRADA' | 'SEM_FONTE_ESTRUTURADA';
+export type CommercialPackagingSource = '105_DERIVED' | 'PRICE_LIST' | 'TABELA_OFICIAL' | 'UNKNOWN' | 'CONFLICT';
 
 export interface AssortmentRecommendation {
   channel: string;
@@ -169,9 +170,11 @@ export interface ProductCommercialView {
   physicalUnits: number;
   reservedUnits: number;
   availableUnits: number;
+  portfolioCases: number;
   portfolioUnits: number;
   projectedUnits: number;
   unitsPerCase: number;
+  unitsPerCaseSource: CommercialPackagingSource;
   availability: AvailabilityStatus;
   hasWinthor: boolean;
   promotionIds: string[];
