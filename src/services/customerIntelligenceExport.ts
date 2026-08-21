@@ -40,7 +40,7 @@ function commercialRows(result: CustomerIntelligenceResult) {
   }));
 }
 
-export function downloadCustomerCommercialFile(result: CustomerIntelligenceResult) {
+export function buildCustomerCommercialWorkbook(result: CustomerIntelligenceResult): XLSX.WorkBook {
   const workbook = XLSX.utils.book_new();
   addSheet(workbook, 'Sortimento recomendado', commercialRows(result));
   addSheet(workbook, 'Lançamentos', result.launchesProducts.map(product => ({
@@ -59,11 +59,30 @@ export function downloadCustomerCommercialFile(result: CustomerIntelligenceResul
     Benefício: rule.benefit,
     Observação: rule.note,
   })));
+  return workbook;
+}
+
+export function downloadCustomerCommercialFile(result: CustomerIntelligenceResult) {
+  const workbook = buildCustomerCommercialWorkbook(result);
   const safe = result.customer.cnpj || 'cliente';
   XLSX.writeFile(workbook, `Sortimento Comercial - ${safe}.xlsx`);
 }
 
-export function downloadCustomerInternalDossier(result: CustomerIntelligenceResult) {
+function stockColumns(product: ProductCommercialView) {
+  return {
+    'Estoque físico un': product.physicalUnits,
+    Reservado: product.reservedUnits,
+    Disponível: product.availableUnits,
+    'Carteira caixas': product.portfolioCases,
+    'Carteira unidades': product.portfolioUnits,
+    'Un/CX': product.unitsPerCase || '',
+    'Origem Un/CX': product.unitsPerCaseSource,
+    Projetado: product.projectedUnits,
+    Disponibilidade: availabilityLabel(product.availability),
+  };
+}
+
+export function buildCustomerInternalDossierWorkbook(result: CustomerIntelligenceResult): XLSX.WorkBook {
   const workbook = XLSX.utils.book_new();
   addSheet(workbook, 'Resumo', [{
     CNPJ: result.customer.cnpj,
@@ -86,16 +105,19 @@ export function downloadCustomerInternalDossier(result: CustomerIntelligenceResu
     Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, Colgate: product.colgateSku,
     Classificação: classificationLabel(product.classification), Lançamento: product.isLaunch ? 'SIM' : 'NÃO', Comprou: product.bought ? 'SIM' : 'NÃO',
     'Qtd compra': product.purchaseQuantity, 'Valor compras': product.purchaseValue, Devoluções: product.returnValue, 'Valor líquido': product.netValue,
-    'Estoque físico un': product.physicalUnits, Reservado: product.reservedUnits, Disponível: product.availableUnits, Carteira: product.portfolioUnits, Projetado: product.projectedUnits,
-    Disponibilidade: availabilityLabel(product.availability), Prioridade: product.opportunityPriority, Motivo: product.opportunityReason, Ação: product.recommendedAction,
+    ...stockColumns(product), Prioridade: product.opportunityPriority, Motivo: product.opportunityReason, Ação: product.recommendedAction,
   })));
-  addSheet(workbook, 'Não comprados', result.products.filter(product => product.isRecommended && !product.bought).map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, Classificação: classificationLabel(product.classification), Lançamento: product.isLaunch ? 'SIM' : 'NÃO', Disponibilidade: availabilityLabel(product.availability), Disponível: product.availableUnits, Carteira: product.portfolioUnits, Prioridade: product.opportunityPriority, Ação: product.recommendedAction })));
-  addSheet(workbook, 'Lançamentos faltantes', result.launchesProducts.filter(product => !product.bought).map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, Classificação: classificationLabel(product.classification), Disponibilidade: availabilityLabel(product.availability), Disponível: product.availableUnits, Carteira: product.portfolioUnits, Prioridade: product.opportunityPriority, Motivo: product.opportunityReason })));
+  addSheet(workbook, 'Não comprados', result.products.filter(product => product.isRecommended && !product.bought).map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, Classificação: classificationLabel(product.classification), Lançamento: product.isLaunch ? 'SIM' : 'NÃO', ...stockColumns(product), Prioridade: product.opportunityPriority, Ação: product.recommendedAction })));
+  addSheet(workbook, 'Lançamentos faltantes', result.launchesProducts.filter(product => !product.bought).map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, Classificação: classificationLabel(product.classification), ...stockColumns(product), Prioridade: product.opportunityPriority, Motivo: product.opportunityReason })));
   addSheet(workbook, 'Comprados fora', result.boughtOutsideProducts.map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, Classificação: classificationLabel(product.classification), Linhagem: product.lineageStatus, 'EAN anterior': product.predecessorEan, 'EAN sucessor': product.successorEan, 'Valor líquido': product.netValue, Diagnóstico: product.opportunityReason })));
-  addSheet(workbook, 'Oportunidades', result.opportunities.map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, Classificação: classificationLabel(product.classification), Lançamento: product.isLaunch ? 'SIM' : 'NÃO', Prioridade: product.opportunityPriority, Motivo: product.opportunityReason, Ação: product.recommendedAction, Disponível: product.availableUnits, Carteira: product.portfolioUnits })));
+  addSheet(workbook, 'Oportunidades', result.opportunities.map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, Classificação: classificationLabel(product.classification), Lançamento: product.isLaunch ? 'SIM' : 'NÃO', Prioridade: product.opportunityPriority, Motivo: product.opportunityReason, Ação: product.recommendedAction, ...stockColumns(product) })));
   addSheet(workbook, 'Promoções elegíveis', result.promotions.map(rule => ({ Promoção: rule.name, Início: rule.validFrom, Fim: rule.validTo, Benefício: rule.benefit, Fonte: rule.source })));
   addSheet(workbook, 'Preços', result.products.filter(product => product.isRecommended).map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, 'Preço-base': product.basePrice ?? '', 'Preço final': product.finalPrice ?? '', Status: product.priceStatus })));
   addSheet(workbook, 'Auditoria', result.audit.map(check => ({ ID: check.id, Regra: check.label, Esperado: check.expected ?? '', Calculado: check.calculated ?? '', Status: check.status, Observação: check.note })));
   addSheet(workbook, 'Limitações', result.limitations.map(limit => ({ Limitação: limit })));
-  XLSX.writeFile(workbook, `Dossiê Interno - ${result.customer.cnpj || 'cliente'}.xlsx`);
+  return workbook;
+}
+
+export function downloadCustomerInternalDossier(result: CustomerIntelligenceResult) {
+  XLSX.writeFile(buildCustomerInternalDossierWorkbook(result), `Dossiê Interno - ${result.customer.cnpj || 'cliente'}.xlsx`);
 }
