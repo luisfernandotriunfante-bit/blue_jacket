@@ -7,11 +7,13 @@ import {
   loadOperationalSourceState,
   operationalLegacyData,
   prepareOperationalSources,
+  saveOperationalSourceState,
   supplementalSourceKind,
   type OperationalSourceState,
   type SupplementalSourceKind,
 } from '../services/operationalSources';
 import { applyReceiptReconciliation } from '../services/receiptReconciliation';
+import { applyPortfolioContinuityToPreparedState, loadPortfolioContinuity } from '../services/portfolioContinuityFiles';
 import type { SourceAudit, SourceKind } from '../domain/canonical';
 import { ReconciliationAuditPanel } from '../ui/audit/ReconciliationAuditPanel';
 import { PanelCard, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
@@ -31,7 +33,7 @@ type SourceUi = {
 const SOURCES: SourceUi[] = [
   { id: 'sales8022', kind: 'sales8022', label: 'Vendas 8022', description: 'Faturado, a faturar, clientes, vendedores e produtos.', frequency: 'Diário', group: 'Rotina diária', required: true },
   { id: 'stock105', kind: 'stock105', label: 'Posição de Estoque 105', description: 'Estoque atual e custo. O preço de tabela é priorizado pela PCTABPR quando ela estiver carregada.', frequency: 'Diário', group: 'Rotina diária', required: true },
-  { id: 'purchasePortfolio', kind: 'purchasePortfolio', label: 'Carteira Colgate', description: 'Mercadoria ainda em trânsito / pendente. Alimenta estoque projetado e risco de ruptura.', frequency: 'Diário', group: 'Rotina diária', required: true },
+  { id: 'purchasePortfolio', kind: 'purchasePortfolio', label: 'Carteira Colgate', description: 'Mercadoria em trânsito / pendente. Cada nova carga é comparada ao último snapshot validado: permanecem os pedidos já acompanhados e entram somente pedidos realmente novos; histórico retroativo de Bill Qty é excluído.', frequency: 'Diário', group: 'Rotina diária', required: true },
   { id: 'stock8013', kind: 'stock8013', label: 'Estoque 8013', description: 'Caixas, unidades e peso para conferência física.', frequency: 'Diário', group: 'Rotina diária' },
   { id: 'entryNotes218', supplementalKind: 'entryNotes218', label: 'Entrada de Notas 218', description: 'Fonte oficial de recebimentos a partir de 01/08/2026. Os itens são abatidos automaticamente da Carteira; a tabela de validação serve para auditoria produto a produto.', frequency: 'Diário / conforme recebimento', group: 'Rotina diária', required: true },
 
@@ -101,11 +103,18 @@ export function ConfiguracoesPage() {
     setErrorMessage('');
     try {
       const prepared = await prepareOperationalSources(selectedFiles);
+      const continuity = await applyPortfolioContinuityToPreparedState(selectedFiles, prepared.state);
+      const operationalState = continuity?.state || prepared.state;
+      if (continuity) saveOperationalSourceState(operationalState);
+
       const result = await processCanonicalFiles(prepared.engineFiles, manualConfig, canonical);
-      const adjusted = applyOperationalOverrides(result.canonical, prepared.state, manualConfig);
-      const reconciled = applyReceiptReconciliation(adjusted.canonical, prepared.state, manualConfig);
-      const legacy = operationalLegacyData(reconciled.canonical, manualConfig.coverageTargetDays);
-      setCanonical(reconciled.canonical);
+      const adjusted = applyOperationalOverrides(result.canonical, operationalState, manualConfig);
+      const reconciled = applyReceiptReconciliation(adjusted.canonical, operationalState, manualConfig);
+      const finalCanonical = continuity?.warning
+        ? { ...reconciled.canonical, warnings: [...reconciled.canonical.warnings.filter(warning => !warning.startsWith('Carteira comparável:')), continuity.warning] }
+        : reconciled.canonical;
+      const legacy = operationalLegacyData(finalCanonical, manualConfig.coverageTargetDays);
+      setCanonical(finalCanonical);
       setProdutos(legacy.produtos);
       setMetricas(legacy.metricas);
       setSellOut(result.sellOut);
@@ -122,6 +131,7 @@ export function ConfiguracoesPage() {
 
   const audits = useMemo(() => new Map((canonical?.sources || []).map(source => [source.kind, source])), [canonical]);
   const operationalState = useMemo(() => loadOperationalSourceState(), [operationalRevision]);
+  const portfolioContinuity = useMemo(() => loadPortfolioContinuity(), [operationalRevision]);
   const queued = useMemo(() => new Map(selectedFiles.map(file => [sourceForFile(file.name)?.id || `unknown:${file.name}`, file])), [selectedFiles]);
   const loadedCount = SOURCES.filter(source => source.supplementalKind ? Boolean(supplementalFileName(source, operationalState)) : Boolean(source.kind && audits.get(source.kind)?.loaded)).length;
 
@@ -172,6 +182,8 @@ export function ConfiguracoesPage() {
       </div>
     </PanelCard>
 
+    {portfolioContinuity ? <PortfolioContinuityPanel snapshot={portfolioContinuity} /> : null}
+
     {operationalState.receiptItems.length > 0 ? <ReceiptValidationPanel key={`${operationalState.entry218FileName}:${operationalRevision}`} state={operationalState} /> : null}
 
     {GROUPS.map(group => <PanelCard key={group.key}>
@@ -197,6 +209,24 @@ export function ConfiguracoesPage() {
       </div>
     </PanelCard> : null}
   </PanelPage>;
+}
+
+function PortfolioContinuityPanel({ snapshot }: { snapshot: ReturnType<typeof loadPortfolioContinuity> extends infer T ? NonNullable<T> : never }) {
+  const mode = snapshot.mode === 'BASELINE' ? 'BASELINE INICIAL' : snapshot.mode === 'APPROVED_2026_08_17' ? 'CHECKPOINT APROVADO 17/08' : 'CONTINUIDADE AUTOMÁTICA';
+  return <PanelCard>
+    <PanelSectionHeader
+      eyebrow="CARTEIRA COMPARÁVEL"
+      title="Continuidade entre snapshots"
+      description="A nova Carteira mantém pedidos que já pertenciam ao snapshot validado e acrescenta somente pedidos com data posterior ao snapshot anterior. Bill Qty histórico que aparece retroativamente no relatório não volta para o saldo a receber."
+      action={<span className="panel-badge">{mode}</span>}
+    />
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: '10px', marginTop: '15px' }}>
+      <div className="panel-kpi"><span>Carteira bruta do arquivo</span><strong>{fmtMoney(snapshot.rawCost)}</strong><small>{fmtNumber(snapshot.rawCases, 2)} cx · {snapshot.rawRows} linhas</small></div>
+      <div className="panel-kpi"><span>Carteira comparável</span><strong>{fmtMoney(snapshot.validatedCost)}</strong><small>{fmtNumber(snapshot.validatedCases, 2)} cx · {snapshot.validatedRows} linhas</small></div>
+      <div className="panel-kpi"><span>Histórico retroativo excluído</span><strong>{fmtMoney(snapshot.excludedHistoricalCost)}</strong><small>{fmtNumber(snapshot.excludedHistoricalCases, 2)} cx · {snapshot.excludedHistoricalRows} linhas</small></div>
+      <div className="panel-kpi"><span>Pedidos acompanhados</span><strong>{fmtNumber(snapshot.orderNumbers.length)}</strong><small>Snapshot {snapshot.snapshotDate || '—'}</small></div>
+    </div>
+  </PanelCard>;
 }
 
 function ReceiptValidationPanel({ state }: { state: OperationalSourceState }) {
