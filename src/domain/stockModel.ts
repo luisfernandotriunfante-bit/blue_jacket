@@ -51,27 +51,10 @@ function restoreLaunchCatalog(inventory: CanonicalInventoryProduct[], productSup
     while (existingCodes.has(catalogCode)) { catalogCode = `EAN-${ean}-${suffix}`; suffix += 1; }
     const factor = Math.max(Number(master.unitsPerCase) || 0, 0);
     const catalogItem = {
-      code: catalogCode,
-      description: master.description || `Lançamento ${ean}`,
-      ean,
-      quantity: 0,
-      costUnit: master.unitPrice || 0,
-      saleUnit: master.unitPrice || 0,
-      pendingQty: 0,
-      pendingCases: 0,
-      pendingCost: 0,
-      pendingSale: 0,
-      isLaunch: true,
-      hasWinthor: false,
-      factoryCode: master.sku || '',
-      physicalCases: 0,
-      physicalUnits: 0,
-      grossKg: 0,
-      unitsPerCase: factor,
-      unitsPerCaseSource: factor > 0 ? 'PRICE_LIST' : 'UNKNOWN',
-      unitsPerCaseCandidates: factor > 0 ? [{ source: 'PRICE_LIST', value: factor }] : [],
-      unitsPerCaseConflict: false,
-      portfolioLines: [],
+      code: catalogCode, description: master.description || `Lançamento ${ean}`, ean, quantity: 0,
+      costUnit: master.unitPrice || 0, saleUnit: master.unitPrice || 0, pendingQty: 0, pendingCases: 0, pendingCost: 0, pendingSale: 0,
+      isLaunch: true, hasWinthor: false, factoryCode: master.sku || '', physicalCases: 0, physicalUnits: 0, grossKg: 0,
+      unitsPerCase: factor, unitsPerCaseSource: factor > 0 ? 'PRICE_LIST' : 'UNKNOWN', unitsPerCaseCandidates: factor > 0 ? [{ source: 'PRICE_LIST', value: factor }] : [], unitsPerCaseConflict: false, portfolioLines: [],
     } as InventoryWithPackaging;
     items.push(catalogItem); existingCodes.add(catalogCode); if (factory) byFactory.set(factory, catalogItem); byEan.set(ean, catalogItem);
   });
@@ -86,9 +69,8 @@ function augmentProductSupport(input: StockPresentationInputWithPackaging): Cano
     const index = result.findIndex(master => Boolean((factory && cleanCode(master.sku) === factory) || (ean && clean(master.ean) === ean)));
     if (index >= 0) {
       const sourceFactor = Math.max(Number(result[index].unitsPerCase) || 0, 0);
-      if (item.unitsPerCaseConflict || (inventoryFactor > 0 && sourceFactor > 0 && !packagingFactorsAgree(inventoryFactor, sourceFactor))) {
-        result[index] = { ...result[index], unitsPerCase: 0 };
-      } else if (sourceFactor <= 0 && inventoryFactor > 0) result[index] = { ...result[index], unitsPerCase: inventoryFactor };
+      if (item.unitsPerCaseConflict || (inventoryFactor > 0 && sourceFactor > 0 && !packagingFactorsAgree(inventoryFactor, sourceFactor))) result[index] = { ...result[index], unitsPerCase: 0 };
+      else if (sourceFactor <= 0 && inventoryFactor > 0) result[index] = { ...result[index], unitsPerCase: inventoryFactor };
       return;
     }
     if (inventoryFactor <= 0 || (!factory && !ean)) return;
@@ -97,10 +79,10 @@ function augmentProductSupport(input: StockPresentationInputWithPackaging): Cano
   return result;
 }
 
-function normalizePortfolioWinthor(result: StockPresentation): StockPresentation {
-  const products = result.products.map(product => product.pendingUnits > 0 || product.pendingCases > 0 ? product : { ...product, hasWinthor: true });
-  const noWinthorCount = products.filter(product => !product.hasWinthor && (product.pendingUnits > 0 || product.pendingCases > 0)).length;
-  return { ...result, products, summary: { ...result.summary, noWinthorCount } };
+/** hasWinthor é fato cadastral. O KPI operacional Sem Winthor continua restrito a itens com Carteira, sem alterar esse fato. */
+function refreshOperationalNoWinthorCount(result: StockPresentation): StockPresentation {
+  const noWinthorCount = result.products.filter(product => !product.hasWinthor && (product.pendingUnits > 0 || product.pendingCases > 0)).length;
+  return { ...result, summary: { ...result.summary, noWinthorCount } };
 }
 
 function enrichMovementPackaging(result: StockPresentation): StockPresentation {
@@ -116,32 +98,25 @@ function enrichMovementPackaging(result: StockPresentation): StockPresentation {
 }
 
 function enrichPortfolioMovements(result: StockPresentation, inventory: CanonicalInventoryProduct[]): StockPresentation {
-  const detailed: StockPortfolioMovement[] = [];
-  const detailedCodes = new Set<string>();
+  const detailed: StockPortfolioMovement[] = []; const detailedCodes = new Set<string>();
   inventory.forEach(rawItem => {
-    const item = rawItem as InventoryWithPackaging; const lines = item.portfolioLines || [];
-    if (!lines.length) return;
-    detailedCodes.add(cleanCode(item.code));
+    const item = rawItem as InventoryWithPackaging; const lines = item.portfolioLines || []; if (!lines.length) return; detailedCodes.add(cleanCode(item.code));
     lines.forEach((line, index) => detailed.push({
-      id: `CARTEIRA:${item.code}:${line.sourceRow || index + 1}:${index}`,
-      direction: 'ENTRADA', stage: 'PREVISTA', kind: 'ENTRADA_PREVISTA_CARTEIRA', status: 'Entrada prevista', movement: 'Carteira',
-      date: '', document: '', order: '', invoice: '', sku: item.code, ean: item.ean || line.ean || '', product: item.description || line.description,
-      partner: 'Colgate → Milênio', partnerDocument: '', cases: Number(line.totalCases) || 0, looseUnits: 0, totalUnits: Number(line.totalUnits) || 0,
-      value: Number(line.costValue) || 0, origin: 'CARTEIRA', orderQtyCases: Number(line.orderQty) || 0, billQtyCases: Number(line.billQty) || 0,
-      unitsPerCase: Number(line.unitsPerCase) || 0, unitsPerCaseSource: line.unitsPerCaseSource, sourceRow: Number(line.sourceRow) || index + 1, saleValue: Number(line.saleValue) || 0,
+      id: `CARTEIRA:${item.code}:${line.sourceRow || index + 1}:${index}`, direction: 'ENTRADA', stage: 'PREVISTA', kind: 'ENTRADA_PREVISTA_CARTEIRA', status: 'Entrada prevista', movement: 'Carteira',
+      date: '', document: '', order: '', invoice: '', sku: item.code, ean: item.ean || line.ean || '', product: item.description || line.description, partner: 'Colgate → Milênio', partnerDocument: '',
+      cases: Number(line.totalCases) || 0, looseUnits: 0, totalUnits: Number(line.totalUnits) || 0, value: Number(line.costValue) || 0, origin: 'CARTEIRA',
+      orderQtyCases: Number(line.orderQty) || 0, billQtyCases: Number(line.billQty) || 0, unitsPerCase: Number(line.unitsPerCase) || 0, unitsPerCaseSource: line.unitsPerCaseSource,
+      sourceRow: Number(line.sourceRow) || index + 1, saleValue: Number(line.saleValue) || 0,
     }));
   });
   if (!detailed.length) return result;
-  const movements = result.movements
-    .filter(movement => !(movement.kind === 'ENTRADA_PREVISTA_CARTEIRA' && detailedCodes.has(cleanCode(movement.sku))))
-    .concat(detailed)
+  const movements = result.movements.filter(movement => !(movement.kind === 'ENTRADA_PREVISTA_CARTEIRA' && detailedCodes.has(cleanCode(movement.sku)))).concat(detailed)
     .sort((left, right) => { if (left.date && right.date && left.date !== right.date) return right.date.localeCompare(left.date); if (left.date && !right.date) return -1; if (!left.date && right.date) return 1; return left.id.localeCompare(right.id); });
   return { ...result, movements };
 }
 
 function enrichRealizedReceiptMovements(result: StockPresentation): StockPresentation {
-  const receipts = operationalReceiptMovements();
-  if (!receipts.length) return result;
+  const receipts = operationalReceiptMovements(); if (!receipts.length) return result;
   const existingIds = new Set(result.movements.map(movement => movement.id));
   const movements = [...receipts.filter(movement => !existingIds.has(movement.id)), ...result.movements]
     .sort((left, right) => { if (left.date && right.date && left.date !== right.date) return right.date.localeCompare(left.date); if (left.date && !right.date) return -1; if (!left.date && right.date) return 1; return left.id.localeCompare(right.id); });
@@ -157,10 +132,8 @@ function packagingReconciliation(inventory: CanonicalInventoryProduct[], product
   const mastersBySku = new Map(productSupport.filter(master => cleanCode(master.sku)).map(master => [cleanCode(master.sku), master]));
   const mastersByEan = new Map(productSupport.filter(master => clean(master.ean)).map(master => [clean(master.ean), master]));
   return inventory.map(raw => {
-    const item = raw as InventoryWithPackaging;
-    const current = Math.max(Number(item.unitsPerCase) || 0, 0);
-    const master = mastersBySku.get(cleanCode(item.factoryCode)) || mastersByEan.get(clean(item.ean));
-    const external = Math.max(Number(master?.unitsPerCase) || 0, 0);
+    const item = raw as InventoryWithPackaging; const current = Math.max(Number(item.unitsPerCase) || 0, 0);
+    const master = mastersBySku.get(cleanCode(item.factoryCode)) || mastersByEan.get(clean(item.ean)); const external = Math.max(Number(master?.unitsPerCase) || 0, 0);
     const needsFactor = Number(item.quantity) > 0 || Number(item.pendingCases) > 0 || Number(item.physicalCases) > 0;
     const conflict = Boolean(item.unitsPerCaseConflict) || (current > 0 && external > 0 && !packagingFactorsAgree(current, external));
     if (conflict) return { id: `stock.packaging.${item.code}`, label: `Un/CX ${item.code}: fontes de embalagem concordam`, expected: current || null, calculated: external || null, difference: current > 0 && external > 0 ? external-current : null, status: 'DIVERGENT', source: '105 derivado × Lista/Tabela de produtos', note: item.unitsPerCaseNote || 'Fontes comprovadas de embalagem divergiram; conversão bloqueada.' };
@@ -186,9 +159,7 @@ function enrichReconciliation(result: StockPresentation, inventory: CanonicalInv
 
 export function buildStockPresentation(input: StockPresentationInputWithPackaging) {
   const restoredInventory = restoreLaunchCatalog(input.inventory || [], input.productSupport || []);
-  const augmentedInput = { ...input, inventory: restoredInventory };
-  const { itemCodeSupport: _itemCodeSupport, ...coreInput } = augmentedInput;
-  const support = augmentProductSupport(augmentedInput);
+  const augmentedInput = { ...input, inventory: restoredInventory }; const { itemCodeSupport: _itemCodeSupport, ...coreInput } = augmentedInput; const support = augmentProductSupport(augmentedInput);
   const result = buildCore({ ...coreInput, hasStock8013: hasPhysicalSnapshot(augmentedInput), productSupport: support });
-  return enrichReconciliation(enrichRealizedReceiptMovements(enrichPortfolioMovements(enrichMovementPackaging(normalizePortfolioWinthor(result)), restoredInventory)), restoredInventory, input.productSupport || []);
+  return enrichReconciliation(enrichRealizedReceiptMovements(enrichPortfolioMovements(enrichMovementPackaging(refreshOperationalNoWinthorCount(result)), restoredInventory)), restoredInventory, input.productSupport || []);
 }
