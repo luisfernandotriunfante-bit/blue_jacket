@@ -24,7 +24,7 @@ function App() {
   const sidebarItems = [
     { id: 'estoque', label: 'Estoque', active: activeTab === 'estoque', onSelect: () => setActiveTab('estoque') },
     { id: 'sellout', label: 'Sell Out', active: activeTab === 'sellout', onSelect: () => setActiveTab('sellout') },
-    { id: 'pex', label: 'PEX', active: activeTab === 'pex', onSelect: () => setActiveTab('pex') },
+    { id: 'pex', label: 'PEX', description: 'Em construção', active: activeTab === 'pex', onSelect: () => setActiveTab('pex') },
     { id: 'sortimento', label: 'Clientes & Sortimento', active: activeTab === 'sortimento', onSelect: () => setActiveTab('sortimento') },
     { id: 'atividades', label: 'Atividades', active: activeTab === 'atividades', onSelect: () => setActiveTab('atividades') },
     { id: 'relatorios', label: 'Documentos', active: activeTab === 'relatorios', onSelect: () => setActiveTab('relatorios') },
@@ -46,20 +46,11 @@ function App() {
     { id: 'movements', label: 'Entradas e Saídas' },
   ]
 
-  const atividadesTopTabs = [
-    { id: 'combo', label: 'Criação de Combo' },
-  ]
-
+  const atividadesTopTabs = [{ id: 'combo', label: 'Criação de Combo' }]
   const clientesTopTabs = [
-    { id: 'overview', label: 'Visão Geral' },
-    { id: 'assortment', label: 'Sortimento' },
-    { id: 'opportunities', label: 'Oportunidades' },
-    { id: 'launches', label: 'Lançamentos' },
-    { id: 'outside', label: 'Comprado Fora' },
-    { id: 'promotions', label: 'Promoções' },
-    { id: 'pricing', label: 'Preços' },
-    { id: 'history', label: 'Histórico' },
-    { id: 'export', label: 'Exportar' },
+    { id: 'overview', label: 'Visão Geral' }, { id: 'assortment', label: 'Sortimento' }, { id: 'opportunities', label: 'Oportunidades' },
+    { id: 'launches', label: 'Lançamentos' }, { id: 'outside', label: 'Comprado Fora' }, { id: 'promotions', label: 'Promoções' },
+    { id: 'pricing', label: 'Preços' }, { id: 'history', label: 'Histórico' }, { id: 'export', label: 'Exportar' },
   ]
 
   const topNavigation = activeTab === 'estoque' ? (
@@ -77,25 +68,15 @@ function App() {
     <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
       {activeTab === 'estoque' ? (
         activeEstoqueTopTab === 'launches' ? <LancamentosPage /> : <EstoquePage view={estoqueView} />
-      ) : activeTab === 'sellout' ? (
-        <SellOutPage />
-      ) : activeTab === 'sortimento' ? (
-        <ClientesSortimentoPage view={activeClientesTopTab} />
-      ) : activeTab === 'atividades' && activeAtividadesTopTab === 'combo' ? (
-        <CriacaoComboPage />
-      ) : activeTab === 'relatorios' ? (
-        <DocumentosPage />
-      ) : activeTab === 'metas' ? (
-        <MetasPage />
-      ) : activeTab === 'configuracoes' ? (
-        <ConfiguracoesPage />
-      ) : (
+      ) : activeTab === 'sellout' ? <SellOutPage />
+      : activeTab === 'sortimento' ? <ClientesSortimentoPage view={activeClientesTopTab} />
+      : activeTab === 'atividades' && activeAtividadesTopTab === 'combo' ? <CriacaoComboPage />
+      : activeTab === 'relatorios' ? <DocumentosPage />
+      : activeTab === 'metas' ? <MetasPage />
+      : activeTab === 'configuracoes' ? <ConfiguracoesPage />
+      : (
         <PanelPage title={currentLabel}>
-          <PanelEmptyState
-            icon="◆"
-            title={`${currentLabel} em construção`}
-            description="A estrutura visual já segue o padrão do Sell Out. O conteúdo funcional será adicionado quando este módulo entrar na etapa de implementação."
-          />
+          <PanelEmptyState icon="◆" title={`${currentLabel} em construção`} description="Este módulo faz parte do roadmap e ainda não está disponível para uso operacional." />
         </PanelPage>
       )}
     </BlueJacketShell>
@@ -103,9 +84,5 @@ function App() {
 }
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-  <React.StrictMode>
-    <DataProvider>
-      <App />
-    </DataProvider>
-  </React.StrictMode>,
+  <React.StrictMode><DataProvider><App /></DataProvider></React.StrictMode>,
 )
