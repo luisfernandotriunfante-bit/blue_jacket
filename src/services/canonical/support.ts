@@ -4,16 +4,13 @@ import type { Row } from './runtime';
 import { parseCadastro286 as parseCadastro286Core } from './supportCore';
 
 /**
- * O formato compacto do 286 normaliza o campo Master para a posição 24.
- * No formato antigo essa posição também já apareceu ocupada por identificadores longos,
- * portanto só aceitamos Master como fator Un/CX quando ele é um inteiro operacional
- * plausível. Valores longos (EAN/códigos) continuam apenas como identificadores.
+ * O campo Master do Cadastro 286 é identificador/código de master, não fator de
+ * embalagem. A heurística antiga que aceitava inteiros entre 1 e 500 podia
+ * transformar códigos como 200 em "200 Un/CX". O 286 continua sendo usado para
+ * Winthor ↔ fábrica ↔ EAN, mas nunca como fonte de unitsPerCase.
  */
 export function parseCadastro286(rows: Row[]) {
   const result = parseCadastro286Core(rows);
-  result.byInternal.forEach(item => {
-    const factor = Number(item.unitsPerCase) || 0;
-    if (!Number.isInteger(factor) || factor <= 0 || factor > 500) delete item.unitsPerCase;
-  });
+  result.byInternal.forEach(item => { delete item.unitsPerCase; });
   return result;
 }
