@@ -1,5 +1,7 @@
 import * as XLSX from 'xlsx';
 import type { CanonicalInventoryProduct, CanonicalState, ManualConfiguration } from '../domain/canonical';
+import { parseInvoiceIdentity } from '../domain/invoiceIdentity';
+import { packagingFactorsAgree, type UnitsPerCaseSource } from '../domain/packaging';
 import type { MetricasEstoque, ProdutoEstoque } from '../store/DataContext';
 import { cleanCode, cleanDigits, normalizeText, parseNumber, toIsoDate } from './canonical/utils';
 
@@ -9,6 +11,10 @@ export type SupplementalSourceKind = 'winthorTablePrices' | 'entryNotes218' | 'r
 
 export interface OperationalReceivedInvoice {
   invoice: string;
+  invoiceRaw?: string;
+  invoiceNumber?: string;
+  invoiceSeries?: string;
+  invoiceNormalized?: string;
   entryDate: string;
   issueDate: string;
   totalValue: number;
@@ -17,6 +23,10 @@ export interface OperationalReceivedInvoice {
 
 export interface OperationalReceiptItem {
   invoice: string;
+  invoiceRaw?: string;
+  invoiceNumber?: string;
+  invoiceSeries?: string;
+  invoiceNormalized?: string;
   entryDate: string;
   issueDate: string;
   sku: string;
@@ -35,6 +45,10 @@ export interface OperationalPortfolioRow {
   billQty: number;
   costValue: number;
   invoice: string;
+  invoiceRaw?: string;
+  invoiceNumber?: string;
+  invoiceSeries?: string;
+  invoiceNormalized?: string;
 }
 
 export interface OperationalSourceState {
@@ -50,6 +64,7 @@ export interface OperationalSourceState {
   portfolioRows: OperationalPortfolioRow[];
   portfolioInvoiceColumnDetected: boolean;
   portfolioHeader: string[];
+  persistenceError?: string;
 }
 
 const EMPTY_STATE: OperationalSourceState = {
@@ -67,17 +82,13 @@ const EMPTY_STATE: OperationalSourceState = {
   portfolioHeader: [],
 };
 
-function normalizeInvoice(value: unknown): string {
-  return String(value ?? '').replace(/[^0-9]/g, '').replace(/^0+/, '');
-}
-
 function storageAvailable(storage?: Storage | null): storage is Storage {
   return Boolean(storage && typeof storage.getItem === 'function' && typeof storage.setItem === 'function');
 }
 
 export function loadOperationalSourceState(storage?: Storage | null): OperationalSourceState {
   const target = storage ?? (typeof localStorage !== 'undefined' ? localStorage : null);
-  if (!storageAvailable(target)) return { ...EMPTY_STATE };
+  if (!storageAvailable(target)) return { ...EMPTY_STATE, persistenceError: 'Persistência das fontes operacionais indisponível neste navegador.' };
   try {
     const raw = target.getItem(STORAGE_KEY);
     if (!raw) return { ...EMPTY_STATE };
@@ -85,6 +96,7 @@ export function loadOperationalSourceState(storage?: Storage | null): Operationa
     return {
       ...EMPTY_STATE,
       ...parsed,
+      persistenceError: undefined,
       tablePrices: parsed.tablePrices || {},
       currentInvoices: parsed.currentInvoices || [],
       receiptItems: parsed.receiptItems || [],
@@ -92,15 +104,15 @@ export function loadOperationalSourceState(storage?: Storage | null): Operationa
       portfolioRows: parsed.portfolioRows || [],
       portfolioHeader: parsed.portfolioHeader || [],
     };
-  } catch {
-    return { ...EMPTY_STATE };
+  } catch (error) {
+    return { ...EMPTY_STATE, persistenceError: `Falha ao restaurar fontes operacionais: ${error instanceof Error ? error.message : 'conteúdo persistido inválido'}. A carga anterior não foi tratada como inexistente silenciosamente.` };
   }
 }
 
 export function saveOperationalSourceState(state: OperationalSourceState, storage?: Storage | null) {
   const target = storage ?? (typeof localStorage !== 'undefined' ? localStorage : null);
-  if (!storageAvailable(target)) return;
-  target.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (!storageAvailable(target)) throw new Error('Persistência das fontes operacionais indisponível neste navegador.');
+  target.setItem(STORAGE_KEY, JSON.stringify({ ...state, persistenceError: undefined }));
 }
 
 export function supplementalSourceKind(fileName: string): SupplementalSourceKind | null {
@@ -154,7 +166,10 @@ export function parseWinthorTablePrices(rows: unknown[][]): Record<string, numbe
     if (!isMcdCampoGrande || (status && status !== 'A')) continue;
     const rawPrice = parseNumber(row[tableCol]);
     const price = Math.round((rawPrice + Number.EPSILON) * 100) / 100;
-    if (price > 0) prices[code] = price;
+    if (price <= 0) continue;
+    const existing = prices[code];
+    if (existing !== undefined && Math.abs(existing - price) > 0.005) throw new Error(`Tabela de Preços Winthor: conflito para CODPROD ${code}; preços elegíveis ${existing.toFixed(2)} e ${price.toFixed(2)}. Nenhum critério "última linha vence" foi aplicado.`);
+    prices[code] = price;
   }
   if (!Object.keys(prices).length) throw new Error('Tabela de Preços Winthor: nenhum Preço 1 (PVENDA1) ativo da região MCD/Campo Grande foi encontrado.');
   return prices;
@@ -163,23 +178,27 @@ export function parseWinthorTablePrices(rows: unknown[][]): Record<string, numbe
 export function parseEntryNotes218(rows: unknown[][]): { invoices: OperationalReceivedInvoice[]; items: OperationalReceiptItem[] } {
   const invoices = new Map<string, OperationalReceivedInvoice>();
   const items: OperationalReceiptItem[] = [];
-  let current: { invoice: string; entryDate: string; issueDate: string; supplierName: string; supplierDocument: string } | null = null;
+  let current: { invoice: string; invoiceRaw: string; invoiceNumber: string; invoiceSeries: string; invoiceNormalized: string; entryDate: string; issueDate: string; supplierName: string; supplierDocument: string } | null = null;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const normalized = row.map(normalizeText);
     const noteHeader = normalized.some(value => value.includes('DT. ENTRADA')) && normalized.some(value => value.includes('NOTA FISCAL')) && normalized.some(value => value.includes('VL. TOTAL'));
     if (noteHeader) {
       const next = rows[i + 1] || [];
-      const invoice = normalizeInvoice(next[4]);
-      if (invoice) {
+      const identity = parseInvoiceIdentity(next[4]);
+      if (identity.number) {
         current = {
-          invoice,
+          invoice: identity.number,
+          invoiceRaw: identity.raw,
+          invoiceNumber: identity.number,
+          invoiceSeries: identity.series,
+          invoiceNormalized: identity.normalized,
           entryDate: toIsoDate(next[0]),
           issueDate: toIsoDate(next[8]),
           supplierName: String(next[12] ?? '').trim(),
           supplierDocument: cleanDigits(next[18]),
         };
-        invoices.set(invoice, { invoice, entryDate: current.entryDate, issueDate: current.issueDate, totalValue: parseNumber(next[21]), source: '218' });
+        invoices.set(identity.normalized || identity.number, { ...current, totalValue: parseNumber(next[21]), source: '218' });
       }
       continue;
     }
@@ -200,34 +219,49 @@ export function parseReceivedNotes12322(text: string): OperationalReceivedInvoic
   const pattern = /^\s*(\d{6,9})\s+(\d{2}\/\d{2}\/\d{2})\s+(\d{2}\/\d{2}\/\d{2})\s+\d{11,15}\s+.+?\s{2,}\d{3}\.\d{2}\s+\d{4}\s+([\d.,]+)/gm;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
-    const invoice = normalizeInvoice(match[1]);
-    if (!invoice) continue;
-    invoices.set(invoice, { invoice, issueDate: toIsoDate(match[2]), entryDate: toIsoDate(match[3]), totalValue: parseNumber(match[4]), source: '12.322' });
+    const identity = parseInvoiceIdentity(match[1]);
+    if (!identity.number) continue;
+    invoices.set(identity.normalized || identity.number, { invoice: identity.number, invoiceRaw: identity.raw, invoiceNumber: identity.number, invoiceSeries: identity.series, invoiceNormalized: identity.normalized, issueDate: toIsoDate(match[2]), entryDate: toIsoDate(match[3]), totalValue: parseNumber(match[4]), source: '12.322' });
   }
   return Array.from(invoices.values());
+}
+
+export function isOperationalPortfolioRows(rows: unknown[][]): boolean {
+  return rows.some(row => {
+    const values = row.map(normalizeText);
+    return values.some(value => value === 'MATERIAL' || value.includes('MATERIAL CODE'))
+      && values.some(value => value.includes('ORDER QTY'))
+      && values.some(value => value.includes('BILL QTY'))
+      && values.some(value => value.includes('NET VALUE'));
+  });
 }
 
 function portfolioHeaderColumns(rows: unknown[][]) {
   const headerIndex = rows.findIndex(row => {
     const values = row.map(normalizeText);
     return values.some(value => value === 'MATERIAL' || value.includes('MATERIAL CODE'))
-      && (values.some(value => value.includes('ORDER QTY')) || values.some(value => value.includes('BILL QTY')) || values.some(value => value.includes('NET VALUE')));
+      && values.some(value => value.includes('ORDER QTY'))
+      && values.some(value => value.includes('BILL QTY'))
+      && values.some(value => value.includes('NET VALUE'));
   });
-  const fallbackHeader = rows[0] || [];
-  const header = (headerIndex >= 0 ? rows[headerIndex] : fallbackHeader).map(normalizeText);
-  const find = (pred: (value: string) => boolean, fallback: number) => {
-    const index = header.findIndex(pred);
-    return index >= 0 ? index : fallback;
+  const sampleHeaders = (rows.slice(0, 12).find(row => row.some(cell => String(cell ?? '').trim())) || []).map(value => String(value ?? '').trim()).filter(Boolean).slice(0, 20);
+  if (headerIndex < 0) throw new Error(`Carteira: layout não reconhecido. Campos obrigatórios: MATERIAL, ORDER QTY, BILL QTY e NET VALUE. Cabeçalhos encontrados: ${sampleHeaders.join(' | ') || '(nenhum)'}. Nenhuma posição fixa de coluna foi usada.`);
+
+  const header = rows[headerIndex].map(normalizeText);
+  const required = (label: string, predicate: (value: string) => boolean) => {
+    const index = header.findIndex(predicate);
+    if (index < 0) throw new Error(`Carteira: campo obrigatório ${label} ausente. Cabeçalhos encontrados: ${header.filter(Boolean).join(' | ')}.`);
+    return index;
   };
   const invoice = header.findIndex(value => value === 'NF' || value === 'NFE' || value === 'NOTA' || value.includes('NOTA FISCAL') || value.includes('INVOICE') || value.includes('BILLING DOC'));
   return {
-    headerIndex: headerIndex >= 0 ? headerIndex : 0,
+    headerIndex,
     header,
-    material: find(value => value === 'MATERIAL' || value.includes('MATERIAL CODE'), 4),
-    description: find(value => value.includes('MATERIAL DESC') || value === 'DESCRIPTION' || value === 'DESCRICAO', 5),
-    orderQty: find(value => value.includes('ORDER QTY'), 6),
-    billQty: find(value => value.includes('BILL QTY'), 7),
-    cost: find(value => value.includes('NET VALUE') || value === 'VALOR', 8),
+    material: required('MATERIAL', value => value === 'MATERIAL' || value.includes('MATERIAL CODE')),
+    description: header.findIndex(value => value.includes('MATERIAL DESC') || value === 'DESCRIPTION' || value === 'DESCRICAO'),
+    orderQty: required('ORDER QTY', value => value.includes('ORDER QTY')),
+    billQty: required('BILL QTY', value => value.includes('BILL QTY')),
+    cost: required('NET VALUE', value => value.includes('NET VALUE')),
     invoice,
   };
 }
@@ -243,7 +277,20 @@ export function parseOperationalPortfolio(rows: unknown[][]): { rows: Operationa
     const billQty = Math.max(parseNumber(row[columns.billQty]), 0);
     const costValue = Math.max(parseNumber(row[columns.cost]), 0);
     if (orderQty + billQty <= 0 && costValue <= 0) continue;
-    result.push({ sourceRow: i + 1, materialCode, description: String(row[columns.description] ?? '').trim(), orderQty, billQty, costValue, invoice: columns.invoice >= 0 ? normalizeInvoice(row[columns.invoice]) : '' });
+    const identity = columns.invoice >= 0 ? parseInvoiceIdentity(row[columns.invoice]) : parseInvoiceIdentity('');
+    result.push({
+      sourceRow: i + 1,
+      materialCode,
+      description: columns.description >= 0 ? String(row[columns.description] ?? '').trim() : '',
+      orderQty,
+      billQty,
+      costValue,
+      invoice: identity.number,
+      invoiceRaw: identity.raw,
+      invoiceNumber: identity.number,
+      invoiceSeries: identity.series,
+      invoiceNormalized: identity.normalized,
+    });
   }
   return { rows: result, invoiceColumnDetected: columns.invoice >= 0, header: columns.header };
 }
@@ -260,23 +307,30 @@ export async function prepareOperationalSources(files: File[], storage?: Storage
     const supplemental = supplementalSourceKind(file.name);
     if (supplemental === 'winthorTablePrices') {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-      state = { ...state, tablePriceFileName: file.name, tablePrices: parseWinthorTablePrices(firstRows(workbook)) };
+      state = { ...state, persistenceError: undefined, tablePriceFileName: file.name, tablePrices: parseWinthorTablePrices(firstRows(workbook)) };
       continue;
     }
     if (supplemental === 'entryNotes218') {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
       const parsed = parseEntryNotes218(firstRows(workbook));
-      state = { ...state, entry218FileName: file.name, currentInvoices: parsed.invoices, receiptItems: parsed.items };
+      state = { ...state, persistenceError: undefined, entry218FileName: file.name, currentInvoices: parsed.invoices, receiptItems: parsed.items };
       continue;
     }
     if (supplemental === 'receivedNotes12322') {
-      state = { ...state, legacy12322FileName: file.name, legacyInvoices: parseReceivedNotes12322(await decodeTextFile(file)) };
+      state = { ...state, persistenceError: undefined, legacy12322FileName: file.name, legacyInvoices: parseReceivedNotes12322(await decodeTextFile(file)) };
       continue;
     }
-    if (normalizeText(file.name).includes('CARTEIRA') && !normalizeText(file.name).includes('CLIENT')) {
+
+    const name = normalizeText(file.name);
+    if (name.includes('CARTEIRA')) {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-      const parsed = parseOperationalPortfolio(firstRows(workbook));
-      state = { ...state, portfolioFileName: file.name, portfolioRows: parsed.rows, portfolioInvoiceColumnDetected: parsed.invoiceColumnDetected, portfolioHeader: parsed.header };
+      const rows = firstRows(workbook);
+      if (isOperationalPortfolioRows(rows)) {
+        const parsed = parseOperationalPortfolio(rows);
+        state = { ...state, persistenceError: undefined, portfolioFileName: file.name, portfolioRows: parsed.rows, portfolioInvoiceColumnDetected: parsed.invoiceColumnDetected, portfolioHeader: parsed.header };
+      } else if (!name.includes('CLIENT')) {
+        throw new Error(`${file.name}: o nome sugere Carteira, mas a assinatura de conteúdo não contém MATERIAL + ORDER QTY + BILL QTY + NET VALUE. O arquivo não foi aplicado como Carteira de estoque.`);
+      }
     }
     engineFiles.push(file);
   }
@@ -284,10 +338,29 @@ export async function prepareOperationalSources(files: File[], storage?: Storage
   return { engineFiles, state };
 }
 
-function cloneInventory(canonical: CanonicalState): Array<CanonicalInventoryProduct & { unitsPerCase?: number; portfolioLines?: unknown[] }> {
-  return canonical.inventory.map(item => ({ ...item, portfolioLines: [] }));
+type InventoryWithPackaging = CanonicalInventoryProduct & {
+  unitsPerCase?: number;
+  unitsPerCaseSource?: UnitsPerCaseSource;
+  unitsPerCaseConflict?: boolean;
+  portfolioLines?: unknown[];
+};
+
+function cloneInventory(canonical: CanonicalState): InventoryWithPackaging[] {
+  return canonical.inventory.map(item => ({ ...item, portfolioLines: [] } as InventoryWithPackaging));
 }
 
+function reconciledUnitsPerCase(product: InventoryWithPackaging, masterFactor: number): number {
+  const productFactor = product.unitsPerCaseConflict || product.unitsPerCaseSource === 'CONFLICT' || product.unitsPerCaseSource === 'UNKNOWN' ? 0 : Math.max(Number(product.unitsPerCase) || 0, 0);
+  const supportFactor = Math.max(Number(masterFactor) || 0, 0);
+  if (productFactor > 0 && supportFactor > 0 && !packagingFactorsAgree(productFactor, supportFactor)) return 0;
+  return productFactor || supportFactor;
+}
+
+/**
+ * Aplica somente overrides que NÃO representam recebimento: preço e reconstrução
+ * da Carteira bruta/comparável. A baixa de 12.322/218 pertence exclusivamente a
+ * applyReceiptReconciliation, impedindo dupla dedução no pipeline real.
+ */
 export function applyOperationalOverrides(canonical: CanonicalState, state: OperationalSourceState, config: ManualConfiguration): { canonical: CanonicalState; priceMatched: number; priceDivergences: number; portfolioDeductedRows: number; portfolioDeductedCost: number; portfolioBlocked: boolean } {
   const inventory = cloneInventory(canonical);
   const byCode = new Map(inventory.map(item => [cleanCode(item.code), item]));
@@ -308,28 +381,18 @@ export function applyOperationalOverrides(canonical: CanonicalState, state: Oper
     item.saleUnit = authoritative;
   });
 
-  const received = new Set([...state.legacyInvoices, ...state.currentInvoices].map(item => normalizeInvoice(item.invoice)).filter(Boolean));
-  let portfolioDeductedRows = 0;
-  let portfolioDeductedCost = 0;
   const canRebuildPortfolio = state.portfolioRows.length > 0;
-  const portfolioBlocked = received.size > 0 && canRebuildPortfolio && !state.portfolioInvoiceColumnDetected;
-
   if (canRebuildPortfolio) {
     inventory.forEach(item => { item.pendingQty = 0; item.pendingCases = 0; item.pendingCost = 0; item.pendingSale = 0; item.portfolioLines = []; });
     for (const row of state.portfolioRows) {
-      if (row.invoice && received.has(normalizeInvoice(row.invoice))) {
-        portfolioDeductedRows += 1;
-        portfolioDeductedCost += row.costValue;
-        continue;
-      }
       const material = cleanCode(row.materialCode);
       const mappedInternal = itemByInternal.has(material) ? material : internalByFactory.get(material) || '';
       const cad = mappedInternal ? itemByInternal.get(mappedInternal) : undefined;
       const ean = cleanDigits(cad?.ean || '');
       const master = productBySku.get(material) || (ean ? productByEan.get(ean) : undefined);
-      let product = (mappedInternal ? byCode.get(mappedInternal) : undefined) || byCode.get(material) || byFactory.get(material) || (ean ? byEan.get(ean) : undefined);
+      const product = (mappedInternal ? byCode.get(mappedInternal) : undefined) || byCode.get(material) || byFactory.get(material) || (ean ? byEan.get(ean) : undefined);
       if (!product) continue;
-      const unitsPerCase = Math.max(Number(master?.unitsPerCase) || 0, Number(product.unitsPerCase) || 0, 0);
+      const unitsPerCase = reconciledUnitsPerCase(product, Number(master?.unitsPerCase) || 0);
       const cases = row.orderQty + row.billQty;
       const units = unitsPerCase > 0 ? cases * unitsPerCase : 0;
       const sale = row.costValue * (1 + Math.max(Number(config.portfolioSaleMarkup) || 0, 0));
@@ -351,11 +414,11 @@ export function applyOperationalOverrides(canonical: CanonicalState, state: Oper
   const coverageCostCurrentDays = historyAverage > 0 ? Math.round(stockCost / historyAverage * 30) : 0;
   const coverageCostProjectedDays = historyAverage > 0 ? Math.round((stockCost + pendingCost) / historyAverage * 30) : 0;
 
-  const warnings = canonical.warnings.filter(warning => !warning.startsWith('Tabela PCTABPR:') && !warning.startsWith('Entrada de notas:') && !warning.startsWith('Abatimento da Carteira:'));
+  const warnings = canonical.warnings.filter(warning => !warning.startsWith('Tabela PCTABPR:') && !warning.startsWith('Entrada de notas:') && !warning.startsWith('Abatimento da Carteira:') && !warning.startsWith('Persistência operacional:'));
   if (Object.keys(state.tablePrices).length) warnings.push(`Tabela PCTABPR: ${Object.keys(state.tablePrices).length} preço(s) ativo(s) carregado(s); ${priceMatched} SKU(s) do estoque receberam Preço 1 (PVENDA1) como prioridade${priceDivergences ? `, com ${priceDivergences} divergência(s) contra a fonte anterior` : ', sem divergência nos SKUs comparáveis'}.`);
-  if (state.currentInvoices.length || state.legacyInvoices.length) warnings.push(`Entrada de notas: ${state.currentInvoices.length} NF(s) do 218 + ${state.legacyInvoices.length} NF(s) históricas do 12.322 registradas para controle de recebimento.`);
-  if (portfolioBlocked) warnings.push('Abatimento da Carteira: BLOQUEADA POR FONTE AUSENTE — a Carteira carregada não expõe uma coluna de NF/Invoice/Billing Doc; nenhuma linha foi abatida por aproximação.');
-  else if (canRebuildPortfolio && received.size) warnings.push(`Abatimento da Carteira: ${portfolioDeductedRows} linha(s) vinculada(s) a NF já recebida foram retiradas da carteira pendente (${portfolioDeductedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} a custo).`);
+  if (state.currentInvoices.length || state.legacyInvoices.length) warnings.push(`Entrada de notas: ${state.currentInvoices.length} NF(s) do 218 + ${state.legacyInvoices.length} NF(s) históricas do 12.322 registradas. A baixa é aplicada exclusivamente pela reconciliação de recebimentos.`);
+  if (canRebuildPortfolio) warnings.push(`Abatimento da Carteira: Carteira bruta/comparável reconstruída com ${state.portfolioRows.length} linha(s); nenhum recebimento foi abatido nesta camada.`);
+  if (state.persistenceError) warnings.push(`Persistência operacional: ${state.persistenceError}`);
 
   const next: CanonicalState = {
     ...canonical,
@@ -375,7 +438,7 @@ export function applyOperationalOverrides(canonical: CanonicalState, state: Oper
     },
     warnings,
   };
-  return { canonical: next, priceMatched, priceDivergences, portfolioDeductedRows, portfolioDeductedCost, portfolioBlocked };
+  return { canonical: next, priceMatched, priceDivergences, portfolioDeductedRows: 0, portfolioDeductedCost: 0, portfolioBlocked: false };
 }
 
 export function operationalLegacyData(canonical: CanonicalState, coverageTarget: number): { produtos: ProdutoEstoque[]; metricas: MetricasEstoque } {
@@ -386,16 +449,16 @@ export function operationalLegacyData(canonical: CanonicalState, coverageTarget:
 
 export function operationalReceiptMovements(state = loadOperationalSourceState()) {
   return state.receiptItems.map((item, index) => ({
-    id: `218:${item.invoice}:${item.sku}:${index}`,
+    id: `218:${item.invoiceNormalized || item.invoice}:${item.sku}:${index}`,
     direction: 'ENTRADA' as const,
     stage: 'REALIZADA' as const,
     kind: 'ENTRADA_REALIZADA' as const,
     status: 'Entrada realizada',
     movement: 'Recebimento NF',
     date: item.entryDate,
-    document: item.invoice,
+    document: item.invoiceRaw || item.invoice,
     order: '',
-    invoice: item.invoice,
+    invoice: item.invoiceRaw || item.invoice,
     sku: item.sku,
     ean: '',
     product: item.product,
