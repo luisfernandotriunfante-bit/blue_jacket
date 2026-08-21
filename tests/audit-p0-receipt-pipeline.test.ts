@@ -23,7 +23,7 @@ function canonical() {
   } as any;
 }
 
-function operational(invoice = '29157201') {
+function operational(invoice = '2915720') {
   return {
     version: 1,
     tablePriceFileName: '', tablePrices: {}, entry218FileName: '', currentInvoices: [], receiptItems: [],
@@ -38,10 +38,10 @@ function operational(invoice = '29157201') {
 test('pipeline real não abate a mesma NF duas vezes entre override operacional e reconciliação 12.322', () => {
   const state = operational();
   const adjusted = applyOperationalOverrides(canonical(), state, config);
-  // O legado anterior já retirava R$ 400 nesta etapa.
+  // O override antigo já removia a NF quando o número vinha exatamente igual.
   assert.equal(adjusted.canonical.stock.pendingPurchaseCost, 600);
   const final = applyReceiptReconciliation(adjusted.canonical, state, config);
-  // A reconciliação deve reconstruir a carteira-base e aplicar uma única baixa: 1000 - 400 = 600.
+  // A reconciliação reconstrói a carteira-base e aplica uma única baixa: 1000 - 400 = 600.
   assert.equal(final.canonical.stock.pendingPurchaseCost, 600);
   assert.equal(final.canonical.inventory[0].pendingCases, 10);
   assert.equal(final.canonical.inventory[0].pendingQty, 100);
