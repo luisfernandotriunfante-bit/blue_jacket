@@ -22,7 +22,7 @@ function baseCanonical() {
   } as any;
 }
 
-function state({ legacy = true }: { legacy?: boolean } = {}) {
+function state({ legacy = true, legacyInPortfolio = true }: { legacy?: boolean; legacyInPortfolio?: boolean } = {}) {
   return {
     version: 1,
     tablePriceFileName: '', tablePrices: {},
@@ -30,55 +30,78 @@ function state({ legacy = true }: { legacy?: boolean } = {}) {
     currentInvoices: [{ invoice: '2953129', entryDate: '2026-08-20', issueDate: '2026-08-19', totalValue: 2000, source: '218' }],
     receiptItems: [{ invoice: '2953129', entryDate: '2026-08-20', issueDate: '2026-08-19', sku: '988', product: 'Produto 988', units: 100, unitPrice: 20, supplierName: 'Colgate', supplierDocument: '' }],
     legacy12322FileName: legacy ? '12.322.txt' : '',
-    legacyInvoices: legacy ? [{ invoice: '2953129', entryDate: '2026-08-20', issueDate: '2026-08-19', totalValue: 2000, source: '12.322' }] : [],
+    legacyInvoices: legacy ? [{ invoice: '2915720', entryDate: '2026-07-30', issueDate: '2026-07-13', totalValue: 2500, source: '12.322' }] : [],
     portfolioFileName: 'carteira.xlsx',
-    portfolioRows: [{ sourceRow: 2, materialCode: '988', description: 'Produto 988', orderQty: 60, billQty: 40, costValue: 10000, invoice: '' }],
-    portfolioInvoiceColumnDetected: false,
+    portfolioRows: [{ sourceRow: 2, materialCode: '988', description: 'Produto 988', orderQty: 60, billQty: 40, costValue: 2000, invoice: legacyInPortfolio ? '29157201' : '29999991' }],
+    portfolioInvoiceColumnDetected: true,
     portfolioHeader: [],
   } as any;
 }
 
 const config = { sellOutTarget: 0, coverageTargetDays: 60, portfolioSaleMarkup: 0.3, networkTargets: {}, holidays: [], lineShares: {} } as any;
 
-test('mantém Order Qty + Bill Qty como base física da Carteira', () => {
+test('mantém Order Qty + Bill Qty calculados antes da reconciliação', () => {
   const result = applyReceiptReconciliation(baseCanonical(), state({ legacy: false }), config, new Set());
   assert.equal(result.canonical.inventory[0].pendingCases, 100);
   assert.equal(result.canonical.inventory[0].pendingQty, 1000);
 });
 
-test('12.322 abate financeiramente a NF recebida sem alterar quantidade física sozinho', () => {
+test('12.322 abate somente o NET VALUE da NF antiga que existe na Carteira', () => {
   const result = applyReceiptReconciliation(baseCanonical(), state(), config, new Set());
   assert.equal(result.canonical.inventory[0].pendingQty, 1000);
   assert.equal(result.canonical.inventory[0].pendingCases, 100);
   assert.equal(result.canonical.stock.pendingPurchaseCost, 8000);
   assert.equal(result.canonical.stock.pendingPurchaseSale, 10400);
+  assert.equal(result.audit.legacyInvoiceCount, 1);
+  assert.equal(result.audit.legacyMatchedInvoiceCount, 1);
+  assert.equal(result.audit.legacyRequestedCost, 2000);
   assert.equal(result.audit.legacyAppliedCost, 2000);
 });
 
-test('218 só abate quantidade depois de confirmação item a item e não duplica financeiro do 12.322', () => {
+test('normaliza a série -1 da Carteira sem incorporar o dígito ao número da NF', () => {
+  const result = applyReceiptReconciliation(baseCanonical(), state(), config, new Set());
+  assert.equal(result.audit.legacyMatchedInvoiceCount, 1);
+});
+
+test('12.322 não abate NF que não está presente na Carteira atual', () => {
+  const result = applyReceiptReconciliation(baseCanonical(), state({ legacyInPortfolio: false }), config, new Set());
+  assert.equal(result.canonical.stock.pendingPurchaseCost, 10000);
+  assert.equal(result.audit.legacyMatchedInvoiceCount, 0);
+  assert.equal(result.audit.legacyAppliedCost, 0);
+});
+
+test('12.322 ignora registros com entrada a partir de 01/08/2026', () => {
   const operational = state();
+  operational.legacyInvoices = [{ invoice: '2915720', entryDate: '2026-08-01', issueDate: '2026-07-13', totalValue: 2500, source: '12.322' }] as any;
+  const result = applyReceiptReconciliation(baseCanonical(), operational, config, new Set());
+  assert.equal(result.canonical.stock.pendingPurchaseCost, 10000);
+  assert.equal(result.audit.legacyInvoiceCount, 0);
+});
+
+test('218 só abate quantidade e financeiro depois da confirmação item a item a partir de agosto', () => {
+  const operational = state({ legacy: false });
   const key = receiptItemKey(operational.receiptItems[0], 0);
   const result = applyReceiptReconciliation(baseCanonical(), operational, config, new Set([key]));
   assert.equal(result.canonical.inventory[0].pendingQty, 900);
   assert.equal(result.canonical.inventory[0].pendingCases, 90);
   assert.equal(result.canonical.stock.pendingPurchaseCost, 8000);
-  assert.equal(result.audit.confirmedItemCost, 0);
+  assert.equal(result.audit.confirmedItemCost, 2000);
 });
 
-test('218 confirmado abate também o financeiro quando a NF não está no 12.322', () => {
+test('218 ignora itens anteriores a 01/08/2026', () => {
   const operational = state({ legacy: false });
+  operational.receiptItems[0].entryDate = '2026-07-31';
   const key = receiptItemKey(operational.receiptItems[0], 0);
   const result = applyReceiptReconciliation(baseCanonical(), operational, config, new Set([key]));
-  assert.equal(result.canonical.inventory[0].pendingQty, 900);
-  assert.equal(result.canonical.stock.pendingPurchaseCost, 8000);
-  assert.equal(result.audit.confirmedItemCost, 2000);
+  assert.equal(result.canonical.inventory[0].pendingQty, 1000);
+  assert.equal(result.canonical.stock.pendingPurchaseCost, 10000);
+  assert.equal(result.audit.confirmedItems, 0);
 });
 
 test('configurações expõe etapa explícita de confirmação dos itens do 218', () => {
   const page = fs.readFileSync(new URL('../src/pages/ConfiguracoesPage.tsx', import.meta.url), 'utf8');
   assert.match(page, /Conferir itens do 218 antes de baixar a Carteira/);
   assert.match(page, /Aplicar confirmações/);
-  assert.match(page, /12\.322 · já coberto/);
 });
 
 test('hidratação reaplica reconciliação de recebimentos após restaurar a base', () => {
