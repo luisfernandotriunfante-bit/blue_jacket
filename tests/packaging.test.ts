@@ -4,6 +4,7 @@ import { deriveUnitsPerCaseFrom105, resolvePackagingCandidates } from '../src/do
 import { applyPortfolio, parseStock105 } from '../src/services/canonical/operations.ts';
 
 const cadastro = { byInternal: new Map<string, any>(), factoryToInternal: new Map<string, string>() };
+const portfolioHeader=['','','','','Material','Material Desc','Order Qty','Bill Qty','Net Value'];
 
 function stockRows(quantity:number, master:number) {
   const rows:any[][]=[['CODIGO','DESCRICAO','ESTOQUE','MASTER','CUSTO UNITARIO','P VENDA']];
@@ -54,7 +55,7 @@ test('fontes comprovadas iguais podem coexistir sem conflito',()=>{
 test('Carteira usa fator 105 derivado quando não há segunda fonte e converte Order+Bill corretamente',()=>{
   const products=parseStock105(stockRows(531,44.25),cadastro);
   const row=Array(9).fill(''); row[4]='1'; row[6]=2; row[7]=3; row[8]=100;
-  const result=applyPortfolio([[],row],products,cadastro,{bySku:new Map(),byEan:new Map()},0);
+  const result=applyPortfolio([portfolioHeader,row],products,cadastro,{bySku:new Map(),byEan:new Map()},0);
   assert.equal(result.unresolved,0); assert.equal(products.get('1')?.saldoPedidoCaixas,5); assert.equal(products.get('1')?.saldoPedido,60);
 });
 
@@ -63,6 +64,6 @@ test('Carteira bloqueia unidades quando PRICE_LIST diverge do fator 105 derivado
   const product=products.get('1')!; product.factoryCode='MAT1';
   const master={sku:'MAT1',ean:'',description:'Produto 1',category:'',subcategory:'',brand:'',isLaunch:false,boxPrice:0,unitPrice:0,unitsPerCase:24,line:'' as const};
   const row=Array(9).fill(''); row[4]='MAT1'; row[6]=2; row[8]=100;
-  const result=applyPortfolio([[],row],products,{byInternal:new Map([['1',{description:'Produto 1',ean:'',factoryCode:'MAT1'}]]),factoryToInternal:new Map([['MAT1','1']])},{bySku:new Map([['MAT1',master]]),byEan:new Map()},0);
+  const result=applyPortfolio([portfolioHeader,row],products,{byInternal:new Map([['1',{description:'Produto 1',ean:'',factoryCode:'MAT1'}]]),factoryToInternal:new Map([['MAT1','1']])},{bySku:new Map([['MAT1',master]]),byEan:new Map()},0);
   assert.equal(result.unresolved,1); assert.equal(product.unitsPerCase,0); assert.equal(product.unitsPerCaseSource,'CONFLICT'); assert.equal(product.saldoPedido,0); assert.equal(product.saldoPedidoCaixas,2);
 });
