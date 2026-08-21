@@ -9,7 +9,7 @@ export type PremiseClient = { cnpj: string; cnpjRaw?:string; cnpjNormalizationSt
 export type RouteStore = { cnpj: string; cnpjRaw?:string; cnpjNormalizationStatus?:CnpjNormalizationStatus; name: string; fantasyName: string; city: string; networkRaw: string; managerCnpj: string; managerCnpjRaw?:string; managerCnpjNormalizationStatus?:CnpjNormalizationStatus; groupingCode: string; tier: string; storeType: string; target: number };
 export type ReferenceClientNetwork = { cnpj:string; cnpjRaw?:string; cnpjNormalizationStatus?:CnpjNormalizationStatus; network:string };
 export type ProductMaster = { sku: string; ean: string; description: string; category: string; subcategory: string; brand: string; isLaunch: boolean; boxPrice: number; unitPrice: number; unitsPerCase: number; line: LineName | '' };
-export type SalesTransaction = CanonicalSalesTransaction;
+export type SalesTransaction = CanonicalSalesTransaction & { customerKey?: string };
 export type PortfolioSourceLine = {
   sourceRow: number;
   materialCode: string;
