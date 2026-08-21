@@ -35,23 +35,106 @@ function operational(invoice = '2915720') {
   } as any;
 }
 
-test('pipeline real não abate a mesma NF duas vezes entre override operacional e reconciliação 12.322', () => {
-  const state = operational();
-  const adjusted = applyOperationalOverrides(canonical(), state, config);
-  // O override antigo já removia a NF quando o número vinha exatamente igual.
-  assert.equal(adjusted.canonical.stock.pendingPurchaseCost, 600);
-  const final = applyReceiptReconciliation(adjusted.canonical, state, config);
-  // A reconciliação reconstrói a carteira-base e aplica uma única baixa: 1000 - 400 = 600.
+function pipeline(state:any, base=canonical()) {
+  const adjusted=applyOperationalOverrides(base,state,config);
+  const final=applyReceiptReconciliation(adjusted.canonical,state,config);
+  return { adjusted, final };
+}
+
+test('pipeline real mantém Carteira bruta no override e abate recebimento uma única vez', () => {
+  const { adjusted, final } = pipeline(operational());
+  assert.equal(adjusted.canonical.stock.pendingPurchaseCost, 1000);
+  assert.equal(adjusted.portfolioDeductedCost, 0);
   assert.equal(final.canonical.stock.pendingPurchaseCost, 600);
   assert.equal(final.canonical.inventory[0].pendingCases, 10);
   assert.equal(final.canonical.inventory[0].pendingQty, 100);
   assert.equal(final.audit.legacyAppliedCost, 400);
 });
 
-test('fallback de série não remove último dígito de uma NF comum que não termina em 1', () => {
+test('mesma NF visível ao override e à reconciliação nunca sofre duas baixas',()=>{
+  const state=operational();
+  const { adjusted, final }=pipeline(state);
+  assert.equal(adjusted.canonical.stock.pendingPurchaseCost-final.canonical.stock.pendingPurchaseCost,400);
+  assert.equal(final.canonical.stock.pendingPurchaseCost,600);
+});
+
+test('recebimento 218 parcial reduz somente o volume e custo efetivamente recebido',()=>{
+  const state=operational('99999991');
+  state.legacyInvoices=[];
+  state.entry218FileName='entrada-notas-218.xls';
+  state.receiptItems=[{invoice:'3000000',entryDate:'2026-08-20',issueDate:'2026-08-19',sku:'988',product:'Produto 988',units:40,unitPrice:4,supplierName:'Colgate',supplierDocument:''}];
+  const { adjusted, final }=pipeline(state);
+  assert.equal(adjusted.canonical.inventory[0].pendingQty,200);
+  assert.equal(final.canonical.inventory[0].pendingQty,160);
+  assert.equal(final.canonical.inventory[0].pendingCases,16);
+  assert.equal(final.canonical.stock.pendingPurchaseCost,840);
+  assert.equal(final.audit.confirmedUnits,40);
+});
+
+test('recebimento 218 total zera volume e custo sem gerar saldo negativo',()=>{
+  const state=operational('99999991');
+  state.legacyInvoices=[];
+  state.receiptItems=[{invoice:'3000001',entryDate:'2026-08-20',issueDate:'2026-08-19',sku:'988',product:'Produto 988',units:200,unitPrice:10,supplierName:'Colgate',supplierDocument:''}];
+  const { final }=pipeline(state);
+  assert.equal(final.canonical.inventory[0].pendingQty,0);
+  assert.equal(final.canonical.inventory[0].pendingCases,0);
+  assert.equal(final.canonical.stock.pendingPurchaseCost,0);
+});
+
+test('várias NFs do mesmo SKU são abatidas uma vez cada',()=>{
+  const state=operational();
+  state.portfolioRows=[
+    {sourceRow:2,materialCode:'MAT988',description:'Produto 988',orderQty:10,billQty:0,costValue:400,invoice:'2915720'},
+    {sourceRow:3,materialCode:'MAT988',description:'Produto 988',orderQty:10,billQty:0,costValue:600,invoice:'2915722'},
+  ];
+  state.legacyInvoices=[
+    {invoice:'2915720',entryDate:'2026-07-30',issueDate:'2026-07-13',totalValue:400,source:'12.322'},
+    {invoice:'2915722',entryDate:'2026-07-31',issueDate:'2026-07-14',totalValue:600,source:'12.322'},
+  ];
+  const { final }=pipeline(state);
+  assert.equal(final.audit.legacyMatchedInvoiceCount,2);
+  assert.equal(final.audit.legacyAppliedCost,1000);
+  assert.equal(final.canonical.stock.pendingPurchaseCost,0);
+  assert.equal(final.canonical.inventory[0].pendingQty,0);
+});
+
+test('vários SKUs são reconciliados sem cruzar recebimento para o produto errado',()=>{
+  const base=canonical();
+  base.support.products.push({sku:'MAT777',ean:'7890000000001',description:'Produto 777',category:'',subcategory:'',brand:'',isLaunch:false,boxPrice:0,unitPrice:0,unitsPerCase:5,line:''});
+  base.support.itemCodes.push({internalCode:'777',description:'Produto 777',ean:'7890000000001',factoryCode:'MAT777'});
+  base.inventory.push({code:'777',description:'Produto 777',ean:'7890000000001',quantity:50,costUnit:5,saleUnit:7,pendingQty:0,pendingCases:0,pendingCost:0,pendingSale:0,isLaunch:false,hasWinthor:true,factoryCode:'MAT777',physicalCases:0,physicalUnits:0,grossKg:0});
+  const state=operational();
+  state.portfolioRows=[
+    {sourceRow:2,materialCode:'MAT988',description:'Produto 988',orderQty:10,billQty:0,costValue:400,invoice:'2915720'},
+    {sourceRow:3,materialCode:'MAT777',description:'Produto 777',orderQty:10,billQty:0,costValue:600,invoice:'9999999'},
+  ];
+  const { final }=pipeline(state,base);
+  const first=final.canonical.inventory.find((item:any)=>item.code==='988');
+  const second=final.canonical.inventory.find((item:any)=>item.code==='777');
+  assert.equal(first.pendingCost,0); assert.equal(first.pendingQty,0);
+  assert.equal(second.pendingCost,600); assert.equal(second.pendingQty,50);
+});
+
+test('série explicitamente separada pode casar pelo mesmo número da NF',()=>{
+  const state=operational('2915720');
+  state.portfolioRows[0].invoiceRaw='002915720-1';
+  const { final }=pipeline(state);
+  assert.equal(final.audit.legacyMatchedInvoiceCount,1);
+  assert.equal(final.audit.legacyAppliedCost,400);
+});
+
+test('NF de prefixo semelhante não casa sem série explicitamente separada', () => {
   const state = operational('29157208');
-  const result = applyReceiptReconciliation(applyOperationalOverrides(canonical(), { ...state, legacyInvoices: [] }, config).canonical, state, config);
-  assert.equal(result.audit.legacyMatchedInvoiceCount, 0);
-  assert.equal(result.audit.legacyAppliedCost, 0);
-  assert.equal(result.canonical.stock.pendingPurchaseCost, 1000);
+  const { final }=pipeline(state);
+  assert.equal(final.audit.legacyMatchedInvoiceCount,0);
+  assert.equal(final.audit.legacyAppliedCost,0);
+  assert.equal(final.canonical.stock.pendingPurchaseCost,1000);
+});
+
+test('NF sem correspondência permanece pendente e não baixa produto algum',()=>{
+  const state=operational('8888888');
+  const { final }=pipeline(state);
+  assert.equal(final.audit.legacyMatchedInvoiceCount,0);
+  assert.equal(final.canonical.stock.pendingPurchaseCost,1000);
+  assert.equal(final.canonical.inventory[0].pendingQty,200);
 });
