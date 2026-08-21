@@ -11,6 +11,13 @@ function stockRows(quantity:number, master:number) {
   return rows;
 }
 
+function validStockSnapshotWithZeroFirstSku() {
+  const rows=stockRows(120,10);
+  rows[1][2]=0;
+  rows[1][3]=44.25;
+  return rows;
+}
+
 test('caso real A: 531 / 44,25 deriva exatamente 12 Un/CX',()=>{
   const result=deriveUnitsPerCaseFrom105(531,44.25);
   assert.equal(result.unitsPerCase,12); assert.equal(result.source,'105_DERIVED'); assert.equal(result.conflict,false);
@@ -29,8 +36,9 @@ test('caso real C: 499 / 41,5833333 deriva 12 Un/CX',()=>{
 test('caso D: estoque zero não fabrica fator a partir do Master do 105',()=>{
   const result=deriveUnitsPerCaseFrom105(0,44.25);
   assert.equal(result.unitsPerCase,0); assert.equal(result.source,'UNKNOWN');
-  const products=parseStock105(stockRows(0,44.25),cadastro);
-  assert.equal(products.get('1')?.unitsPerCase,0); assert.equal(products.get('1')?.unitsPerCaseSource,'UNKNOWN');
+  const products=parseStock105(validStockSnapshotWithZeroFirstSku(),cadastro);
+  assert.equal(products.get('1')?.quantidade,0); assert.equal(products.get('1')?.unitsPerCase,0); assert.equal(products.get('1')?.unitsPerCaseSource,'UNKNOWN');
+  assert.equal(products.get('2')?.unitsPerCase,12);
 });
 
 test('caso F: fontes comprovadas divergentes bloqueiam conversão em vez de escolher maior ou última',()=>{
