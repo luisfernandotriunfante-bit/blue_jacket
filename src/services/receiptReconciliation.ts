@@ -1,4 +1,5 @@
 import type { CanonicalInventoryProduct, CanonicalState, ManualConfiguration } from '../domain/canonical';
+import { applyOperationalOverrides } from './operationalSources';
 import type { OperationalPortfolioRow, OperationalReceiptItem, OperationalSourceState } from './operationalSources';
 import { cleanCode, cleanDigits } from './canonical/utils';
 
@@ -53,12 +54,17 @@ function normalizedInvoice(value: unknown): string {
   return String(value ?? '').replace(/\D/g, '').replace(/^0+/, '');
 }
 
-/** A Carteira costuma expor a NF como 002915720-1. */
+/**
+ * A Carteira observada expõe a série como sufixo “-1” (ex.: 002915720-1).
+ * Como o parser legado persiste apenas os dígitos, o fallback de série só pode
+ * remover um último dígito quando ele é 1. Qualquer outro final permanece como
+ * parte do número da NF, evitando baixa falsa por simples coincidência de prefixo.
+ */
 function matchInvoiceKey(value: unknown, knownInvoices: Map<string, unknown>): string {
   const direct = normalizedInvoice(value);
   if (!direct) return '';
   if (knownInvoices.has(direct)) return direct;
-  if (direct.length >= 8) {
+  if (direct.length >= 8 && direct.endsWith('1')) {
     const withoutSeries = direct.slice(0, -1).replace(/^0+/, '');
     if (knownInvoices.has(withoutSeries)) return withoutSeries;
   }
@@ -140,13 +146,29 @@ function deductPortfolioVolume(product: CanonicalInventoryProduct, requestedCase
   return { cases, units };
 }
 
+function restorePortfolioBeforeReceiptDeduction(
+  canonical: CanonicalState,
+  state: OperationalSourceState,
+  config: ManualConfiguration,
+): CanonicalState {
+  const priorOverrideDeduction = canonical.warnings.some(warning => warning.startsWith('Abatimento da Carteira:') && !warning.includes('BLOQUEADA'));
+  if (!priorOverrideDeduction || !state.portfolioRows.length) return canonical;
+
+  // applyOperationalOverrides historicamente já removia NFs recebidas. Como a
+  // reconciliação 12.322/218 passou a ser o motor oficial de baixa, reconstruímos
+  // primeiro a Carteira comparável SEM as listas de recebimento e então aplicamos
+  // cada baixa uma única vez abaixo. Isso mantém preço PCTABPR e continuidade.
+  return applyOperationalOverrides(canonical, { ...state, currentInvoices: [], legacyInvoices: [] }, config).canonical;
+}
+
 export function applyReceiptReconciliation(
   canonical: CanonicalState,
   state: OperationalSourceState,
   config: ManualConfiguration,
   _legacyConfirmedKeys: Set<string> = new Set(),
 ): { canonical: CanonicalState; audit: ReceiptReconciliationAudit } {
-  const inventory = canonical.inventory.map(item => ({ ...item }));
+  const baselineCanonical = restorePortfolioBeforeReceiptDeduction(canonical, state, config);
+  const inventory = baselineCanonical.inventory.map(item => ({ ...item }));
   const byCode = new Map(inventory.map(item => [cleanCode(item.code), item]));
   const byFactory = new Map(inventory.filter(item => cleanCode(item.factoryCode)).map(item => [cleanCode(item.factoryCode), item]));
   const byEan = new Map(inventory.filter(item => cleanDigits(item.ean)).map(item => [cleanDigits(item.ean), item]));
@@ -169,7 +191,7 @@ export function applyReceiptReconciliation(
     const legacyKey = matchInvoiceKey(row.invoice, legacyInvoices);
     if (!legacyKey) continue;
     legacyMatchedInvoices.add(legacyKey);
-    const product = resolvePortfolioProduct(row, byCode, byFactory, byEan, canonical);
+    const product = resolvePortfolioProduct(row, byCode, byFactory, byEan, baselineCanonical);
     if (!product) continue;
 
     const requestedCost = Math.max(Number(row.costValue) || 0, 0);
@@ -177,7 +199,7 @@ export function applyReceiptReconciliation(
     legacyAppliedCost += deductPortfolioRowFinancial(product, requestedCost, config);
 
     const requestedCases = Math.max(Number(row.orderQty) || 0, 0) + Math.max(Number(row.billQty) || 0, 0);
-    const volume = deductPortfolioVolume(product, requestedCases, canonical);
+    const volume = deductPortfolioVolume(product, requestedCases, baselineCanonical);
     legacyAppliedCases += volume.cases;
     legacyAppliedUnits += volume.units;
   }
@@ -193,11 +215,11 @@ export function applyReceiptReconciliation(
   state.receiptItems.forEach(item => {
     if (!isAugust2026OrLater(item.entryDate)) return;
     confirmedItems += 1;
-    const product = resolveReceiptProduct(item, byCode, byFactory, byEan, canonical);
+    const product = resolveReceiptProduct(item, byCode, byFactory, byEan, baselineCanonical);
     if (!product) { unresolvedItems += 1; return; }
 
     const units = Math.min(Math.max(item.units, 0), Math.max(product.pendingQty, 0));
-    const unitsPerCase = unitsPerCaseFor(product, canonical);
+    const unitsPerCase = unitsPerCaseFor(product, baselineCanonical);
     const cases = unitsPerCase > 0 ? Math.min(Math.max(product.pendingCases, 0), units / unitsPerCase) : 0;
     product.pendingQty = Math.max(product.pendingQty - units, 0);
     product.pendingCases = Math.max(product.pendingCases - cases, 0);
@@ -214,11 +236,11 @@ export function applyReceiptReconciliation(
   const pendingSale = inventory.reduce((sum, item) => sum + Math.max(item.pendingSale, 0), 0);
   const stockCost = inventory.reduce((sum, item) => sum + item.quantity * item.costUnit, 0);
   const stockSale = inventory.reduce((sum, item) => sum + item.quantity * item.saleUnit, 0);
-  const historyAverage = canonical.history.average3ClosedMonths || 0;
+  const historyAverage = baselineCanonical.history.average3ClosedMonths || 0;
   const coverageProjectedDays = historyAverage > 0 ? Math.round((stockSale + pendingSale) / historyAverage * 30) : 0;
   const coverageCostProjectedDays = historyAverage > 0 ? Math.round((stockCost + pendingCost) / historyAverage * 30) : 0;
 
-  const warnings = canonical.warnings.filter(warning => !warning.startsWith('Abatimento da Carteira:') && !warning.startsWith('12.322 → Carteira:') && !warning.startsWith('218 confirmado → Carteira:') && !warning.startsWith('218 automático → Carteira:') && !warning.startsWith('Fontes de entrada:'));
+  const warnings = baselineCanonical.warnings.filter(warning => !warning.startsWith('Abatimento da Carteira:') && !warning.startsWith('12.322 → Carteira:') && !warning.startsWith('218 confirmado → Carteira:') && !warning.startsWith('218 automático → Carteira:') && !warning.startsWith('Fontes de entrada:'));
   if (state.legacyInvoices.length) {
     warnings.push(`12.322 → Carteira: fonte histórica válida até 31/07/2026. ${legacyMatchedInvoices.size}/${legacyInvoices.size} NF(s) antigas foram encontradas na Carteira atual; ${legacyAppliedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}, ${legacyAppliedCases.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} cx e ${legacyAppliedUnits.toLocaleString('pt-BR')} un. foram abatidos.`);
   }
@@ -229,10 +251,10 @@ export function applyReceiptReconciliation(
   warnings.push('Fontes de entrada: 12.322 até 31/07/2026; Entrada 218 automática a partir de 01/08/2026. A Carteira mantém Order Qty + Bill Qty como regra de quantidade.');
 
   const next: CanonicalState = {
-    ...canonical,
+    ...baselineCanonical,
     inventory,
     stock: {
-      ...canonical.stock,
+      ...baselineCanonical.stock,
       pendingPurchaseCost: pendingCost,
       pendingPurchaseSale: pendingSale,
       projectedCostValue: stockCost + pendingCost,
