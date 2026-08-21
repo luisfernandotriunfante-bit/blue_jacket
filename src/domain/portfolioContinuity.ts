@@ -124,6 +124,10 @@ function summarize<T extends PortfolioContinuityRowLike>(rows: T[]) {
   }, { cost: 0, cases: 0 });
 }
 
+function roundMoney(value: number): number {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
 export function approvedPortfolioAnchorFor(previous: PortfolioContinuitySnapshot | null | undefined, currentSnapshotDate: string): PortfolioContinuitySnapshot | null {
   if (previous?.snapshotDate && previous.orderNumbers?.length) return previous;
   if (currentSnapshotDate && currentSnapshotDate >= APPROVED_PORTFOLIO_2026_08_17.snapshotDate) return APPROVED_PORTFOLIO_2026_08_17;
@@ -152,6 +156,8 @@ export function applyPortfolioContinuity<T extends PortfolioContinuityRowLike>(
   }
 
   const validatedSummary = summarize(validatedRows);
+  const rawCost = roundMoney(rawSummary.cost);
+  const validatedCost = roundMoney(validatedSummary.cost);
   const orderNumbers = Array.from(new Set(validatedRows.map(row => normalizeOrderNumber(row.orderNumber)).filter(Boolean))).sort();
   const snapshot: PortfolioContinuitySnapshot = {
     sourceFileName,
@@ -160,9 +166,9 @@ export function applyPortfolioContinuity<T extends PortfolioContinuityRowLike>(
     rawRows: normalizedRows.length,
     validatedRows: validatedRows.length,
     excludedHistoricalRows: Math.max(normalizedRows.length - validatedRows.length, 0),
-    rawCost: rawSummary.cost,
-    validatedCost: validatedSummary.cost,
-    excludedHistoricalCost: Math.max(rawSummary.cost - validatedSummary.cost, 0),
+    rawCost,
+    validatedCost,
+    excludedHistoricalCost: roundMoney(Math.max(rawCost - validatedCost, 0)),
     rawCases: rawSummary.cases,
     validatedCases: validatedSummary.cases,
     excludedHistoricalCases: Math.max(rawSummary.cases - validatedSummary.cases, 0),
