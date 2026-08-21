@@ -105,9 +105,10 @@ export function saveOperationalSourceState(state: OperationalSourceState, storag
 
 export function supplementalSourceKind(fileName: string): SupplementalSourceKind | null {
   const name = normalizeText(fileName);
+  const compactName = name.replace(/[^A-Z0-9]/g, '');
   if (name.includes('PCTABPR')) return 'winthorTablePrices';
   if ((name.includes('218') && name.includes('ENTRADA')) || name.includes('ENTRADA-NOTAS') || name.includes('ENTRADA NOTAS')) return 'entryNotes218';
-  if (name.includes('12.322') || name.includes('12322')) return 'receivedNotes12322';
+  if (compactName.includes('12322')) return 'receivedNotes12322';
   return null;
 }
 
