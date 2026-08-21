@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useMemo, useState, ReactNode } from 'react';
 import { applyManualConfiguration, CanonicalState, CanonicalVendorResult, DEFAULT_MANUAL_CONFIGURATION, ManualConfiguration } from '../domain/canonical';
 import { applyOperationalOverrides, loadOperationalSourceState } from '../services/operationalSources';
+import { applyReceiptReconciliation, loadReceiptConfirmations } from '../services/receiptReconciliation';
 import { clearCanonicalState, LEGACY_CANONICAL_KEY, loadCanonicalState, safeLocalStorageWrite, saveCanonicalState } from './canonicalPersistence';
 import { competenceFromCanonical, loadManualConfiguration, normalizeManualConfiguration, saveManualConfiguration } from './competencePersistence';
 
@@ -47,8 +48,6 @@ function standardWorkedDays(periodStart:string,periodEnd:string,referenceDate:st
 function normalizeCanonicalTeam(state:CanonicalState|null,config:ManualConfiguration):CanonicalState|null{
   if(!state)return null;
 
-  // Recalcula em um único ponto todas as métricas dependentes de tempo para que
-  // Resumo, Redes, Gerencial, Equipes e Documentos usem exatamente a mesma regra.
   const calculatedTotal=standardWorkedDays(state.periodStart,state.periodEnd,state.periodEnd,config.holidays);
   const totalDays=calculatedTotal>0?calculatedTotal:state.sellOut.businessDaysTotal;
   const calculatedWorked=standardWorkedDays(state.periodStart,state.periodEnd,state.referenceDate,config.holidays);
@@ -89,7 +88,9 @@ export const DataProvider=({children}:{children:ReactNode})=>{
       const competence=competenceFromCanonical(storedCanonical);
       const storedManual=loadManualConfiguration(localStorage,competence,{migrateLegacy:Boolean(storedCanonical)}).config;
       const operational=loadOperationalSourceState(localStorage);
-      const hydratedCanonical=storedCanonical?applyOperationalOverrides(storedCanonical,operational,storedManual).canonical:null;
+      const operationalCanonical=storedCanonical?applyOperationalOverrides(storedCanonical,operational,storedManual).canonical:null;
+      const confirmed=loadReceiptConfirmations(localStorage,operational.entry218FileName);
+      const hydratedCanonical=operationalCanonical?applyReceiptReconciliation(operationalCanonical,operational,storedManual,confirmed).canonical:null;
       if(hydratedCanonical){
         void saveCanonicalState(hydratedCanonical).catch(error=>console.error('Não foi possível atualizar o cache canônico no IndexedDB.',error));
       }
@@ -115,7 +116,6 @@ export const DataProvider=({children}:{children:ReactNode})=>{
     const nextCompetence=competenceFromCanonical(data);
     setCanonicalBase(data);
     if(data){
-      // Libera imediatamente a quota ocupada pela versão antiga e persiste a base grande no IndexedDB.
       localStorage.removeItem(LEGACY_CANONICAL_KEY);
       void saveCanonicalState(data).catch(error=>console.error('Não foi possível persistir a base canônica no IndexedDB.',error));
       if(nextCompetence&&nextCompetence!==activeCompetence){
