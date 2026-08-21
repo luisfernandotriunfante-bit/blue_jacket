@@ -1,8 +1,9 @@
 import type { CanonicalInventoryProduct, CanonicalState, ManualConfiguration } from '../domain/canonical';
-import type { OperationalReceiptItem, OperationalSourceState } from './operationalSources';
+import type { OperationalPortfolioRow, OperationalReceiptItem, OperationalSourceState } from './operationalSources';
 import { cleanCode, cleanDigits } from './canonical/utils';
 
 const CONFIRMATION_KEY = 'blue-jacket:receipt-confirmations:v1';
+const AUGUST_2026_START = '2026-08-01';
 
 interface StoredReceiptConfirmations {
   fileName: string;
@@ -11,6 +12,7 @@ interface StoredReceiptConfirmations {
 
 export interface ReceiptReconciliationAudit {
   legacyInvoiceCount: number;
+  legacyMatchedInvoiceCount: number;
   legacyRequestedCost: number;
   legacyAppliedCost: number;
   confirmedItems: number;
@@ -43,56 +45,49 @@ export function saveReceiptConfirmations(storage: Storage | null | undefined, fi
   try { storage.setItem(CONFIRMATION_KEY, JSON.stringify(payload)); } catch { /* confirmação não deve derrubar a carga */ }
 }
 
-function rebuildFullPortfolio(canonical: CanonicalState, state: OperationalSourceState, config: ManualConfiguration): CanonicalInventoryProduct[] {
-  const inventory = canonical.inventory.map(item => ({ ...item, pendingQty: 0, pendingCases: 0, pendingCost: 0, pendingSale: 0 }));
-  if (!state.portfolioRows.length) return inventory;
-
-  const byCode = new Map(inventory.map(item => [cleanCode(item.code), item]));
-  const byFactory = new Map(inventory.filter(item => cleanCode(item.factoryCode)).map(item => [cleanCode(item.factoryCode), item]));
-  const byEan = new Map(inventory.filter(item => cleanDigits(item.ean)).map(item => [cleanDigits(item.ean), item]));
-  const itemByInternal = new Map((canonical.support.itemCodes || []).map(item => [cleanCode(item.internalCode), item]));
-  const internalByFactory = new Map((canonical.support.itemCodes || []).filter(item => cleanCode(item.factoryCode)).map(item => [cleanCode(item.factoryCode), cleanCode(item.internalCode)]));
-  const productBySku = new Map((canonical.support.products || []).filter(item => cleanCode(item.sku)).map(item => [cleanCode(item.sku), item]));
-  const productByEan = new Map((canonical.support.products || []).filter(item => cleanDigits(item.ean)).map(item => [cleanDigits(item.ean), item]));
-  const markup = 1 + Math.max(Number(config.portfolioSaleMarkup) || 0, 0);
-
-  for (const row of state.portfolioRows) {
-    const material = cleanCode(row.materialCode);
-    const mappedInternal = itemByInternal.has(material) ? material : internalByFactory.get(material) || '';
-    const cad = mappedInternal ? itemByInternal.get(mappedInternal) : undefined;
-    const ean = cleanDigits(cad?.ean || '');
-    const master = productBySku.get(material) || (ean ? productByEan.get(ean) : undefined);
-    const product = (mappedInternal ? byCode.get(mappedInternal) : undefined) || byCode.get(material) || byFactory.get(material) || (ean ? byEan.get(ean) : undefined);
-    if (!product) continue;
-    const unitsPerCase = Math.max(Number(master?.unitsPerCase) || 0, 0);
-    const cases = Math.max(row.orderQty, 0) + Math.max(row.billQty, 0);
-    const units = unitsPerCase > 0 ? cases * unitsPerCase : 0;
-    product.pendingCases += cases;
-    product.pendingQty += units;
-    product.pendingCost += Math.max(row.costValue, 0);
-    product.pendingSale += Math.max(row.costValue, 0) * markup;
-  }
-
-  return inventory;
+function normalizedInvoice(value: unknown): string {
+  return String(value ?? '').replace(/\D/g, '').replace(/^0+/, '');
 }
 
-function distributeFinancialDeduction(inventory: CanonicalInventoryProduct[], requestedCost: number): number {
-  const available = inventory.reduce((sum, item) => sum + Math.max(item.pendingCost, 0), 0);
-  const applied = Math.min(Math.max(requestedCost, 0), available);
-  if (applied <= 0 || available <= 0) return 0;
+/**
+ * A Carteira Colgate costuma expor a NF como 002915720-1. O parser operacional
+ * legado removeu pontuação e armazenou esse exemplo como 29157201. Para preservar
+ * cargas já salvas, tentamos primeiro o número integral e, somente se ele não
+ * existir no 12.322, retiramos o dígito de série final.
+ */
+function matchInvoiceKey(value: unknown, knownInvoices: Map<string, unknown>): string {
+  const direct = normalizedInvoice(value);
+  if (!direct) return '';
+  if (knownInvoices.has(direct)) return direct;
+  if (direct.length >= 8) {
+    const withoutSeries = direct.slice(0, -1).replace(/^0+/, '');
+    if (knownInvoices.has(withoutSeries)) return withoutSeries;
+  }
+  return '';
+}
 
-  let remaining = applied;
-  const candidates = inventory.filter(item => item.pendingCost > 0);
-  candidates.forEach((item, index) => {
-    const beforeCost = Math.max(item.pendingCost, 0);
-    const beforeSale = Math.max(item.pendingSale, 0);
-    const costCut = index === candidates.length - 1 ? Math.min(remaining, beforeCost) : Math.min(applied * (beforeCost / available), beforeCost);
-    const saleRatio = beforeCost > 0 ? beforeSale / beforeCost : 0;
-    item.pendingCost = Math.max(beforeCost - costCut, 0);
-    item.pendingSale = Math.max(beforeSale - costCut * saleRatio, 0);
-    remaining = Math.max(remaining - costCut, 0);
-  });
-  return applied - remaining;
+function isBeforeAugust2026(entryDate: string): boolean {
+  return Boolean(entryDate && entryDate < AUGUST_2026_START);
+}
+
+function isAugust2026OrLater(entryDate: string): boolean {
+  return Boolean(entryDate && entryDate >= AUGUST_2026_START);
+}
+
+function resolveProductBySku(
+  skuValue: unknown,
+  inventoryByCode: Map<string, CanonicalInventoryProduct>,
+  inventoryByFactory: Map<string, CanonicalInventoryProduct>,
+  inventoryByEan: Map<string, CanonicalInventoryProduct>,
+  canonical: CanonicalState,
+) {
+  const sku = cleanCode(skuValue);
+  const direct = inventoryByCode.get(sku) || inventoryByFactory.get(sku);
+  if (direct) return direct;
+  const supportItem = (canonical.support.itemCodes || []).find(entry => cleanCode(entry.internalCode) === sku || cleanCode(entry.factoryCode) === sku);
+  if (!supportItem) return undefined;
+  const ean = cleanDigits(supportItem.ean);
+  return ean ? inventoryByEan.get(ean) : undefined;
 }
 
 function resolveReceiptProduct(
@@ -102,13 +97,17 @@ function resolveReceiptProduct(
   inventoryByEan: Map<string, CanonicalInventoryProduct>,
   canonical: CanonicalState,
 ) {
-  const sku = cleanCode(item.sku);
-  const direct = inventoryByCode.get(sku) || inventoryByFactory.get(sku);
-  if (direct) return direct;
-  const supportItem = (canonical.support.itemCodes || []).find(entry => cleanCode(entry.internalCode) === sku || cleanCode(entry.factoryCode) === sku);
-  if (!supportItem) return undefined;
-  const ean = cleanDigits(supportItem.ean);
-  return ean ? inventoryByEan.get(ean) : undefined;
+  return resolveProductBySku(item.sku, inventoryByCode, inventoryByFactory, inventoryByEan, canonical);
+}
+
+function resolvePortfolioProduct(
+  row: OperationalPortfolioRow,
+  inventoryByCode: Map<string, CanonicalInventoryProduct>,
+  inventoryByFactory: Map<string, CanonicalInventoryProduct>,
+  inventoryByEan: Map<string, CanonicalInventoryProduct>,
+  canonical: CanonicalState,
+) {
+  return resolveProductBySku(row.materialCode, inventoryByCode, inventoryByFactory, inventoryByEan, canonical);
 }
 
 function unitsPerCaseFor(product: CanonicalInventoryProduct, canonical: CanonicalState): number {
@@ -119,19 +118,55 @@ function unitsPerCaseFor(product: CanonicalInventoryProduct, canonical: Canonica
   return Math.max(Number(master?.unitsPerCase) || 0, 0);
 }
 
+function deductPortfolioRowFinancial(product: CanonicalInventoryProduct, requestedCost: number, config: ManualConfiguration): number {
+  const beforeCost = Math.max(product.pendingCost, 0);
+  const beforeSale = Math.max(product.pendingSale, 0);
+  const costCut = Math.min(Math.max(requestedCost, 0), beforeCost);
+  if (costCut <= 0) return 0;
+  const saleRatio = beforeCost > 0 ? beforeSale / beforeCost : (1 + Math.max(Number(config.portfolioSaleMarkup) || 0, 0));
+  product.pendingCost = Math.max(beforeCost - costCut, 0);
+  product.pendingSale = Math.max(beforeSale - costCut * saleRatio, 0);
+  return costCut;
+}
+
 export function applyReceiptReconciliation(
   canonical: CanonicalState,
   state: OperationalSourceState,
   config: ManualConfiguration,
   confirmedKeys: Set<string>,
 ): { canonical: CanonicalState; audit: ReceiptReconciliationAudit } {
-  // Reconstrói primeiro a Carteira cheia a partir da fonte. Isso neutraliza a regra antiga
-  // de abatimento por coluna de NF e garante a regra confirmada: Order Qty + Bill Qty.
-  const inventory = rebuildFullPortfolio(canonical, state, config);
+  // A Carteira já foi calculada pelo motor canônico/operacional. Esta etapa não a
+  // reconstrói novamente: apenas abate recebimentos comprovados pelas fontes.
+  const inventory = canonical.inventory.map(item => ({ ...item }));
   const byCode = new Map(inventory.map(item => [cleanCode(item.code), item]));
   const byFactory = new Map(inventory.filter(item => cleanCode(item.factoryCode)).map(item => [cleanCode(item.factoryCode), item]));
   const byEan = new Map(inventory.filter(item => cleanDigits(item.ean)).map(item => [cleanDigits(item.ean), item]));
-  const legacyInvoices = new Map(state.legacyInvoices.map(invoice => [cleanCode(invoice.invoice), invoice]));
+
+  // Regra confirmada de transição de fonte:
+  // 12.322 = legado até 31/07/2026. A partir de 01/08/2026 a autoridade é o 218.
+  const legacyInvoices = new Map(
+    state.legacyInvoices
+      .filter(invoice => isBeforeAugust2026(invoice.entryDate))
+      .map(invoice => [normalizedInvoice(invoice.invoice), invoice]),
+  );
+
+  let legacyRequestedCost = 0;
+  let legacyAppliedCost = 0;
+  const legacyMatchedInvoices = new Set<string>();
+
+  // O 12.322 não é subtraído em bloco. Ele funciona como confirmação de que uma
+  // NF antiga entrou; o valor abatido é somente o NET VALUE das linhas dessa NF
+  // que ainda estão presentes na Carteira atual.
+  for (const row of state.portfolioRows || []) {
+    const legacyKey = matchInvoiceKey(row.invoice, legacyInvoices);
+    if (!legacyKey) continue;
+    legacyMatchedInvoices.add(legacyKey);
+    const requested = Math.max(Number(row.costValue) || 0, 0);
+    legacyRequestedCost += requested;
+    const product = resolvePortfolioProduct(row, byCode, byFactory, byEan, canonical);
+    if (!product) continue;
+    legacyAppliedCost += deductPortfolioRowFinancial(product, requested, config);
+  }
 
   let confirmedItems = 0;
   let confirmedUnits = 0;
@@ -140,6 +175,8 @@ export function applyReceiptReconciliation(
   let unresolvedItems = 0;
 
   state.receiptItems.forEach((item, index) => {
+    // 218 passa a ser a fonte oficial somente a partir de 01/08/2026.
+    if (!isAugust2026OrLater(item.entryDate)) return;
     const key = receiptItemKey(item, index);
     if (!confirmedKeys.has(key)) return;
     confirmedItems += 1;
@@ -154,19 +191,13 @@ export function applyReceiptReconciliation(
     confirmedUnits += units;
     confirmedCases += cases;
 
-    // Se a mesma NF já está no 12.322, o financeiro será abatido uma única vez pelo 12.322.
-    if (legacyInvoices.has(cleanCode(item.invoice))) return;
+    // Proteção contra duplicidade: se, excepcionalmente, a mesma NF estiver entre
+    // as NFs antigas efetivamente conciliadas pelo 12.322, o financeiro não cai duas vezes.
+    const legacyKey = matchInvoiceKey(item.invoice, legacyInvoices);
+    if (legacyKey && legacyMatchedInvoices.has(legacyKey)) return;
     const requestedCost = Math.max(item.units * item.unitPrice, 0);
-    const costCut = Math.min(requestedCost, Math.max(product.pendingCost, 0));
-    const saleRatio = product.pendingCost > 0 ? product.pendingSale / product.pendingCost : (1 + Math.max(Number(config.portfolioSaleMarkup) || 0, 0));
-    product.pendingCost = Math.max(product.pendingCost - costCut, 0);
-    product.pendingSale = Math.max(product.pendingSale - costCut * saleRatio, 0);
-    confirmedItemCost += costCut;
+    confirmedItemCost += deductPortfolioRowFinancial(product, requestedCost, config);
   });
-
-  // 12.322 é a autoridade financeira: abate o valor das NFs já recebidas.
-  const legacyRequestedCost = Array.from(legacyInvoices.values()).reduce((sum, invoice) => sum + Math.max(Number(invoice.totalValue) || 0, 0), 0);
-  const legacyAppliedCost = distributeFinancialDeduction(inventory, legacyRequestedCost);
 
   const pendingCost = inventory.reduce((sum, item) => sum + Math.max(item.pendingCost, 0), 0);
   const pendingSale = inventory.reduce((sum, item) => sum + Math.max(item.pendingSale, 0), 0);
@@ -176,14 +207,15 @@ export function applyReceiptReconciliation(
   const coverageProjectedDays = historyAverage > 0 ? Math.round((stockSale + pendingSale) / historyAverage * 30) : 0;
   const coverageCostProjectedDays = historyAverage > 0 ? Math.round((stockCost + pendingCost) / historyAverage * 30) : 0;
 
-  const warnings = canonical.warnings.filter(warning => !warning.startsWith('Abatimento da Carteira:') && !warning.startsWith('12.322 → Carteira:') && !warning.startsWith('218 confirmado → Carteira:'));
+  const warnings = canonical.warnings.filter(warning => !warning.startsWith('Abatimento da Carteira:') && !warning.startsWith('12.322 → Carteira:') && !warning.startsWith('218 confirmado → Carteira:') && !warning.startsWith('Fontes de entrada:'));
   if (state.legacyInvoices.length) {
-    const cap = legacyAppliedCost + 0.005 < legacyRequestedCost ? `; limitado ao saldo disponível da Carteira (${legacyAppliedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})` : '';
-    warnings.push(`12.322 → Carteira: ${state.legacyInvoices.length} NF(s) recebida(s), ${legacyRequestedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} identificados para abatimento financeiro${cap}.`);
+    warnings.push(`12.322 → Carteira: fonte histórica válida até 31/07/2026. ${legacyMatchedInvoices.size}/${legacyInvoices.size} NF(s) antigas foram encontradas na Carteira atual; ${legacyAppliedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} do NET VALUE dessas linhas foram abatidos. NFs do 12.322 que não estão na Carteira não reduzem o saldo.`);
   }
   if (state.receiptItems.length) {
-    warnings.push(`218 confirmado → Carteira: ${confirmedItems}/${state.receiptItems.length} item(ns) confirmado(s); ${confirmedUnits.toLocaleString('pt-BR')} un. e ${confirmedCases.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} cx abatidas; ${confirmedItemCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} abatidos adicionalmente em NFs que não estavam no 12.322${unresolvedItems ? `; ${unresolvedItems} item(ns) confirmado(s) sem vínculo de produto` : ''}.`);
+    const eligible218 = state.receiptItems.filter(item => isAugust2026OrLater(item.entryDate)).length;
+    warnings.push(`218 confirmado → Carteira: fonte oficial a partir de 01/08/2026. ${confirmedItems}/${eligible218} item(ns) confirmado(s); ${confirmedUnits.toLocaleString('pt-BR')} un. e ${confirmedCases.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} cx abatidas; ${confirmedItemCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} abatidos financeiramente${unresolvedItems ? `; ${unresolvedItems} item(ns) confirmado(s) sem vínculo de produto` : ''}.`);
   }
+  warnings.push('Fontes de entrada: 12.322 até 31/07/2026; Entrada 218 a partir de 01/08/2026. A Carteira mantém Order Qty + Bill Qty como regra de quantidade.');
 
   const next: CanonicalState = {
     ...canonical,
@@ -200,5 +232,18 @@ export function applyReceiptReconciliation(
     warnings,
   };
 
-  return { canonical: next, audit: { legacyInvoiceCount: state.legacyInvoices.length, legacyRequestedCost, legacyAppliedCost, confirmedItems, confirmedUnits, confirmedCases, confirmedItemCost, unresolvedItems } };
+  return {
+    canonical: next,
+    audit: {
+      legacyInvoiceCount: legacyInvoices.size,
+      legacyMatchedInvoiceCount: legacyMatchedInvoices.size,
+      legacyRequestedCost,
+      legacyAppliedCost,
+      confirmedItems,
+      confirmedUnits,
+      confirmedCases,
+      confirmedItemCost,
+      unresolvedItems,
+    },
+  };
 }
