@@ -11,13 +11,8 @@ import {
   type OperationalSourceState,
   type SupplementalSourceKind,
 } from '../services/operationalSources';
-import {
-  applyReceiptReconciliation,
-  loadReceiptConfirmations,
-  receiptItemKey,
-  saveReceiptConfirmations,
-} from '../services/receiptReconciliation';
-import type { ManualConfiguration, SourceAudit, SourceKind } from '../domain/canonical';
+import { applyReceiptReconciliation } from '../services/receiptReconciliation';
+import type { SourceAudit, SourceKind } from '../domain/canonical';
 import { ReconciliationAuditPanel } from '../ui/audit/ReconciliationAuditPanel';
 import { PanelCard, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
@@ -38,14 +33,14 @@ const SOURCES: SourceUi[] = [
   { id: 'stock105', kind: 'stock105', label: 'Posição de Estoque 105', description: 'Estoque atual e custo. O preço de tabela é priorizado pela PCTABPR quando ela estiver carregada.', frequency: 'Diário', group: 'Rotina diária', required: true },
   { id: 'purchasePortfolio', kind: 'purchasePortfolio', label: 'Carteira Colgate', description: 'Mercadoria ainda em trânsito / pendente. Alimenta estoque projetado e risco de ruptura.', frequency: 'Diário', group: 'Rotina diária', required: true },
   { id: 'stock8013', kind: 'stock8013', label: 'Estoque 8013', description: 'Caixas, unidades e peso para conferência física.', frequency: 'Diário', group: 'Rotina diária' },
-  { id: 'entryNotes218', supplementalKind: 'entryNotes218', label: 'Entrada de Notas 218', description: 'Notas fiscais efetivamente recebidas. Cada item precisa ser confirmado antes de baixar a Carteira física.', frequency: 'Diário / conforme recebimento', group: 'Rotina diária', required: true },
+  { id: 'entryNotes218', supplementalKind: 'entryNotes218', label: 'Entrada de Notas 218', description: 'Fonte oficial de recebimentos a partir de 01/08/2026. Os itens são abatidos automaticamente da Carteira; a tabela de validação serve para auditoria produto a produto.', frequency: 'Diário / conforme recebimento', group: 'Rotina diária', required: true },
 
   { id: 'compassTargets', kind: 'compassTargets', label: 'Bússola de Metas', description: 'Metas oficiais de indústria, vendedores e positivação.', frequency: 'Nova competência / mês', group: 'Mensal / competência' },
   { id: 'activeRoute', kind: 'activeRoute', label: 'Roteiro Ativo', description: 'PDVs ativos e Meta Tops oficial da competência.', frequency: 'Nova competência / mês', group: 'Mensal / competência' },
   { id: 'legacyTopNetworks', kind: 'legacyTopNetworks', label: 'TOP REDES · Referência', description: 'Referência operacional para metas e vínculos de redes que ainda dependem desse arquivo.', frequency: 'Nova competência / mês', group: 'Mensal / competência' },
 
   { id: 'winthorTablePrices', supplementalKind: 'winthorTablePrices', label: 'Tabela de Preços Winthor · PCTABPR', description: 'Fonte prioritária do Preço de Tabela. Usa Preço 1 / PVENDA1 da região 11/MCD.', frequency: 'Quando houver alteração de preços', group: 'Apoio / quando mudar', required: true },
-  { id: 'receivedNotes12322', supplementalKind: 'receivedNotes12322', label: 'Notas Recebidas 12.322', description: 'NFs já recebidas. O valor dessas notas é abatido financeiramente da Carteira, sem duplicar NFs também detalhadas no 218.', frequency: 'Atualizar quando houver novas notas contabilizadas', group: 'Apoio / quando mudar', required: true },
+  { id: 'receivedNotes12322', supplementalKind: 'receivedNotes12322', label: 'Notas Recebidas 12.322', description: 'Base histórica até 31/07/2026. Quando uma NF antiga está na Carteira, o sistema retira valor, caixas e unidades daquelas linhas.', frequency: 'Histórico encerrado em 31/07/2026', group: 'Apoio / quando mudar', required: true },
   { id: 'items286', kind: 'items286', label: 'Cadastro de Itens 286', description: 'Código Winthor, EAN, código de fábrica e vínculos operacionais dos itens.', frequency: 'Quando o cadastro mudar', group: 'Apoio / quando mudar' },
   { id: 'priceList', kind: 'priceList', label: 'Lista de Preço Colgate', description: 'Referência Colgate → Milênio para EAN, Un/CX e classificação. Não é a fonte prioritária do Preço de Tabela.', frequency: 'Quando a indústria atualizar', group: 'Apoio / quando mudar' },
   { id: 'launchList', kind: 'launchList', label: 'Lista de Lançamentos', description: 'Lista oficial de lançamentos identificados por EAN.', frequency: 'Quando houver novos lançamentos', group: 'Apoio / quando mudar' },
@@ -108,8 +103,7 @@ export function ConfiguracoesPage() {
       const prepared = await prepareOperationalSources(selectedFiles);
       const result = await processCanonicalFiles(prepared.engineFiles, manualConfig, canonical);
       const adjusted = applyOperationalOverrides(result.canonical, prepared.state, manualConfig);
-      const confirmed = loadReceiptConfirmations(typeof localStorage !== 'undefined' ? localStorage : null, prepared.state.entry218FileName);
-      const reconciled = applyReceiptReconciliation(adjusted.canonical, prepared.state, manualConfig, confirmed);
+      const reconciled = applyReceiptReconciliation(adjusted.canonical, prepared.state, manualConfig);
       const legacy = operationalLegacyData(reconciled.canonical, manualConfig.coverageTargetDays);
       setCanonical(reconciled.canonical);
       setProdutos(legacy.produtos);
@@ -130,18 +124,6 @@ export function ConfiguracoesPage() {
   const operationalState = useMemo(() => loadOperationalSourceState(), [operationalRevision]);
   const queued = useMemo(() => new Map(selectedFiles.map(file => [sourceForFile(file.name)?.id || `unknown:${file.name}`, file])), [selectedFiles]);
   const loadedCount = SOURCES.filter(source => source.supplementalKind ? Boolean(supplementalFileName(source, operationalState)) : Boolean(source.kind && audits.get(source.kind)?.loaded)).length;
-
-  const applyReceiptSelections = (confirmed: Set<string>) => {
-    if (!canonical) return;
-    saveReceiptConfirmations(typeof localStorage !== 'undefined' ? localStorage : null, operationalState.entry218FileName, confirmed);
-    const resetPortfolio = applyOperationalOverrides(canonical, operationalState, manualConfig).canonical;
-    const reconciled = applyReceiptReconciliation(resetPortfolio, operationalState, manualConfig, confirmed);
-    const legacy = operationalLegacyData(reconciled.canonical, manualConfig.coverageTargetDays);
-    setCanonical(reconciled.canonical);
-    setProdutos(legacy.produtos);
-    setMetricas(legacy.metricas);
-    setOperationalRevision(value => value + 1);
-  };
 
   return <PanelPage title="Configurações" metricLabel="Fontes registradas" metricValue={`${loadedCount}/${SOURCES.length}`}>
     <PanelCard>
@@ -190,12 +172,7 @@ export function ConfiguracoesPage() {
       </div>
     </PanelCard>
 
-    {operationalState.receiptItems.length > 0 ? <ReceiptConfirmationPanel
-      key={`${operationalState.entry218FileName}:${operationalRevision}`}
-      state={operationalState}
-      manualConfig={manualConfig}
-      onApply={applyReceiptSelections}
-    /> : null}
+    {operationalState.receiptItems.length > 0 ? <ReceiptValidationPanel key={`${operationalState.entry218FileName}:${operationalRevision}`} state={operationalState} /> : null}
 
     {GROUPS.map(group => <PanelCard key={group.key}>
       <PanelSectionHeader eyebrow={group.key.toUpperCase()} title={group.title} description={group.description} action={<span className="panel-badge">{SOURCES.filter(source => source.group === group.key).length} arquivos</span>} />
@@ -222,55 +199,39 @@ export function ConfiguracoesPage() {
   </PanelPage>;
 }
 
-function ReceiptConfirmationPanel({ state, onApply }: { state: OperationalSourceState; manualConfig: ManualConfiguration; onApply: (confirmed: Set<string>) => void }) {
-  const initial = loadReceiptConfirmations(typeof localStorage !== 'undefined' ? localStorage : null, state.entry218FileName);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(initial));
-  const legacyInvoices = useMemo(() => new Set(state.legacyInvoices.map(invoice => String(invoice.invoice).replace(/\D/g, '').replace(/^0+/, ''))), [state.legacyInvoices]);
+function ReceiptValidationPanel({ state }: { state: OperationalSourceState }) {
   const legacyTotal = useMemo(() => state.legacyInvoices.reduce((sum, invoice) => sum + Math.max(Number(invoice.totalValue) || 0, 0), 0), [state.legacyInvoices]);
-  const selectedCount = selected.size;
-  const selectedValue = state.receiptItems.reduce((sum, item, index) => selected.has(receiptItemKey(item, index)) ? sum + item.units * item.unitPrice : sum, 0);
-
-  const toggle = (key: string, checked: boolean) => setSelected(current => {
-    const next = new Set(current);
-    if (checked) next.add(key); else next.delete(key);
-    return next;
-  });
-  const selectAll = () => setSelected(new Set(state.receiptItems.map(receiptItemKey)));
-  const selectNone = () => setSelected(new Set());
+  const eligibleItems = useMemo(() => state.receiptItems.filter(item => item.entryDate >= '2026-08-01'), [state.receiptItems]);
+  const eligibleValue = useMemo(() => eligibleItems.reduce((sum, item) => sum + item.units * item.unitPrice, 0), [eligibleItems]);
 
   return <PanelCard>
     <PanelSectionHeader
-      eyebrow="CONFIRMAÇÃO DE RECEBIMENTO"
-      title="Conferir itens do 218 antes de baixar a Carteira"
-      description="O 12.322 baixa automaticamente apenas o valor financeiro das NFs recebidas. O 218 baixa quantidade/caixas somente nos itens que você confirmar abaixo. Se a mesma NF estiver nos dois relatórios, o financeiro é abatido uma única vez pelo 12.322."
-      action={<span className="panel-badge">{selectedCount}/{state.receiptItems.length} confirmados</span>}
+      eyebrow="VALIDAÇÃO DE RECEBIMENTO"
+      title="Auditoria item a item do 218"
+      description="O 218 é aplicado automaticamente à Carteira a partir de 01/08/2026. Esta tabela existe para conferência e teste produto a produto; não é necessária nenhuma confirmação manual para efetivar a baixa."
+      action={<span className="panel-badge">{eligibleItems.length} itens automáticos</span>}
     />
 
     <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', margin: '14px 0' }}>
-      <span className="panel-badge">12.322 · {state.legacyInvoices.length} NFs · {fmtMoney(legacyTotal)}</span>
-      <span className="panel-badge">218 · {state.receiptItems.length} itens</span>
-      <span className="panel-badge">Selecionados · {fmtMoney(selectedValue)}</span>
-      <button type="button" className="panel-secondary-button" onClick={selectAll}>Marcar todos</button>
-      <button type="button" className="panel-secondary-button" onClick={selectNone}>Desmarcar todos</button>
-      <button type="button" className="panel-primary-button" style={{ width: 'auto', minWidth: '190px' }} onClick={() => onApply(selected)}>Aplicar confirmações</button>
+      <span className="panel-badge">12.322 histórico · {state.legacyInvoices.length} NFs · {fmtMoney(legacyTotal)}</span>
+      <span className="panel-badge">218 automático · {eligibleItems.length} itens</span>
+      <span className="panel-badge">Valor dos itens do 218 · {fmtMoney(eligibleValue)}</span>
     </div>
 
     <div className="panel-table-wrap" style={{ maxHeight: '520px' }}>
       <table className="panel-table">
-        <thead><tr><th>Confirmar</th><th>NF</th><th>Código</th><th>Produto</th><th className="is-right">Quantidade</th><th className="is-right">Valor unit.</th><th className="is-right">Valor item</th><th>Financeiro</th></tr></thead>
+        <thead><tr><th>Status</th><th>Entrada</th><th>NF</th><th>Código</th><th>Produto</th><th className="is-right">Quantidade</th><th className="is-right">Valor unit.</th><th className="is-right">Valor item</th></tr></thead>
         <tbody>{state.receiptItems.map((item, index) => {
-          const key = receiptItemKey(item, index);
-          const invoiceKey = String(item.invoice).replace(/\D/g, '').replace(/^0+/, '');
-          const coveredBy12322 = legacyInvoices.has(invoiceKey);
-          return <tr key={key}>
-            <td><input type="checkbox" aria-label={`Confirmar NF ${item.invoice} item ${item.sku}`} checked={selected.has(key)} onChange={event => toggle(key, event.target.checked)} /></td>
+          const automatic = item.entryDate >= '2026-08-01';
+          return <tr key={`${item.invoice}:${item.sku}:${index}`}>
+            <td>{automatic ? <span className="panel-badge panel-badge-green">ABATIDO AUTOMATICAMENTE</span> : <span className="panel-badge">FORA DA VIGÊNCIA</span>}</td>
+            <td>{item.entryDate || '—'}</td>
             <td className="is-strong">{item.invoice}</td>
             <td>{item.sku}</td>
             <td>{item.product}</td>
             <td className="is-right">{fmtNumber(item.units)}</td>
             <td className="is-right">{fmtMoney(item.unitPrice)}</td>
             <td className="is-right is-strong">{fmtMoney(item.units * item.unitPrice)}</td>
-            <td>{coveredBy12322 ? <span className="panel-badge panel-badge-green">12.322 · já coberto</span> : <span className="panel-badge">218 após confirmação</span>}</td>
           </tr>;
         })}</tbody>
       </table>
