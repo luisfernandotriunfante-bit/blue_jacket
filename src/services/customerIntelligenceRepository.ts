@@ -8,6 +8,7 @@ import {
   isPurchase310Text,
   parsePurchase310Text,
 } from './customerIntelligence310Text';
+import { officialAssortmentCoverage, normalizeOfficialAssortmentWorkbook } from './customerIntelligenceOfficialWorkbook';
 import { hasStandaloneCustomerProfile, parseStandaloneCustomerProfiles } from './customerIntelligenceProfiles';
 import {
   detectCustomerIntelligenceSource,
@@ -120,6 +121,18 @@ function appendProcessingError(result: CustomerIntelligenceSupport, fileName: st
   });
 }
 
+function appendIncompleteAssortment(result: CustomerIntelligenceSupport, fileName: string, coverage: ReturnType<typeof officialAssortmentCoverage>): CustomerIntelligenceSupport {
+  const missing = [!coverage.hasJuly ? 'Julho/26' : '', !coverage.hasAugSep ? 'Agosto/Setembro/26' : ''].filter(Boolean).join(' e ');
+  return mergeCustomerIntelligenceSupport(result, {
+    source: {
+      kind: `INCOMPLETE_ASSORTMENT:${fileName}`,
+      fileName,
+      note: `Arquivo contém parte do Sortimento Oficial, mas falta ${missing}. Nenhuma competência ausente foi inventada.`,
+    },
+    warnings: [`${fileName}: Sortimento Oficial incompleto; falta ${missing}. A ficha fica bloqueada nas datas sem competência.`],
+  });
+}
+
 function mergeCustomerProfileWorkbook(result: CustomerIntelligenceSupport, workbook: Awaited<ReturnType<typeof readCustomerIntelligenceWorkbook>>, fileName: string): CustomerIntelligenceSupport {
   if (!hasStandaloneCustomerProfile(workbook)) return result;
   const parsed = parseStandaloneCustomerProfiles(workbook);
@@ -171,8 +184,10 @@ export async function processCustomerIntelligenceFiles(files: File[], previous: 
         continue;
       }
 
-      const workbook = await readCustomerIntelligenceWorkbook(file);
-      const kind = detectCustomerIntelligenceSource(workbook);
+      const rawWorkbook = await readCustomerIntelligenceWorkbook(file);
+      const coverage = officialAssortmentCoverage(rawWorkbook);
+      const workbook = normalizeOfficialAssortmentWorkbook(rawWorkbook);
+      const kind = coverage.hasJuly && coverage.hasAugSep ? 'OFFICIAL_ASSORTMENT' : detectCustomerIntelligenceSource(workbook);
 
       if (kind === 'OFFICIAL_ASSORTMENT') {
         const parsed = parseOfficialAssortmentWorkbook(workbook);
@@ -210,10 +225,14 @@ export async function processCustomerIntelligenceFiles(files: File[], previous: 
         continue;
       }
 
+      if (coverage.hasJuly || coverage.hasAugSep) result = appendIncompleteAssortment(result, file.name, coverage);
+
       if (hasStandaloneCustomerProfile(workbook)) {
         result = mergeCustomerProfileWorkbook(result, workbook, file.name);
         continue;
       }
+
+      if (coverage.hasJuly || coverage.hasAugSep) continue;
 
       const externalKind = classifyExternalCustomerSource(file.name);
       if (externalKind) {
