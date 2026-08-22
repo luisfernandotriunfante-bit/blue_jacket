@@ -85,7 +85,11 @@ export function removeCustomerIntelligenceSource(support: CustomerIntelligenceSu
     next.assortmentCompetences = [];
     next.lineage = [];
   }
-  if (sourceKind === 'PURCHASE_310') next.purchases = [];
+  if (sourceKind === 'PURCHASE_310') {
+    next.purchases = [];
+    const hasIndependentProfileSource = support.sources.some(item => item.kind === 'CUSTOMER_PROFILE');
+    if (!hasIndependentProfileSource) next.customers = [];
+  }
   if (sourceKind === 'CUSTOMER_PROFILE') next.customers = [];
 
   return next;
