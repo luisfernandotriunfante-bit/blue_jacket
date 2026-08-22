@@ -58,8 +58,7 @@ export function parsePremises(rows: Row[]): PremiseClient[] {
     if (normalizeText(row[10]) && normalizeText(row[10]) !== 'MILENIO') continue;
     const normalizedCnpj = normalizeCnpj(row[2],{declaredCnpj:normalizeText(row[13])==='CNPJ'});
     const cnpj = normalizedCnpj.canonical;
-    // Código de cliente, CPF ou identificador curto nunca pode virar cliente CNPJ.
-    if (!/^\d{14}$/.test(cnpj)) continue;
+    if (!cnpj || normalizedCnpj.status === 'INVALID_LENGTH') continue;
     const profile = String(row[12] ?? '').trim();
     const rawNetwork = String(row[15] ?? '').trim();
     result.push({ cnpj, cnpjRaw:normalizedCnpj.raw, cnpjNormalizationStatus:normalizedCnpj.status, name: String(row[3] ?? '').trim(), city: String(row[6] ?? '').trim(), network: rawNetwork ? displayNetwork(rawNetwork) : '', profile, isTop: normalizeText(profile).includes('TOP VAREJISTA') });
