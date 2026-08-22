@@ -32,7 +32,7 @@ function state({ legacy = true, legacyInPortfolio = true }: { legacy?: boolean; 
     legacy12322FileName: legacy ? '12.322.txt' : '',
     legacyInvoices: legacy ? [{ invoice: '2915720', entryDate: '2026-07-30', issueDate: '2026-07-13', totalValue: 2500, source: '12.322' }] : [],
     portfolioFileName: 'carteira.xlsx',
-    portfolioRows: [{ sourceRow: 2, materialCode: '988', description: 'Produto 988', orderQty: 60, billQty: 40, costValue: 2000, invoice: legacyInPortfolio ? '29157201' : '29999991' }],
+    portfolioRows: [{ sourceRow: 2, materialCode: '988', description: 'Produto 988', orderQty: 60, billQty: 40, costValue: 2000, invoice: legacyInPortfolio ? '2915720' : '2999999', invoiceRaw: legacyInPortfolio ? '002915720-1' : '2999999', invoiceNumber: legacyInPortfolio ? '2915720' : '2999999', invoiceSeries: legacyInPortfolio ? '1' : '', invoiceNormalized: legacyInPortfolio ? '2915720-1' : '2999999' }],
     portfolioInvoiceColumnDetected: true,
     portfolioHeader: [],
   } as any;
@@ -40,92 +40,25 @@ function state({ legacy = true, legacyInPortfolio = true }: { legacy?: boolean; 
 
 const config = { sellOutTarget: 0, coverageTargetDays: 60, portfolioSaleMarkup: 0.3, networkTargets: {}, holidays: [], lineShares: {} } as any;
 
-test('mantém Order Qty + Bill Qty quando não há recebimento que abata a Carteira', () => {
-  const operational = state({ legacy: false });
-  operational.receiptItems = [];
-  const result = applyReceiptReconciliation(baseCanonical(), operational, config);
-  assert.equal(result.canonical.inventory[0].pendingCases, 100);
-  assert.equal(result.canonical.inventory[0].pendingQty, 1000);
-});
+test('mantém Order Qty + Bill Qty quando não há recebimento que abata a Carteira', () => { const operational = state({ legacy: false }); operational.receiptItems = []; const result = applyReceiptReconciliation(baseCanonical(), operational, config); assert.equal(result.canonical.inventory[0].pendingCases, 100); assert.equal(result.canonical.inventory[0].pendingQty, 1000); });
 
 test('12.322 abate NET VALUE, caixas e unidades da NF antiga presente na Carteira', () => {
-  const operational = state();
-  operational.receiptItems = [];
-  const result = applyReceiptReconciliation(baseCanonical(), operational, config);
-  assert.equal(result.canonical.inventory[0].pendingQty, 0);
-  assert.equal(result.canonical.inventory[0].pendingCases, 0);
-  assert.equal(result.canonical.stock.pendingPurchaseCost, 8000);
-  assert.equal(result.canonical.stock.pendingPurchaseSale, 10400);
-  assert.equal(result.audit.legacyInvoiceCount, 1);
-  assert.equal(result.audit.legacyMatchedInvoiceCount, 1);
-  assert.equal(result.audit.legacyAppliedCost, 2000);
-  assert.equal(result.audit.legacyAppliedCases, 100);
-  assert.equal(result.audit.legacyAppliedUnits, 1000);
+  const operational = state(); operational.receiptItems = []; const result = applyReceiptReconciliation(baseCanonical(), operational, config);
+  assert.equal(result.canonical.inventory[0].pendingQty, 0); assert.equal(result.canonical.inventory[0].pendingCases, 0); assert.equal(result.canonical.stock.pendingPurchaseCost, 8000); assert.equal(result.canonical.stock.pendingPurchaseSale, 10400); assert.equal(result.audit.legacyInvoiceCount, 1); assert.equal(result.audit.legacyMatchedInvoiceCount, 1); assert.equal(result.audit.legacyAppliedCost, 2000); assert.equal(result.audit.legacyAppliedCases, 100); assert.equal(result.audit.legacyAppliedUnits, 1000);
 });
 
-test('normaliza a série -1 da Carteira sem incorporar o dígito ao número da NF', () => {
-  const operational = state();
-  operational.receiptItems = [];
-  const result = applyReceiptReconciliation(baseCanonical(), operational, config);
-  assert.equal(result.audit.legacyMatchedInvoiceCount, 1);
-});
+test('normaliza a série -1 da Carteira sem incorporar o dígito ao número da NF', () => { const operational = state(); operational.receiptItems = []; const result = applyReceiptReconciliation(baseCanonical(), operational, config); assert.equal(result.audit.legacyMatchedInvoiceCount, 1); });
 
-test('12.322 não abate NF que não está presente na Carteira atual', () => {
-  const operational = state({ legacyInPortfolio: false });
-  operational.receiptItems = [];
-  const result = applyReceiptReconciliation(baseCanonical(), operational, config);
-  assert.equal(result.canonical.stock.pendingPurchaseCost, 10000);
-  assert.equal(result.canonical.inventory[0].pendingCases, 100);
-  assert.equal(result.audit.legacyMatchedInvoiceCount, 0);
-  assert.equal(result.audit.legacyAppliedCost, 0);
-});
+test('12.322 não abate NF que não está presente na Carteira atual', () => { const operational = state({ legacyInPortfolio: false }); operational.receiptItems = []; const result = applyReceiptReconciliation(baseCanonical(), operational, config); assert.equal(result.canonical.stock.pendingPurchaseCost, 10000); assert.equal(result.canonical.inventory[0].pendingCases, 100); assert.equal(result.audit.legacyMatchedInvoiceCount, 0); assert.equal(result.audit.legacyAppliedCost, 0); });
 
-test('12.322 ignora registros com entrada a partir de 01/08/2026', () => {
-  const operational = state();
-  operational.receiptItems = [];
-  operational.legacyInvoices = [{ invoice: '2915720', entryDate: '2026-08-01', issueDate: '2026-07-13', totalValue: 2500, source: '12.322' }] as any;
-  const result = applyReceiptReconciliation(baseCanonical(), operational, config);
-  assert.equal(result.canonical.stock.pendingPurchaseCost, 10000);
-  assert.equal(result.canonical.inventory[0].pendingCases, 100);
-  assert.equal(result.audit.legacyInvoiceCount, 0);
-});
+test('12.322 ignora registros com entrada a partir de 01/08/2026', () => { const operational = state(); operational.receiptItems = []; operational.legacyInvoices = [{ invoice: '2915720', entryDate: '2026-08-01', issueDate: '2026-07-13', totalValue: 2500, source: '12.322' }] as any; const result = applyReceiptReconciliation(baseCanonical(), operational, config); assert.equal(result.canonical.stock.pendingPurchaseCost, 10000); assert.equal(result.canonical.inventory[0].pendingCases, 100); assert.equal(result.audit.legacyInvoiceCount, 0); });
 
-test('218 abate automaticamente quantidade, caixas e financeiro a partir de agosto', () => {
-  const operational = state({ legacy: false });
-  const result = applyReceiptReconciliation(baseCanonical(), operational, config, new Set());
-  assert.equal(result.canonical.inventory[0].pendingQty, 900);
-  assert.equal(result.canonical.inventory[0].pendingCases, 90);
-  assert.equal(result.canonical.stock.pendingPurchaseCost, 8000);
-  assert.equal(result.audit.confirmedItems, 1);
-  assert.equal(result.audit.confirmedItemCost, 2000);
-});
+test('218 abate automaticamente quantidade, caixas e financeiro a partir de agosto', () => { const operational = state({ legacy: false }); const result = applyReceiptReconciliation(baseCanonical(), operational, config, new Set()); assert.equal(result.canonical.inventory[0].pendingQty, 900); assert.equal(result.canonical.inventory[0].pendingCases, 90); assert.equal(result.canonical.stock.pendingPurchaseCost, 8000); assert.equal(result.audit.confirmedItems, 1); assert.equal(result.audit.confirmedItemCost, 2000); });
 
-test('218 não depende mais da lista de confirmações armazenada', () => {
-  const operational = state({ legacy: false });
-  const withNone = applyReceiptReconciliation(baseCanonical(), operational, config, new Set());
-  const withFakeConfirmation = applyReceiptReconciliation(baseCanonical(), operational, config, new Set(['qualquer-chave']));
-  assert.equal(withNone.canonical.stock.pendingPurchaseCost, withFakeConfirmation.canonical.stock.pendingPurchaseCost);
-  assert.equal(withNone.canonical.inventory[0].pendingQty, withFakeConfirmation.canonical.inventory[0].pendingQty);
-});
+test('218 não depende mais da lista de confirmações armazenada', () => { const operational = state({ legacy: false }); const withNone = applyReceiptReconciliation(baseCanonical(), operational, config, new Set()); const withFakeConfirmation = applyReceiptReconciliation(baseCanonical(), operational, config, new Set(['qualquer-chave'])); assert.equal(withNone.canonical.stock.pendingPurchaseCost, withFakeConfirmation.canonical.stock.pendingPurchaseCost); assert.equal(withNone.canonical.inventory[0].pendingQty, withFakeConfirmation.canonical.inventory[0].pendingQty); });
 
-test('218 ignora itens anteriores a 01/08/2026', () => {
-  const operational = state({ legacy: false });
-  operational.receiptItems[0].entryDate = '2026-07-31';
-  const result = applyReceiptReconciliation(baseCanonical(), operational, config);
-  assert.equal(result.canonical.inventory[0].pendingQty, 1000);
-  assert.equal(result.canonical.stock.pendingPurchaseCost, 10000);
-  assert.equal(result.audit.confirmedItems, 0);
-});
+test('218 ignora itens anteriores a 01/08/2026', () => { const operational = state({ legacy: false }); operational.receiptItems[0].entryDate = '2026-07-31'; const result = applyReceiptReconciliation(baseCanonical(), operational, config); assert.equal(result.canonical.inventory[0].pendingQty, 1000); assert.equal(result.canonical.stock.pendingPurchaseCost, 10000); assert.equal(result.audit.confirmedItems, 0); });
 
-test('configurações usa o 218 como baixa automática e mantém tabela para auditoria item a item', () => {
-  const page = fs.readFileSync(new URL('../src/pages/ConfiguracoesPage.tsx', import.meta.url), 'utf8');
-  assert.match(page, /Auditoria item a item do 218/);
-  assert.match(page, /não é necessária nenhuma confirmação manual/);
-  assert.match(page, /ABATIDO AUTOMATICAMENTE/);
-  assert.doesNotMatch(page, /Aplicar confirmações/);
-});
+test('configurações usa o 218 como baixa automática e mantém tabela para auditoria item a item', () => { const page = fs.readFileSync(new URL('../src/pages/ConfiguracoesPage.tsx', import.meta.url), 'utf8'); assert.match(page, /Auditoria item a item do 218/); assert.match(page, /não é necessária nenhuma confirmação manual/); assert.match(page, /ABATIDO AUTOMATICAMENTE/); assert.doesNotMatch(page, /Aplicar confirmações/); });
 
-test('hidratação reaplica reconciliação de recebimentos após restaurar a base', () => {
-  const context = fs.readFileSync(new URL('../src/store/DataContext.tsx', import.meta.url), 'utf8');
-  assert.match(context, /applyReceiptReconciliation/);
-});
+test('hidratação reaplica reconciliação de recebimentos após restaurar a base', () => { const context = fs.readFileSync(new URL('../src/store/DataContext.tsx', import.meta.url), 'utf8'); assert.match(context, /applyReceiptReconciliation/); });

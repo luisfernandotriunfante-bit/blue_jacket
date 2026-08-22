@@ -1,9 +1,10 @@
-import type { CanonicalState } from './canonical';
+import type { CanonicalInventoryProduct, CanonicalState } from './canonical';
 import { buildStockPresentation, DEFAULT_STOCK_ALERT_CONFIGURATION } from './stockModel';
 import type { StockProductView } from './stockModel';
 import type {
   AssortmentClassification,
   AssortmentCompetence,
+  CommercialPackagingSource,
   CustomerIntelligenceAuditCheck,
   CustomerIntelligenceResult,
   CustomerIntelligenceSupport,
@@ -147,6 +148,16 @@ function buildStockIndex(state: CanonicalState) {
   return { presentation, byCode, byEan, byFactory };
 }
 
+function packagingSourceFor(state: CanonicalState, stockProduct: StockProductView | undefined): CommercialPackagingSource {
+  if (!stockProduct) return 'UNKNOWN';
+  const raw = state.inventory.find(item => cleanCode(item.code) === cleanCode(stockProduct.code)
+    || (cleanDigits(item.ean) && cleanDigits(item.ean) === cleanDigits(stockProduct.ean))
+    || (cleanCode(item.factoryCode) && cleanCode(item.factoryCode) === cleanCode(stockProduct.factoryCode))) as (CanonicalInventoryProduct & { unitsPerCaseSource?: CommercialPackagingSource; unitsPerCaseConflict?: boolean }) | undefined;
+  if (raw?.unitsPerCaseConflict) return 'CONFLICT';
+  if (raw?.unitsPerCaseSource) return raw.unitsPerCaseSource;
+  return stockProduct.unitsPerCase > 0 ? 'PRICE_LIST' : 'UNKNOWN';
+}
+
 function currentLineage(lineage: SkuLineageRecord[], ean: string, sku: string, referenceDate: string) {
   return lineage.find(item => (cleanDigits(item.oldEan) === cleanDigits(ean) || cleanCode(item.oldSku) === cleanCode(sku)) && item.effectiveFrom <= referenceDate);
 }
@@ -168,10 +179,10 @@ function eligiblePromotion(rule: PromotionRule, customer: CustomerResolvedProfil
 }
 
 function opportunityFor(input: {
-  classification: AssortmentClassification; bought: boolean; isLaunch: boolean; hasWinthor: boolean; availableUnits: number; portfolioUnits: number;
+  classification: AssortmentClassification; bought: boolean; isLaunch: boolean; hasWinthor: boolean; availableUnits: number; hasPortfolio: boolean;
   hasPromotion: boolean; lineageStatus: string; isDiscontinued: boolean; predecessorBought?: boolean;
 }): { priority: OpportunityPriority; reason: string; action: string } {
-  const { classification, bought, isLaunch, hasWinthor, availableUnits, portfolioUnits, hasPromotion, lineageStatus, isDiscontinued, predecessorBought } = input;
+  const { classification, bought, isLaunch, hasWinthor, availableUnits, hasPortfolio, hasPromotion, lineageStatus, isDiscontinued, predecessorBought } = input;
   if (lineageStatus === 'MIGRACAO_VIGENTE' && bought) return { priority: 'MIGRACAO', reason: 'Cliente possui compra do SKU anterior e o sucessor já está vigente.', action: 'Migrar a oferta para o SKU atual.' };
   if (predecessorBought && !bought) return { priority: 'MIGRACAO', reason: 'Cliente já comprou o SKU anterior; o sucessor atual ainda não foi adotado.', action: 'Migrar a compra para o SKU atual.' };
   if (isDiscontinued && bought) return { priority: 'DIAGNOSTICO', reason: 'Cliente possui histórico de produto descontinuado.', action: 'Não recomprar automaticamente; avaliar substituto vigente.' };
@@ -180,9 +191,9 @@ function opportunityFor(input: {
   if (!hasWinthor) return { priority: 'BLOQUEIO_CADASTRO', reason: 'Produto recomendado ainda sem cadastro Winthor conciliado.', action: 'Regularizar cadastro antes de cobrar execução do vendedor.' };
   if (availableUnits > 0 && isLaunch) return { priority: 'MAXIMA', reason: 'Lançamento recomendado, nunca comprado e disponível agora.', action: 'Ofertar agora.' };
   if (availableUnits > 0 && classification === 'MANDATORIO') return { priority: 'MAXIMA', reason: 'Mandatório, nunca comprado e disponível agora.', action: 'Fechar lacuna prioritária do sortimento.' };
-  if (portfolioUnits > 0 && isLaunch) return { priority: 'MUITO_ALTA', reason: 'Lançamento recomendado e ainda não comprado, com entrada prevista em Carteira.', action: 'Preparar oferta e acompanhar entrada.' };
+  if (hasPortfolio && isLaunch) return { priority: 'MUITO_ALTA', reason: 'Lançamento recomendado e ainda não comprado, com entrada prevista em Carteira.', action: 'Preparar oferta e acompanhar entrada.' };
   if (hasPromotion) return { priority: 'MUITO_ALTA', reason: 'Produto recomendado nunca comprado com promoção estruturada elegível.', action: 'Usar a promoção na abordagem comercial.' };
-  if (availableUnits <= 0 && portfolioUnits <= 0) return { priority: 'BLOQUEIO_DISPONIBILIDADE', reason: 'Produto recomendado sem estoque disponível e sem Carteira.', action: 'Aguardar disponibilidade; não tratar como falha do vendedor.' };
+  if (availableUnits <= 0 && !hasPortfolio) return { priority: 'BLOQUEIO_DISPONIBILIDADE', reason: 'Produto recomendado sem estoque disponível e sem Carteira.', action: 'Aguardar disponibilidade; não tratar como falha do vendedor.' };
   if (classification === 'IMPORTANTE') return { priority: 'ALTA', reason: 'Produto importante ainda não comprado.', action: 'Priorizar inclusão no próximo pedido.' };
   return { priority: 'MEDIA', reason: 'Produto recomendado ainda não comprado.', action: 'Trabalhar expansão de mix.' };
 }
@@ -300,11 +311,17 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
     const assortmentValue = activeOfficial ? recommendationFor(activeOfficial, customer.assortmentChannel) : null;
     let classification = classificationFromValue(assortmentValue, Boolean(activeOfficial));
     if (isOldMigratedSku || isDiscontinued) classification = 'FORA_DO_SORTIMENTO';
-    const preferredWinthor = cleanCode(itemCode?.internalCode || activeOfficial?.winthorCode || purchase?.winthorCode || currentSale?.winthorCode || '');
-    const stockProduct = stock.byEan.get(ean) || (preferredWinthor ? stock.byCode.get(preferredWinthor) : undefined) || (activeOfficial?.colgateSku ? stock.byFactory.get(cleanCode(activeOfficial.colgateSku)) : undefined);
-    const hasWinthor = Boolean(preferredWinthor) || Boolean(stockProduct?.hasWinthor);
+
+    const correspondenceWinthor = cleanCode(itemCode?.internalCode || purchase?.winthorCode || currentSale?.winthorCode || activeOfficial?.winthorCode || '');
+    const stockProduct = stock.byEan.get(ean) || (correspondenceWinthor ? stock.byCode.get(correspondenceWinthor) : undefined) || (activeOfficial?.colgateSku ? stock.byFactory.get(cleanCode(activeOfficial.colgateSku)) : undefined);
+    const factualWinthor = cleanCode(itemCode?.internalCode || purchase?.winthorCode || currentSale?.winthorCode || (stockProduct?.hasWinthor ? stockProduct.code : ''));
+    const preferredWinthor = factualWinthor || cleanCode(activeOfficial?.winthorCode || '');
+    const hasWinthor = Boolean(factualWinthor) || Boolean(stockProduct?.hasWinthor);
     const availableUnits = positive(stockProduct?.availableUnits);
+    const portfolioCases = positive(stockProduct?.pendingCases);
     const portfolioUnits = positive(stockProduct?.pendingUnits);
+    const hasPortfolio = portfolioCases > 0 || portfolioUnits > 0;
+    const unitsPerCaseSource = packagingSourceFor(state, stockProduct);
     const isLaunch = Boolean(activeOfficial?.launchLabel && normalizeText(activeOfficial.launchLabel).includes('LANCAMENTO'));
     const boughtHistorical = Boolean(purchase && (purchase.quantity > 0 || purchase.netValue !== 0));
     const boughtCurrent = Boolean(currentSale && (currentSale.value !== 0 || currentSale.units > 0));
@@ -312,10 +329,10 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
     const predecessorKey = cleanDigits(activeOfficial?.ean || ean) || cleanCode(activeOfficial?.colgateSku || preferredWinthor);
     const predecessorBought = predecessorPurchases.has(predecessorKey) || Boolean(predecessor && (purchasesByEan.has(cleanDigits(predecessor.oldEan)) || currentByEan.has(cleanDigits(predecessor.oldEan))));
     const matchingPromotions = support.promotions.filter(rule => eligiblePromotion(rule, customer, { ean: activeOfficial?.ean || ean, winthorCode: preferredWinthor }, referenceDate));
-    const opportunity = opportunityFor({ classification, bought, isLaunch, hasWinthor, availableUnits, portfolioUnits, hasPromotion: matchingPromotions.length > 0, lineageStatus: lineage?.status || '', isDiscontinued: Boolean(isDiscontinued), predecessorBought });
+    const opportunity = opportunityFor({ classification, bought, isLaunch, hasWinthor, availableUnits, hasPortfolio, hasPromotion: matchingPromotions.length > 0, lineageStatus: lineage?.status || '', isDiscontinued: Boolean(isDiscontinued), predecessorBought });
     const master = masterByEan.get(ean) || (activeOfficial?.colgateSku ? masterBySku.get(cleanCode(activeOfficial.colgateSku)) : undefined);
     const basePrice = stockProduct?.saleUnit && stockProduct.saleUnit > 0 ? stockProduct.saleUnit : master?.unitPrice && master.unitPrice > 0 ? master.unitPrice : null;
-    const availability = isDiscontinued ? 'DESCONTINUADO' : isOldMigratedSku ? 'MIGRACAO' : !hasWinthor ? 'SEM_WINTHOR' : availableUnits > 0 ? 'DISPONIVEL' : portfolioUnits > 0 ? 'SOMENTE_CARTEIRA' : 'SEM_ESTOQUE';
+    const availability = isDiscontinued ? 'DESCONTINUADO' : isOldMigratedSku ? 'MIGRACAO' : !hasWinthor ? 'SEM_WINTHOR' : availableUnits > 0 ? 'DISPONIVEL' : hasPortfolio ? 'SOMENTE_CARTEIRA' : 'SEM_ESTOQUE';
     products.push({
       ean: activeOfficial?.ean || ean, winthorCode: preferredWinthor, colgateSku: activeOfficial?.colgateSku || official?.colgateSku || '',
       description: activeOfficial?.description || official?.description || purchase?.description || currentSale?.description || stockProduct?.description || 'Produto sem correspondência completa',
@@ -324,11 +341,12 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
       lineageStatus: lineage?.status || (predecessor ? 'MIGRACAO_VIGENTE' : ''), predecessorEan: lineage?.oldEan || predecessor?.oldEan || '', successorEan: lineage?.newEan || predecessor?.newEan || '', isDiscontinued: Boolean(isDiscontinued),
       bought, purchaseQuantity: purchase?.quantity || 0, purchaseValue: purchase?.purchaseValue || 0, returnValue: purchase?.returnValue || 0, netValue: purchase?.netValue || 0,
       currentPeriodValue: currentSale?.value || 0,
-      physicalUnits: positive(stockProduct?.physicalTotalUnits), reservedUnits: positive(stockProduct?.reservedUnits), availableUnits, portfolioUnits, projectedUnits: positive(stockProduct?.projectedUnits), unitsPerCase: positive(stockProduct?.unitsPerCase),
+      physicalUnits: positive(stockProduct?.physicalTotalUnits), reservedUnits: positive(stockProduct?.reservedUnits), availableUnits, portfolioCases, portfolioUnits, projectedUnits: positive(stockProduct?.projectedUnits), unitsPerCase: positive(stockProduct?.unitsPerCase), unitsPerCaseSource,
       availability, hasWinthor, promotionIds: matchingPromotions.map(rule => rule.id), basePrice, finalPrice: null, priceStatus: basePrice ? 'COMPOSICAO_FINAL_PENDENTE' : 'SEM_PRECO',
       opportunityPriority: opportunity.priority, opportunityReason: opportunity.reason, recommendedAction: opportunity.action,
       auditNotes: [
         stockProduct ? 'Estoque consumido diretamente do motor canônico de Estoque.' : 'Sem correspondência no motor canônico de Estoque.',
+        hasPortfolio && portfolioUnits <= 0 ? `Carteira identificada em ${portfolioCases.toLocaleString('pt-BR')} cx; conversão para unidades bloqueada porque o fator Un/CX está ${unitsPerCaseSource}.` : '',
         boughtCurrent ? 'Adoção/compra também confirmada pelo 8022 do período atual.' : '',
         lineage ? `${lineage.status}: ${lineage.oldEan || lineage.oldSku} → ${lineage.newEan || lineage.newSku || 'sem sucessor'}` : predecessor ? `SUCESSOR VIGENTE de ${predecessor.oldEan || predecessor.oldSku}.` : '',
       ].filter(Boolean),
@@ -338,12 +356,12 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
   unmatchedPurchases.forEach(purchase => {
     const lineage = currentLineage(support.lineage, '', purchase.winthorCode, referenceDate);
     const classification: AssortmentClassification = lineage?.status === 'DESCONTINUADO' || lineage?.status === 'MIGRACAO_VIGENTE' ? 'FORA_DO_SORTIMENTO' : 'PENDENCIA_CORRESPONDENCIA';
-    const opportunity = opportunityFor({ classification, bought: true, isLaunch: false, hasWinthor: Boolean(purchase.winthorCode), availableUnits: 0, portfolioUnits: 0, hasPromotion: false, lineageStatus: lineage?.status || '', isDiscontinued: lineage?.status === 'DESCONTINUADO' });
+    const opportunity = opportunityFor({ classification, bought: true, isLaunch: false, hasWinthor: Boolean(purchase.winthorCode), availableUnits: 0, hasPortfolio: false, hasPromotion: false, lineageStatus: lineage?.status || '', isDiscontinued: lineage?.status === 'DESCONTINUADO' });
     products.push({
       ean: '', winthorCode: purchase.winthorCode, colgateSku: '', description: purchase.description, category: '', subcategory: '', brand: '', assortmentValue: null,
       classification, isRecommended: false, isLaunch: false, launchLabel: '', lineageStatus: lineage?.status || '', predecessorEan: lineage?.oldEan || '', successorEan: lineage?.newEan || '', isDiscontinued: lineage?.status === 'DESCONTINUADO',
       bought: true, purchaseQuantity: purchase.quantity, purchaseValue: purchase.purchaseValue, returnValue: purchase.returnValue, netValue: purchase.netValue, currentPeriodValue: 0,
-      physicalUnits: 0, reservedUnits: 0, availableUnits: 0, portfolioUnits: 0, projectedUnits: 0, unitsPerCase: 0,
+      physicalUnits: 0, reservedUnits: 0, availableUnits: 0, portfolioCases: 0, portfolioUnits: 0, projectedUnits: 0, unitsPerCase: 0, unitsPerCaseSource: 'UNKNOWN',
       availability: lineage?.status === 'DESCONTINUADO' ? 'DESCONTINUADO' : lineage?.status === 'MIGRACAO_VIGENTE' ? 'MIGRACAO' : 'SEM_ESTOQUE',
       hasWinthor: Boolean(purchase.winthorCode), promotionIds: [], basePrice: null, finalPrice: null, priceStatus: 'SEM_PRECO',
       opportunityPriority: opportunity.priority, opportunityReason: opportunity.reason, recommendedAction: opportunity.action,
@@ -356,7 +374,7 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
       ean: '', winthorCode: currentSale.winthorCode, colgateSku: '', description: currentSale.description || `Movimento 8022 ${key}`, category: '', subcategory: '', brand: '', assortmentValue: null,
       classification: 'PENDENCIA_CORRESPONDENCIA', isRecommended: false, isLaunch: false, launchLabel: '', lineageStatus: '', predecessorEan: '', successorEan: '', isDiscontinued: false,
       bought: true, purchaseQuantity: 0, purchaseValue: 0, returnValue: 0, netValue: 0, currentPeriodValue: currentSale.value,
-      physicalUnits: 0, reservedUnits: 0, availableUnits: 0, portfolioUnits: 0, projectedUnits: 0, unitsPerCase: 0, availability: 'SEM_ESTOQUE', hasWinthor: Boolean(currentSale.winthorCode),
+      physicalUnits: 0, reservedUnits: 0, availableUnits: 0, portfolioCases: 0, portfolioUnits: 0, projectedUnits: 0, unitsPerCase: 0, unitsPerCaseSource: 'UNKNOWN', availability: 'SEM_ESTOQUE', hasWinthor: Boolean(currentSale.winthorCode),
       promotionIds: [], basePrice: null, finalPrice: null, priceStatus: 'SEM_PRECO', opportunityPriority: 'DIAGNOSTICO', opportunityReason: 'Compra do período atual sem correspondência confiável com EAN/sortimento oficial.', recommendedAction: 'Reconciliar cadastro antes de classificar a compra como dentro ou fora do sortimento.', auditNotes: ['Movimento preservado do 8022; não foi classificado silenciosamente como fora do sortimento.'],
     });
   });
@@ -419,7 +437,7 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
     boughtUnresolved: products.filter(item => item.bought && item.classification === 'PENDENCIA_CORRESPONDENCIA').length,
     ytdNetValue: customerPurchases.reduce((sum, item) => sum + item.netValue, 0),
     opportunitiesAvailableNow: opportunities.filter(item => item.availableUnits > 0 && ['MAXIMA', 'MUITO_ALTA', 'ALTA', 'MEDIA', 'MIGRACAO'].includes(item.opportunityPriority)).length,
-    opportunitiesPortfolioOnly: opportunities.filter(item => item.availableUnits <= 0 && item.portfolioUnits > 0).length,
+    opportunitiesPortfolioOnly: opportunities.filter(item => item.availableUnits <= 0 && item.availability === 'SOMENTE_CARTEIRA').length,
     blockedByStock: opportunities.filter(item => item.opportunityPriority === 'BLOQUEIO_DISPONIBILIDADE').length,
     blockedByRegistration: opportunities.filter(item => item.opportunityPriority === 'BLOQUEIO_CADASTRO').length,
     launches: {
@@ -427,9 +445,9 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
       adopted: launchesProducts.filter(item => item.bought).length,
       missing: launchesProducts.filter(item => !item.bought).length,
       availableNow: launchesProducts.filter(item => !item.bought && item.availableUnits > 0).length,
-      portfolioOnly: launchesProducts.filter(item => !item.bought && item.availableUnits <= 0 && item.portfolioUnits > 0).length,
+      portfolioOnly: launchesProducts.filter(item => !item.bought && item.availableUnits <= 0 && item.availability === 'SOMENTE_CARTEIRA').length,
       withoutWinthor: launchesProducts.filter(item => !item.hasWinthor).length,
-      withoutStockAndPortfolio: launchesProducts.filter(item => item.hasWinthor && item.availableUnits <= 0 && item.portfolioUnits <= 0).length,
+      withoutStockAndPortfolio: launchesProducts.filter(item => item.hasWinthor && item.availability === 'SEM_ESTOQUE').length,
     },
     products: products.sort((a, b) => Number(b.isRecommended) - Number(a.isRecommended) || Number(b.isLaunch) - Number(a.isLaunch) || a.description.localeCompare(b.description)),
     opportunities, launchesProducts, boughtOutsideProducts, promotions: applicablePromotions, audit, limitations,

@@ -1,5 +1,6 @@
 import type { ProdutoEstoque } from '../../store/DataContext';
 import type { CanonicalSalesTransaction, CnpjNormalizationStatus, LineName } from '../../domain/canonical';
+import type { PackagingCandidate, UnitsPerCaseSource } from '../../domain/packaging';
 
 export type Row = any[];
 export type RcaMap = { newCode: string; oldCode: string; name: string; coordinatorCode: string; coordinatorName: string };
@@ -8,7 +9,7 @@ export type PremiseClient = { cnpj: string; cnpjRaw?:string; cnpjNormalizationSt
 export type RouteStore = { cnpj: string; cnpjRaw?:string; cnpjNormalizationStatus?:CnpjNormalizationStatus; name: string; fantasyName: string; city: string; networkRaw: string; managerCnpj: string; managerCnpjRaw?:string; managerCnpjNormalizationStatus?:CnpjNormalizationStatus; groupingCode: string; tier: string; storeType: string; target: number };
 export type ReferenceClientNetwork = { cnpj:string; cnpjRaw?:string; cnpjNormalizationStatus?:CnpjNormalizationStatus; network:string };
 export type ProductMaster = { sku: string; ean: string; description: string; category: string; subcategory: string; brand: string; isLaunch: boolean; boxPrice: number; unitPrice: number; unitsPerCase: number; line: LineName | '' };
-export type SalesTransaction = CanonicalSalesTransaction;
+export type SalesTransaction = CanonicalSalesTransaction & { customerKey?: string };
 export type PortfolioSourceLine = {
   sourceRow: number;
   materialCode: string;
@@ -16,6 +17,7 @@ export type PortfolioSourceLine = {
   billQty: number;
   totalCases: number;
   unitsPerCase: number;
+  unitsPerCaseSource?: UnitsPerCaseSource;
   totalUnits: number;
   costValue: number;
   saleValue: number;
@@ -24,5 +26,16 @@ export type PortfolioSourceLine = {
   description: string;
   hasWinthor: boolean;
 };
-export type StockProduct = ProdutoEstoque & { factoryCode?: string; physicalCases?: number; physicalUnits?: number; grossKg?: number; unitsPerCase?: number; portfolioLines?: PortfolioSourceLine[] };
+export type StockProduct = ProdutoEstoque & {
+  factoryCode?: string;
+  physicalCases?: number;
+  physicalUnits?: number;
+  grossKg?: number;
+  unitsPerCase?: number;
+  unitsPerCaseSource?: UnitsPerCaseSource;
+  unitsPerCaseCandidates?: PackagingCandidate[];
+  unitsPerCaseConflict?: boolean;
+  unitsPerCaseNote?: string;
+  portfolioLines?: PortfolioSourceLine[];
+};
 export const DAY_NAMES = ['Domingo', 'Segunda-Feira', 'Terça-Feira', 'Quarta-Feira', 'Quinta-Feira', 'Sexta-Feira', 'Sábado'];

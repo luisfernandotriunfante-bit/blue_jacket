@@ -1,5 +1,7 @@
 import type { CanonicalInventoryProduct, CanonicalState, ManualConfiguration } from '../domain/canonical';
-import type { OperationalPortfolioRow, OperationalReceiptItem, OperationalSourceState } from './operationalSources';
+import { invoiceMatches, parseInvoiceIdentity, type InvoiceIdentity } from '../domain/invoiceIdentity';
+import { packagingFactorsAgree, type UnitsPerCaseSource } from '../domain/packaging';
+import type { OperationalPortfolioRow, OperationalReceiptItem, OperationalReceivedInvoice, OperationalSourceState } from './operationalSources';
 import { cleanCode, cleanDigits } from './canonical/utils';
 
 const CONFIRMATION_KEY = 'blue-jacket:receipt-confirmations:v1';
@@ -25,7 +27,7 @@ export interface ReceiptReconciliationAudit {
 }
 
 export function receiptItemKey(item: OperationalReceiptItem, index: number): string {
-  return [item.invoice, item.sku, item.units, item.unitPrice, index].join('|');
+  return [item.invoiceNormalized || item.invoice, item.sku, item.units, item.unitPrice, index].join('|');
 }
 
 // Mantidos apenas para migração de cargas antigas. A partir da regra atual o 218 é
@@ -49,28 +51,32 @@ export function saveReceiptConfirmations(storage: Storage | null | undefined, fi
   try { storage.setItem(CONFIRMATION_KEY, JSON.stringify(payload)); } catch { /* legado não deve derrubar a carga */ }
 }
 
-function normalizedInvoice(value: unknown): string {
-  return String(value ?? '').replace(/\D/g, '').replace(/^0+/, '');
-}
-
-/** A Carteira costuma expor a NF como 002915720-1. */
-function matchInvoiceKey(value: unknown, knownInvoices: Map<string, unknown>): string {
-  const direct = normalizedInvoice(value);
-  if (!direct) return '';
-  if (knownInvoices.has(direct)) return direct;
-  if (direct.length >= 8) {
-    const withoutSeries = direct.slice(0, -1).replace(/^0+/, '');
-    if (knownInvoices.has(withoutSeries)) return withoutSeries;
-  }
-  return '';
-}
-
 function isBeforeAugust2026(entryDate: string): boolean {
   return Boolean(entryDate && entryDate < AUGUST_2026_START);
 }
 
 function isAugust2026OrLater(entryDate: string): boolean {
   return Boolean(entryDate && entryDate >= AUGUST_2026_START);
+}
+
+function identityFromRecord(record: { invoice: string; invoiceRaw?: string; invoiceNumber?: string; invoiceSeries?: string; invoiceNormalized?: string }): InvoiceIdentity {
+  if (record.invoiceNumber || record.invoiceSeries || record.invoiceNormalized) {
+    const number = record.invoiceNumber || parseInvoiceIdentity(record.invoice).number;
+    const series = record.invoiceSeries || '';
+    return { raw: record.invoiceRaw || record.invoice, number, series, normalized: record.invoiceNormalized || (number && series ? `${number}-${series}` : number) };
+  }
+  return parseInvoiceIdentity(record.invoiceRaw || record.invoice);
+}
+
+function findMatchingInvoice(row: OperationalPortfolioRow, invoices: OperationalReceivedInvoice[]): OperationalReceivedInvoice | undefined {
+  const rowIdentity = identityFromRecord(row);
+  if (!rowIdentity.number) return undefined;
+  return invoices.find(invoice => invoiceMatches(rowIdentity, identityFromRecord(invoice)));
+}
+
+function invoiceAuditKey(invoice: OperationalReceivedInvoice): string {
+  const identity = identityFromRecord(invoice);
+  return identity.normalized || identity.number;
 }
 
 function resolveProductBySku(
@@ -109,13 +115,19 @@ function resolvePortfolioProduct(
   return resolveProductBySku(row.materialCode, inventoryByCode, inventoryByFactory, inventoryByEan, canonical);
 }
 
+type InventoryWithPackaging = CanonicalInventoryProduct & { unitsPerCase?: number; unitsPerCaseSource?: UnitsPerCaseSource; unitsPerCaseConflict?: boolean };
+
 function unitsPerCaseFor(product: CanonicalInventoryProduct, canonical: CanonicalState): number {
+  const extended = product as InventoryWithPackaging;
+  if (extended.unitsPerCaseConflict || extended.unitsPerCaseSource === 'CONFLICT') return 0;
+  const productFactor = extended.unitsPerCaseSource && extended.unitsPerCaseSource !== 'UNKNOWN' ? Math.max(Number(extended.unitsPerCase) || 0, 0) : 0;
   const ean = cleanDigits(product.ean);
   const factory = cleanCode(product.factoryCode);
   const master = (canonical.support.products || []).find(item => (ean && cleanDigits(item.ean) === ean) || (factory && cleanCode(item.sku) === factory));
   const masterUnits = Math.max(Number(master?.unitsPerCase) || 0, 0);
+  if (productFactor > 0 && masterUnits > 0 && !packagingFactorsAgree(productFactor, masterUnits)) return 0;
+  if (productFactor > 0) return productFactor;
   if (masterUnits > 0) return masterUnits;
-  if (product.pendingCases > 0 && product.pendingQty > 0) return product.pendingQty / product.pendingCases;
   return 0;
 }
 
@@ -146,18 +158,14 @@ export function applyReceiptReconciliation(
   config: ManualConfiguration,
   _legacyConfirmedKeys: Set<string> = new Set(),
 ): { canonical: CanonicalState; audit: ReceiptReconciliationAudit } {
+  // A entrada deve ser a Carteira bruta/comparável. applyOperationalOverrides não
+  // reduz mais NFs recebidas; esta é a única autoridade de baixa do pipeline.
   const inventory = canonical.inventory.map(item => ({ ...item }));
   const byCode = new Map(inventory.map(item => [cleanCode(item.code), item]));
   const byFactory = new Map(inventory.filter(item => cleanCode(item.factoryCode)).map(item => [cleanCode(item.factoryCode), item]));
   const byEan = new Map(inventory.filter(item => cleanDigits(item.ean)).map(item => [cleanDigits(item.ean), item]));
 
-  // 12.322 é a fonte histórica até 31/07/2026. Se a NF já entrou, a linha da
-  // Carteira não está mais pendente: saem o NET VALUE E o respectivo volume.
-  const legacyInvoices = new Map(
-    state.legacyInvoices
-      .filter(invoice => isBeforeAugust2026(invoice.entryDate))
-      .map(invoice => [normalizedInvoice(invoice.invoice), invoice]),
-  );
+  const legacyInvoices = state.legacyInvoices.filter(invoice => isBeforeAugust2026(invoice.entryDate));
 
   let legacyRequestedCost = 0;
   let legacyAppliedCost = 0;
@@ -166,9 +174,9 @@ export function applyReceiptReconciliation(
   const legacyMatchedInvoices = new Set<string>();
 
   for (const row of state.portfolioRows || []) {
-    const legacyKey = matchInvoiceKey(row.invoice, legacyInvoices);
-    if (!legacyKey) continue;
-    legacyMatchedInvoices.add(legacyKey);
+    const matchedInvoice = findMatchingInvoice(row, legacyInvoices);
+    if (!matchedInvoice) continue;
+    legacyMatchedInvoices.add(invoiceAuditKey(matchedInvoice));
     const product = resolvePortfolioProduct(row, byCode, byFactory, byEan, canonical);
     if (!product) continue;
 
@@ -182,8 +190,6 @@ export function applyReceiptReconciliation(
     legacyAppliedUnits += volume.units;
   }
 
-  // Desde 01/08/2026 o 218 substitui a leitura antiga. Portanto ele é aplicado
-  // automaticamente; a tabela em Configurações é camada de auditoria, não aprovação.
   let confirmedItems = 0;
   let confirmedUnits = 0;
   let confirmedCases = 0;
@@ -196,16 +202,14 @@ export function applyReceiptReconciliation(
     const product = resolveReceiptProduct(item, byCode, byFactory, byEan, canonical);
     if (!product) { unresolvedItems += 1; return; }
 
-    const units = Math.min(Math.max(item.units, 0), Math.max(product.pendingQty, 0));
     const unitsPerCase = unitsPerCaseFor(product, canonical);
+    const units = Math.min(Math.max(item.units, 0), Math.max(product.pendingQty, 0));
     const cases = unitsPerCase > 0 ? Math.min(Math.max(product.pendingCases, 0), units / unitsPerCase) : 0;
     product.pendingQty = Math.max(product.pendingQty - units, 0);
     product.pendingCases = Math.max(product.pendingCases - cases, 0);
     confirmedUnits += units;
     confirmedCases += cases;
 
-    const legacyKey = matchInvoiceKey(item.invoice, legacyInvoices);
-    if (legacyKey && legacyMatchedInvoices.has(legacyKey)) return;
     const requestedCost = Math.max(item.units * item.unitPrice, 0);
     confirmedItemCost += deductPortfolioRowFinancial(product, requestedCost, config);
   });
@@ -220,13 +224,13 @@ export function applyReceiptReconciliation(
 
   const warnings = canonical.warnings.filter(warning => !warning.startsWith('Abatimento da Carteira:') && !warning.startsWith('12.322 → Carteira:') && !warning.startsWith('218 confirmado → Carteira:') && !warning.startsWith('218 automático → Carteira:') && !warning.startsWith('Fontes de entrada:'));
   if (state.legacyInvoices.length) {
-    warnings.push(`12.322 → Carteira: fonte histórica válida até 31/07/2026. ${legacyMatchedInvoices.size}/${legacyInvoices.size} NF(s) antigas foram encontradas na Carteira atual; ${legacyAppliedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}, ${legacyAppliedCases.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} cx e ${legacyAppliedUnits.toLocaleString('pt-BR')} un. foram abatidos.`);
+    warnings.push(`12.322 → Carteira: fonte histórica válida até 31/07/2026. ${legacyMatchedInvoices.size}/${legacyInvoices.length} NF(s) antigas foram encontradas por identidade explícita; ${legacyAppliedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}, ${legacyAppliedCases.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} cx e ${legacyAppliedUnits.toLocaleString('pt-BR')} un. foram abatidos uma única vez.`);
   }
   if (state.receiptItems.length) {
     const eligible218 = state.receiptItems.filter(item => isAugust2026OrLater(item.entryDate)).length;
-    warnings.push(`218 automático → Carteira: fonte oficial a partir de 01/08/2026. ${confirmedItems}/${eligible218} item(ns) aplicados automaticamente; ${confirmedUnits.toLocaleString('pt-BR')} un. e ${confirmedCases.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} cx abatidas; ${confirmedItemCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} abatidos financeiramente${unresolvedItems ? `; ${unresolvedItems} item(ns) sem vínculo de produto` : ''}.`);
+    warnings.push(`218 automático → Carteira: fonte oficial a partir de 01/08/2026. ${confirmedItems}/${eligible218} item(ns) processados uma única vez; ${confirmedUnits.toLocaleString('pt-BR')} un. e ${confirmedCases.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} cx abatidas; ${confirmedItemCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} abatidos financeiramente${unresolvedItems ? `; ${unresolvedItems} item(ns) sem vínculo de produto` : ''}.`);
   }
-  warnings.push('Fontes de entrada: 12.322 até 31/07/2026; Entrada 218 automática a partir de 01/08/2026. A Carteira mantém Order Qty + Bill Qty como regra de quantidade.');
+  warnings.push('Fontes de entrada: 12.322 até 31/07/2026; Entrada 218 automática a partir de 01/08/2026. A reconciliação de recebimentos é a única autoridade de baixa. A Carteira mantém Order Qty + Bill Qty como regra de quantidade.');
 
   const next: CanonicalState = {
     ...canonical,
@@ -246,7 +250,7 @@ export function applyReceiptReconciliation(
   return {
     canonical: next,
     audit: {
-      legacyInvoiceCount: legacyInvoices.size,
+      legacyInvoiceCount: legacyInvoices.length,
       legacyMatchedInvoiceCount: legacyMatchedInvoices.size,
       legacyRequestedCost,
       legacyAppliedCost,

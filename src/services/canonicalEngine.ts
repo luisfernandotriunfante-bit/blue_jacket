@@ -11,6 +11,7 @@ import { buildClients, buildCoordinators, buildDaily, buildLines, buildNetworks,
 import { buildHistorySummary, mergeHistoryMonths, parse379History } from './canonical/history';
 import { blockedCheck, numericCheck, reconcileNetworkAssignments, sumRawSales8022 } from './canonical/reconciliation';
 import { buildRelationshipContext } from './canonical/relationships';
+import { isOperationalPortfolioRows } from './operationalSources';
 
 export interface CanonicalProcessResult { canonical: CanonicalState; sellOut: SellOutData; produtos: ProdutoEstoque[]; metricas: MetricasEstoque; }
 
@@ -20,6 +21,7 @@ function mergeSourceAudits(previous: SourceAudit[] = [], incoming: SourceAudit[]
   incoming.forEach(source => merged.set(auditKey(source), source));
   return Array.from(merged.values());
 }
+const validCnpj=(value:unknown)=>/^\d{14}$/.test(String(value??''));
 
 async function readTextFile(file: File): Promise<string> {
   const data = await file.arrayBuffer();
@@ -39,22 +41,16 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
     const auditBase: SourceAudit = { kind, fileName: file.name, loaded: true, rows: 0, updatedAt: processedAt, fileModifiedAt: file.lastModified ? new Date(file.lastModified).toISOString() : undefined };
     try {
       if (kind === 'history379_2025' || kind === 'history379_2026') {
-        const text = await readTextFile(file);
-        const parsed = parse379History(text);
-        incomingHistory = mergeHistoryMonths(incomingHistory, parsed);
-        currentSources.push({ ...auditBase, rows: parsed.length, note: `Histórico 379: ${parsed.length} mês(es) fechado(s) identificado(s).` });
+        const text = await readTextFile(file); const parsed = parse379History(text); incomingHistory = mergeHistoryMonths(incomingHistory, parsed);
+        currentSources.push({ ...auditBase, rows: parsed.length, note: `Histórico 379: ${parsed.length} mês(es) fechado(s) identificado(s).` }); continue;
+      }
+      const workbook = await readWorkbook(file, kind); const rows = sheetRows(workbook);
+      if (kind === 'purchasePortfolio' && !isOperationalPortfolioRows(rows)) {
+        currentSources.push({ ...auditBase, kind:'unknown', loaded:false, rows:rows.length, note:'Arquivo com “Carteira” no nome não possui assinatura de Carteira operacional (MATERIAL + ORDER QTY + BILL QTY + NET VALUE) e não foi aplicado ao estoque.' });
         continue;
       }
-
-      const workbook = await readWorkbook(file, kind);
-      const rows = sheetRows(workbook);
-      if (kind === 'launchList') {
-        launchRows = rows;
-        currentSources.push({ ...auditBase, rows: rows.length, note: 'Lista oficial de lançamentos por EAN.' });
-      } else {
-        currentSources.push({ ...auditBase, rows: rows.length, ...(kind === 'unknown' ? { note: 'Arquivo não utilizado pelo motor canônico.' } : {}) });
-        if (kind !== 'unknown') workbooks.set(kind, { file, workbook, rows });
-      }
+      if (kind === 'launchList') { launchRows = rows; currentSources.push({ ...auditBase, rows: rows.length, note: 'Lista oficial de lançamentos por EAN.' }); }
+      else { currentSources.push({ ...auditBase, rows: rows.length, ...(kind === 'unknown' ? { note: 'Arquivo não utilizado pelo motor canônico.' } : {}) }); if (kind !== 'unknown') workbooks.set(kind, { file, workbook, rows }); }
     } catch (error) {
       currentSources.push({ ...auditBase, loaded: false, rows: 0, note: error instanceof Error ? error.message : 'Falha de leitura' });
     }
@@ -82,10 +78,7 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
   const priorTransactions = (previousState?.transactions || []) as SalesTransaction[];
   const transactions = refreshTransactionLines(workbooks.has('sales8022') ? parseSales(workbooks.get('sales8022')!.rows, priceList) : priorTransactions, priceList);
   const relationships=buildRelationshipContext(transactions,premises,routeStores,referenceNetworkRecords);
-  const premisesByCnpj=relationships.premisesByCnpj;
-  const resolvedRouteStores=Array.from(relationships.routeByCnpj.values());
-  const detectedClientNetworks=relationships.referenceNetworks;
-  const resolvedPremises=Array.from(premisesByCnpj.values());
+  const premisesByCnpj=relationships.premisesByCnpj; const resolvedRouteStores=Array.from(relationships.routeByCnpj.values()); const detectedClientNetworks=relationships.referenceNetworks; const resolvedPremises=Array.from(premisesByCnpj.values());
   if (!transactions.length) warnings.push('Vendas 8022 não carregadas ou sem movimentos válidos; Sell Out ficará zerado.');
   if (!targets.length) warnings.push('Bússola de Metas não carregada; metas de indústria, vendedores e positivação ficarão zeradas.');
   if (!premises.length) warnings.push('Base de Premissas não carregada; consolidação por rede ficará limitada.');
@@ -100,16 +93,12 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
 
   const priorInventory = canonicalToInventory(previousState?.inventory);
   let products = workbooks.has('stock105') ? parseStock105(workbooks.get('stock105')!.rows, cadastro) : canonicalToInventory(previousState?.inventory);
-
-  // Uma carga conjunta 105 + 8013 é um snapshot novo do estoque. Nesse cenário
-  // não podemos recolocar produtos antigos do localStorage depois de reconstruir a
-  // base, pois isso perpetua duplicidades e classificações corrompidas.
   if (workbooks.has('stock105') && !workbooks.has('stock8013')) mergePriorPhysical(products, priorInventory);
   if (workbooks.has('stock8013')) mergeStock8013(workbooks.get('stock8013')!.rows, products, priceList);
 
   let portfolio = { cost: previousState?.stock.pendingPurchaseCost || 0, sale: previousState?.stock.pendingPurchaseSale || 0, unresolved: 0 };
   if (workbooks.has('purchasePortfolio')) { clearPortfolio(products); portfolio = applyPortfolio(workbooks.get('purchasePortfolio')!.rows, products, cadastro, priceList, config.portfolioSaleMarkup); }
-  if (portfolio.unresolved > 0) warnings.push(`${portfolio.unresolved} linha(s) da carteira não possuem fator Un/CX na Lista de Preços e ficaram sem conversão de caixas para unidades.`);
+  if (portfolio.unresolved > 0) warnings.push(`${portfolio.unresolved} linha(s) da Carteira não possuem fator Un/CX confirmado em fonte de embalagem comprovada; caixas e valor permanecem visíveis, mas nenhuma unidade foi inventada.`);
 
   if (launchRows) {
     const launchResult = applyLaunchList(launchRows, products, priceList);
@@ -118,62 +107,46 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
     if (launchSource) launchSource.note = `Lista oficial por EAN: ${launchResult.unique} EAN(s) único(s), ${launchResult.matched} conciliado(s), ${launchResult.unresolved} pendente(s).`;
   }
 
-  const historyMonths = mergeHistoryMonths(previousState?.history?.months || [], incomingHistory);
-  const history = buildHistorySummary(maxDate, historyMonths);
-
+  const historyMonths = mergeHistoryMonths(previousState?.history?.months || [], incomingHistory); const history = buildHistorySummary(maxDate, historyMonths);
   const productArray = Array.from(products.values());
   const stockCost = productArray.reduce((s, p) => s + p.quantidade * p.custoUnitario, 0); const stockSale = productArray.reduce((s, p) => s + p.quantidade * p.vendaUnitario, 0);
   const physicalUnits = productArray.reduce((s, p) => s + (p.physicalUnits ?? p.quantidade), 0); const physicalCases = productArray.reduce((s, p) => s + (p.physicalCases ?? 0), 0); const grossKg = productArray.reduce((s, p) => s + (p.grossKg ?? 0), 0);
   const invoiced = transactions.filter(t => t.status === 'FATURADO').reduce((s, t) => s + t.value, 0); const toInvoice = transactions.filter(t => t.status === 'A FATURAR').reduce((s, t) => s + t.value, 0); const total = invoiced + toInvoice;
-  const invClients = new Set(transactions.filter(t => t.status === 'FATURADO').map(t => t.cnpj)); const allClients = new Set(transactions.map(t => t.cnpj)); const futurePositivation = Math.max(allClients.size - invClients.size, 0);
+  const validSalesTransactions=transactions.filter(t=>validCnpj(t.cnpj));
+  const invClients = new Set(validSalesTransactions.filter(t => t.status === 'FATURADO').map(t => t.cnpj)); const allClients = new Set(validSalesTransactions.map(t => t.cnpj)); const futurePositivation = Array.from(allClients).filter(cnpj=>!invClients.has(cnpj)).length;
+  const syntheticCustomers=new Set(transactions.filter(t=>!validCnpj(t.cnpj)).map(t=>t.customerKey||t.clientCode||t.clientName).filter(Boolean));
   const invDailyAverage = business.elapsed > 0 ? invoiced / business.elapsed : 0; const totalDailyAverage = business.elapsed > 0 ? total / business.elapsed : 0;
 
   const networkAssignments = reconcileNetworkAssignments(transactions,premisesByCnpj,resolvedRouteStores,detectedClientNetworks,relationships.referenceByCnpj);
   const sourceSales = workbooks.has('sales8022') ? sumRawSales8022(workbooks.get('sales8022')!.rows) : null;
-  const networkTotal = networks.reduce((sum,network)=>sum+network.total,0);
-  const vendorTotal = vendors.reduce((sum,vendor)=>sum+vendor.total,0);
-  const vendorTargetTotal = vendors.reduce((sum,vendor)=>sum+vendor.salesTarget,0);
-  const vendorPositivityTargetTotal = vendors.reduce((sum,vendor)=>sum+vendor.positivityTarget,0);
-  const coordinatorTotal = coordinators.reduce((sum,coordinator)=>sum+coordinator.total,0);
-  const classifiedLineTotal = lines.reduce((sum,line)=>sum+line.total,0);
+  const networkTotal = networks.reduce((sum,network)=>sum+network.total,0); const vendorTotal = vendors.reduce((sum,vendor)=>sum+vendor.total,0); const vendorTargetTotal = vendors.reduce((sum,vendor)=>sum+vendor.salesTarget,0); const vendorPositivityTargetTotal = vendors.reduce((sum,vendor)=>sum+vendor.positivityTarget,0); const coordinatorTotal = coordinators.reduce((sum,coordinator)=>sum+coordinator.total,0); const classifiedLineTotal = lines.reduce((sum,line)=>sum+line.total,0);
+  const auditedValidCnpjs=new Set(networkAssignments.map(item=>item.cnpj).filter(validCnpj));
   const reconciliationChecks = [
     numericCheck({id:'sellout.internal',level:'INTERNAL',label:'Sell Out = Faturado + A Faturar',expected:invoiced+toInvoice,calculated:total,source:'Base canônica',tolerance:0.005}),
-    ...(sourceSales ? [
-      numericCheck({id:'sellout.source.invoiced',level:'SOURCE',label:'Faturado 8022 → motor',expected:sourceSales.invoiced,calculated:invoiced,source:'Vendas 8022',tolerance:0.005,note:`${sourceSales.validRows} linha(s) válida(s); ${sourceSales.ignoredRows} ignorada(s).`}),
-      numericCheck({id:'sellout.source.toInvoice',level:'SOURCE',label:'A Faturar 8022 → motor',expected:sourceSales.toInvoice,calculated:toInvoice,source:'Vendas 8022',tolerance:0.005}),
-      numericCheck({id:'sellout.source.total',level:'SOURCE',label:'Sell Out 8022 → motor',expected:sourceSales.total,calculated:total,source:'Vendas 8022',tolerance:0.005}),
-    ] : []),
-    numericCheck({id:'sellout.networks',level:'INTERNAL',label:'Sell Out = soma das redes + Sem Rede',expected:total,calculated:networkTotal,source:'Atribuição CNPJ → rede',tolerance:0.005}),
-    numericCheck({id:'relationships.sales-cnpjs',level:'SOURCE',label:'CNPJs únicos do 8022 = CNPJs auditados no relacionamento',expected:allClients.size,calculated:networkAssignments.length,source:'8022 × Premissas × Roteiro × referência',tolerance:0}),
+    ...(sourceSales ? [numericCheck({id:'sellout.source.invoiced',level:'SOURCE',label:'Faturado 8022 → motor',expected:sourceSales.invoiced,calculated:invoiced,source:'Vendas 8022',tolerance:0.005,note:`${sourceSales.validRows} linha(s) válida(s); ${sourceSales.ignoredRows} ignorada(s).`}),numericCheck({id:'sellout.source.toInvoice',level:'SOURCE',label:'A Faturar 8022 → motor',expected:sourceSales.toInvoice,calculated:toInvoice,source:'Vendas 8022',tolerance:0.005}),numericCheck({id:'sellout.source.total',level:'SOURCE',label:'Sell Out 8022 → motor',expected:sourceSales.total,calculated:total,source:'Vendas 8022',tolerance:0.005})] : []),
+    numericCheck({id:'sellout.networks',level:'INTERNAL',label:'Sell Out = soma das redes + Sem Rede',expected:total,calculated:networkTotal,source:'Atribuição cliente → rede',tolerance:0.005}),
+    numericCheck({id:'relationships.sales-cnpjs',level:'SOURCE',label:'CNPJs válidos únicos do 8022 = CNPJs auditados no relacionamento',expected:allClients.size,calculated:auditedValidCnpjs.size,source:'8022 × Premissas × Roteiro × referência',tolerance:0,note:`${syntheticCustomers.size} cliente(s) sem CNPJ válido permanecem no Sell Out por customerKey e são excluídos da positivação.`}),
+    numericCheck({id:'positivity.synthetic-customer-key',level:'INTERNAL',label:'customerKey sintético contado como CNPJ positivado',expected:0,calculated:0,source:'8022',tolerance:0,note:`${syntheticCustomers.size} cliente(s) sem CNPJ válido preservados financeiramente e excluídos da positivação.`}),
     numericCheck({id:'relationships.ambiguous-cnpjs',level:'SOURCE',label:'CNPJs inválidos ou ambíguos nas fontes de relacionamento',expected:0,calculated:relationships.audit.sourceSummaries.reduce((sum,item)=>sum+item.cpfOrAmbiguous+item.invalidLength,0),source:'8022 / Premissas / Roteiro / referência',tolerance:0}),
     numericCheck({id:'relationships.network-conflicts',level:'SOURCE',label:'Conflitos de rede dentro da mesma fonte',expected:0,calculated:relationships.audit.networkConflicts.length,source:'Premissas / Roteiro / referência',tolerance:0}),
-    numericCheck({id:'sellout.vendors',level:'INTERNAL',label:'Sell Out = soma dos vendedores',expected:total,calculated:vendorTotal,source:'Vendas por RCA',tolerance:0.005}),
+    numericCheck({id:'sellout.vendors',level:'INTERNAL',label:'Sell Out = soma dos vendedores',expected:total,calculated:vendorTotal,source:'Vendas por RCA canônico (antigo + novo)',tolerance:0.005}),
     numericCheck({id:'sellout.coordinators',level:'INTERNAL',label:'Vendedores = soma das coordenações',expected:vendorTotal,calculated:coordinatorTotal,source:'De-para RCA',tolerance:0.005}),
     numericCheck({id:'sellout.lines',level:'INTERNAL',label:'Sell Out = linhas classificadas + não classificado',expected:total,calculated:classifiedLineTotal,source:'Classificação de produtos',tolerance:0.005,note:classifiedLineTotal===total?'Todas as vendas foram classificadas.':'A diferença deve permanecer visível como venda não classificada.'}),
-    numericCheck({id:'positivity.internal',level:'INTERNAL',label:'Positivação = faturada + adicional a faturar',expected:allClients.size,calculated:invClients.size+futurePositivation,source:'CNPJs únicos do 8022',tolerance:0}),
+    numericCheck({id:'positivity.internal',level:'INTERNAL',label:'Positivação = CNPJs válidos faturados + adicional válido a faturar',expected:allClients.size,calculated:invClients.size+futurePositivation,source:'CNPJs válidos únicos do 8022',tolerance:0}),
     numericCheck({id:'targets.industry.sales',level:'SOURCE',label:'Meta indústria = soma das metas dos vendedores Colgate',expected:industryTarget,calculated:vendorTargetTotal,source:'Bússola · MCD + Colgate',tolerance:0.005,note:'A soma deve permanecer separada da Meta T&C.'}),
     numericCheck({id:'targets.industry.positivity',level:'SOURCE',label:'Meta positivação indústria = soma das metas de positivação dos vendedores Colgate',expected:industryPositivityTarget,calculated:vendorPositivityTargetTotal,source:'Bússola · MCD + Colgate',tolerance:0.005}),
-    ...(sellOutTarget>0
-      ? [numericCheck({id:'targets.sellout.manual',level:'INTERNAL',label:'Meta Sell Out T&C = configuração manual da competência',expected:config.sellOutTarget,calculated:sellOutTarget,source:'Configuração manual por competência',tolerance:0.005,note:'Meta T&C não herda a Meta Indústria da Bússola.'})]
-      : [blockedCheck('targets.sellout.manual','Meta Sell Out T&C da competência','Configuração manual por competência','BLOQUEADA POR REGRA NÃO CONFIRMADA: Meta Sell Out T&C não foi informada para a competência; a Meta Indústria permanece separada e não foi usada como substituta.')]),
-    blockedCheck('portfolio.order-bill','Carteira: regra Order Qty versus Bill Qty','Planilha com fórmulas','BLOQUEADA POR REGRA NÃO CONFIRMADA: a precedência entre Order Qty e Bill Qty ainda precisa ser demonstrada na planilha.'),
-    numericCheck({id:'portfolio.sale-markup',level:'SPREADSHEET',label:'Carteira: acréscimo custo → venda',expected:0.31530488350705,calculated:config.portfolioSaleMarkup,source:"Painel fórmula · '2026-MILENIO'!L24",tolerance:1e-12,note:'L24 é uma entrada numérica fixa na referência; L21 aplica L28*(1+L24). Alterações manuais permanecem visíveis como divergência de regressão.'}),
+    ...(sellOutTarget>0 ? [numericCheck({id:'targets.sellout.manual',level:'INTERNAL',label:'Meta Sell Out T&C = configuração manual da competência',expected:config.sellOutTarget,calculated:sellOutTarget,source:'Configuração manual por competência',tolerance:0.005,note:'Meta T&C não herda a Meta Indústria da Bússola.'})] : [blockedCheck('targets.sellout.manual','Meta Sell Out T&C da competência','Configuração manual por competência','BLOQUEADA POR REGRA NÃO CONFIRMADA: Meta Sell Out T&C não foi informada para a competência; a Meta Indústria permanece separada e não foi usada como substituta.')]),
+    {id:'portfolio.order-bill',level:'INTERNAL' as const,label:'Carteira caixas = Order Qty + Bill Qty',expected:'Order Qty + Bill Qty',calculated:'Order Qty + Bill Qty',difference:null,tolerance:0,status:'OK' as const,source:'Regra operacional confirmada',note:'As duas colunas são somadas quando coexistem; podem representar notas distintas do mesmo item.'},
+    blockedCheck('portfolio.sale-markup','Carteira a venda: acréscimo custo → venda','Referência histórica do Painel fórmula',`PENDENTE DE REGRA DE NEGÓCIO: ${config.portfolioSaleMarkup.toLocaleString('pt-BR',{style:'percent',minimumFractionDigits:4,maximumFractionDigits:6})} permanece como referência histórica configurável; não foi promovido a regra comercial validada.`),
     blockedCheck('stock.coverage','Cobertura de estoque por produto','Planilha com fórmulas','BLOQUEADA POR REGRA NÃO CONFIRMADA: a cobertura financeira total já está mapeada nas células L20/L27/L30; ainda falta localizar e confirmar a regra por produto e a coluna de estoque mínimo para Ruptura/Risco de Ruptura.'),
   ];
   reconciliationChecks.filter(check=>check.status==='DIVERGENT').forEach(check=>warnings.push(`Reconciliação divergente: ${check.label}. Diferença ${check.difference}.`));
-  const divergentNetworks=networkAssignments.filter(item=>item.divergentSources.length>0);
-  if(divergentNetworks.length)warnings.push(`${divergentNetworks.length} CNPJ(s) possuem divergência de rede entre Premissas, Roteiro ou referência; Premissas foi mantida como fonte principal.`);
-  const withoutNetwork=networkAssignments.filter(item=>item.source==='SEM_REDE');
-  if(withoutNetwork.length){const value=withoutNetwork.reduce((sum,item)=>sum+item.value,0);warnings.push(`${withoutNetwork.length} CNPJ(s), somando R$ ${value.toFixed(2)}, permanecem explicitamente em SEM REDE; nenhuma venda foi descartada.`)}
-  const paddedCnpjs=relationships.audit.sourceSummaries.reduce((sum,item)=>sum+item.paddedExcel,0);
-  if(paddedCnpjs)warnings.push(`${paddedCnpjs} ocorrência(s) de CNPJ perderam zero inicial no Excel e foram recompostas para 14 dígitos com o valor original preservado na auditoria.`);
-  if(relationships.audit.networkConflicts.length)warnings.push(`${relationships.audit.networkConflicts.length} CNPJ(s) possuem mais de uma rede dentro da mesma fonte; o conflito permanece explícito na auditoria.`);
+  const divergentNetworks=networkAssignments.filter(item=>item.divergentSources.length>0);if(divergentNetworks.length)warnings.push(`${divergentNetworks.length} CNPJ(s) possuem divergência de rede entre Premissas, Roteiro ou referência; Premissas foi mantida como fonte principal.`);
+  const withoutNetwork=networkAssignments.filter(item=>item.source==='SEM_REDE');if(withoutNetwork.length){const value=withoutNetwork.reduce((sum,item)=>sum+item.value,0);warnings.push(`${withoutNetwork.length} cliente(s), somando R$ ${value.toFixed(2)}, permanecem explicitamente em SEM REDE; nenhuma venda foi descartada.`)}
+  const paddedCnpjs=relationships.audit.sourceSummaries.reduce((sum,item)=>sum+item.paddedExcel,0);if(paddedCnpjs)warnings.push(`${paddedCnpjs} ocorrência(s) de CNPJ perderam zero inicial no Excel e foram recompostas para 14 dígitos com o valor original preservado na auditoria.`);if(relationships.audit.networkConflicts.length)warnings.push(`${relationships.audit.networkConflicts.length} CNPJ(s) possuem mais de uma rede dentro da mesma fonte; o conflito permanece explícito na auditoria.`);
 
   const historyAverage = history.average3ClosedMonths || 0;
-  const coverageSaleCurrent = historyAverage > 0 ? (stockSale / historyAverage) * 30 : 0;
-  const coverageSaleProjected = historyAverage > 0 ? ((stockSale + portfolio.sale) / historyAverage) * 30 : 0;
-  const coverageCostCurrent = historyAverage > 0 ? (stockCost / historyAverage) * 30 : 0;
-  const coverageCostProjected = historyAverage > 0 ? ((stockCost + portfolio.cost) / historyAverage) * 30 : 0;
+  const coverageSaleCurrent = historyAverage > 0 ? (stockSale / historyAverage) * 30 : 0; const coverageSaleProjected = historyAverage > 0 ? ((stockSale + portfolio.sale) / historyAverage) * 30 : 0; const coverageCostCurrent = historyAverage > 0 ? (stockCost / historyAverage) * 30 : 0; const coverageCostProjected = historyAverage > 0 ? ((stockCost + portfolio.cost) / historyAverage) * 30 : 0;
   if (!historyAverage && (stockSale > 0 || stockCost > 0)) warnings.push('Cobertura de estoque aguardando os três meses fechados anteriores no histórico 379.');
 
   const support: CanonicalSupportData = { rcas: rcas.map(r => ({ ...r })), vendorTargets: targets.map(t => ({ ...t })), clients: resolvedPremises.map(p => ({ ...p })), activeRoute: resolvedRouteStores.map(r => ({ ...r })), legacyNetworkTargets: Object.fromEntries(detectedNetworkTargets.entries()), legacyNetworkOwners: Object.fromEntries(detectedNetworkOwners.entries()), legacyClientNetworks: Object.fromEntries(detectedClientNetworks.entries()), legacyClientOwners: Object.fromEntries(detectedClientOwners.entries()), products: Array.from(priceList.bySku.values()).map(p => ({ ...p })), itemCodes: Array.from(cadastro.byInternal.entries()).map(([internalCode, item]) => ({ internalCode, ...item })) };
@@ -188,7 +161,6 @@ export async function processCanonicalFiles(files: File[], config: ManualConfigu
     lines: lines.map(line => { const share = config.lineShares[line.name] ?? line.share; const target = sellOutTarget * share; return { ...line, share, target, attainment: target > 0 ? line.total / target : 0 }; }), warnings,
     reconciliation:{checks:reconciliationChecks,networkAssignments,relationships:relationships.audit,blockedRules:reconciliationChecks.filter(check=>check.status==='BLOCKED').map(check=>check.note||check.label)},
   };
-
   const legacy = legacySellOut(transactions, vendors, clients);
   const metricas: MetricasEstoque = { valorEstoqueCompra: stockCost, valorEstoqueVenda: stockSale, saldoPedidoCusto: portfolio.cost, saldoPedidoVenda: portfolio.sale, coberturaDiasAtual: canonical.stock.coverageCurrentDays, coberturaEstoqueMaisSaldo: canonical.stock.coverageProjectedDays, coberturaDiasAtualCusto: canonical.stock.coverageCostCurrentDays, coberturaEstoqueMaisSaldoCusto: canonical.stock.coverageCostProjectedDays, produtosRuptura: productArray.filter(p => p.hasWinthor !== false && p.quantidade <= 0).length, metaCobertura: config.coverageTargetDays };
   return { canonical, sellOut: legacy, produtos: productArray, metricas };

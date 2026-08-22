@@ -8,14 +8,15 @@ export interface StorageLike {
 }
 
 export type ManualConfigLoadSource = 'COMPETENCE' | 'LEGACY_MIGRATED' | 'DEFAULT';
-export interface ManualConfigLoadResult { config:ManualConfiguration; source:ManualConfigLoadSource; key:string|null; }
+export interface ManualConfigLoadResult { config:ManualConfiguration; source:ManualConfigLoadSource; key:string|null; persistenceError?:string; }
 
 export const LEGACY_MANUAL_CONFIG_KEY='bj_manual_config';
 export const MANUAL_CONFIG_PREFIX='bj_manual_config:';
 
-const parseJson=<T>(raw:string|null):T|null=>{
-  if(!raw)return null;
-  try{return JSON.parse(raw) as T}catch{return null}
+type JsonRead<T>={value:T|null;error:string};
+const parseJson=<T>(raw:string|null,label:string):JsonRead<T>=>{
+  if(!raw)return{value:null,error:''};
+  try{return{value:JSON.parse(raw) as T,error:''}}catch(error){return{value:null,error:`${label}: configuração persistida está corrompida e não foi restaurada (${error instanceof Error?error.message:'JSON inválido'}).`}}
 };
 
 const nonNegative=(value:unknown,fallback=0)=>{
@@ -64,17 +65,19 @@ export function loadManualConfiguration(storage:StorageLike,competence:string,{m
   const key=manualConfigStorageKey(competence);
   if(!key)return{config:normalizeManualConfiguration(null),source:'DEFAULT',key:null};
 
-  const scoped=parseJson<Partial<ManualConfiguration>>(storage.getItem(key));
-  if(scoped)return{config:normalizeManualConfiguration(scoped),source:'COMPETENCE',key};
+  const scopedRead=parseJson<Partial<ManualConfiguration>>(storage.getItem(key),`Configuração ${competence}`);
+  if(scopedRead.value)return{config:normalizeManualConfiguration(scopedRead.value),source:'COMPETENCE',key};
+  if(scopedRead.error)return{config:normalizeManualConfiguration(null),source:'DEFAULT',key,persistenceError:scopedRead.error};
 
   if(migrateLegacy){
-    const legacy=parseJson<Partial<ManualConfiguration>>(storage.getItem(LEGACY_MANUAL_CONFIG_KEY));
-    if(legacy){
-      const config=normalizeManualConfiguration(legacy);
+    const legacyRead=parseJson<Partial<ManualConfiguration>>(storage.getItem(LEGACY_MANUAL_CONFIG_KEY),'Configuração legada');
+    if(legacyRead.value){
+      const config=normalizeManualConfiguration(legacyRead.value);
       storage.setItem(key,JSON.stringify(config));
       storage.removeItem?.(LEGACY_MANUAL_CONFIG_KEY);
       return{config,source:'LEGACY_MIGRATED',key};
     }
+    if(legacyRead.error)return{config:normalizeManualConfiguration(null),source:'DEFAULT',key,persistenceError:legacyRead.error};
   }
 
   return{config:normalizeManualConfiguration(null),source:'DEFAULT',key};

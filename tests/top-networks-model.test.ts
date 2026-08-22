@@ -42,18 +42,18 @@ test('cabeçalhos definem K como REDES e L como TOPS e o gerador respeita essa o
   assert.match(String(sheet.L1?.v||''),/TOPS/i);
 
   const source=readFileSync('src/services/documentGenerator.ts','utf8');
-  assert.match(source,/values\[ref\('K',row\)\] = ratio\(network\.total,network\.networkTarget\)/);
-  assert.match(source,/values\[ref\('L',row\)\] = ratio\(network\.total,network\.topTarget\)/);
+  assert.match(source,/values\[ref\('K',row\)\] = network\.networkAttainment/);
+  assert.match(source,/values\[ref\('L',row\)\] = network\.topAttainment/);
 });
 
-test('rede com Meta Redes e sem Meta Tops mantém Fat+A Faturar em REDES e zera TOPS',()=>{
+test('rede com Meta Redes e sem Meta Tops mantém Fat+A Faturar em REDES e zera TOPS pelo motor canônico',()=>{
   const source=readFileSync('src/services/documentGenerator.ts','utf8');
-  assert.match(source,/const ratio = \(value:number,target:number\) => target > 0 \? value \/ target : 0/);
-  assert.match(source,/values\[ref\('K',row\)\] = ratio\(network\.total,network\.networkTarget\)/);
-  assert.match(source,/values\[ref\('L',row\)\] = ratio\(network\.total,network\.topTarget\)/);
+  assert.match(source,/values\[ref\('K',row\)\] = network\.networkAttainment/);
+  assert.match(source,/values\[ref\('L',row\)\] = network\.topAttainment/);
+  assert.match(source,/values\[ref\('J',row\)\] = network\.gapToNetworkTarget/);
 });
 
-test('gerador mantém todos os conjuntos de registros e usa rede canônica resolvida',()=>{
+test('gerador mantém conjuntos suportados e usa rede canônica resolvida sem fabricar abas auxiliares',()=>{
   const source=readFileSync('src/services/documentGenerator.ts','utf8');
   assert.match(source,/networks\.forEach\(/);
   assert.match(source,/stores\.forEach\(/);
@@ -61,8 +61,10 @@ test('gerador mantém todos os conjuntos de registros e usa rede canônica resol
   assert.match(source,/state\.vendors\.forEach\(/);
   assert.match(source,/pending\.forEach\(/);
   assert.match(source,/values\[ref\('D',row\)\] = result\?\.network \|\| client\.network/);
-  assert.match(source,/values\[ref\('K',row\)\] = ratio\(network\.total,network\.networkTarget\)/);
-  assert.match(source,/values\[ref\('L',row\)\] = ratio\(network\.total,network\.topTarget\)/);
+  assert.match(source,/values\[ref\('K',row\)\] = network\.networkAttainment/);
+  assert.match(source,/values\[ref\('L',row\)\] = network\.topAttainment/);
+  assert.match(source,/workbook\.clearRows\('319',2,50000,1,19\)/);
+  assert.match(source,/workbook\.clearRows\('12\.326',2,50000,1,22\)/);
 });
 
 test('TOP REDES padroniza percentuais e valores sem substituir o estilo visual das células',()=>{

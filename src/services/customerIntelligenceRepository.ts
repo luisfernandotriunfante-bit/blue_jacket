@@ -38,8 +38,12 @@ export async function loadCustomerIntelligenceSupport(): Promise<CustomerIntelli
     });
     db.close();
     return value ? { ...EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT, ...value, schemaVersion: 1 } : EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT;
-  } catch {
-    return EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'erro desconhecido de persistência';
+    return {
+      ...EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT,
+      warnings: [`Persistência Clientes & Sortimento: falha ao restaurar a base anterior (${detail}). O sistema não tratou silenciosamente essa falha como se nunca houvesse dados; recarregue as fontes antes de usar resultados comerciais.`],
+    };
   }
 }
 
@@ -49,8 +53,8 @@ export async function saveCustomerIntelligenceSupport(support: CustomerIntellige
     const tx = db.transaction(STORE_NAME, 'readwrite');
     tx.objectStore(STORE_NAME).put(support, RECORD_KEY);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
+    tx.onerror = () => reject(tx.error || new Error('Falha ao salvar Clientes & Sortimento no IndexedDB.'));
+    tx.onabort = () => reject(tx.error || new Error('Persistência de Clientes & Sortimento foi abortada.'));
   });
   db.close();
 }

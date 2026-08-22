@@ -87,9 +87,9 @@ test('movimento usa caixas e calcula somente o residual comprovável como unidad
   assert.equal(movement?.looseUnits, 3);
 });
 
-test('Sem Winthor só permanece para item efetivamente presente na Carteira', () => {
+test('hasWinthor permanece factual e Sem Winthor operacional só conta item efetivamente presente na Carteira', () => {
   const catalogOnly = buildStockPresentation({ inventory: [packaged({ hasWinthor: false, pendingCases: 0, pendingQty: 0 })], productSupport: [], hasStock8013: true });
-  assert.equal(catalogOnly.products[0].hasWinthor, true);
+  assert.equal(catalogOnly.products[0].hasWinthor, false);
   assert.equal(catalogOnly.summary.noWinthorCount, 0);
   assert.equal(catalogOnly.alerts.some(alert => alert.kind === 'SEM_WINTHOR'), false);
 

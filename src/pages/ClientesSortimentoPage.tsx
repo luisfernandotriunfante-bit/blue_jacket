@@ -40,6 +40,22 @@ function badgeClass(value: string) {
   return 'panel-badge';
 }
 
+function portfolioLabel(product: ProductCommercialView) {
+  if (product.portfolioUnits > 0) return `${fmtInt(product.portfolioUnits)} un.`;
+  if (product.portfolioCases > 0) return `${fmtInt(product.portfolioCases)} cx`;
+  return '0 un.';
+}
+
+function launchStatus(product: ProductCommercialView) {
+  if (product.bought) return 'ADOTADO';
+  if (!product.hasWinthor) return 'BLOQUEADO · CADASTRO';
+  if (product.availability === 'DISPONIVEL') return 'DISPONÍVEL AGORA';
+  if (product.availability === 'SOMENTE_CARTEIRA') return 'SOMENTE CARTEIRA';
+  if (product.availability === 'DESCONTINUADO') return 'DESCONTINUADO';
+  if (product.availability === 'MIGRACAO') return 'MIGRAÇÃO';
+  return 'SEM ESTOQUE';
+}
+
 function ProductTable({ products, mode = 'default' }: { products: ProductCommercialView[]; mode?: 'default' | 'opportunity' | 'outside' | 'launch' }) {
   if (!products.length) return <PanelEmptyState icon="✓" title="Nenhum item nesta visão" description="Os motores não encontraram registros para os filtros desta aba." />;
   return <div className="panel-table-wrap"><table className="panel-table"><thead><tr>
@@ -48,10 +64,10 @@ function ProductTable({ products, mode = 'default' }: { products: ProductCommerc
     <td><strong>{product.description}</strong><div className="panel-muted" style={{ fontSize: '.66rem', marginTop: 3 }}>EAN {product.ean || '—'} · Winthor {product.winthorCode || '—'}{product.isLaunch ? ' · LANÇAMENTO' : ''}</div></td>
     <td><span className={badgeClass(product.classification)}>{classificationLabel(product.classification)}</span></td>
     <td>{product.bought ? 'SIM' : 'NÃO'}{product.bought ? <div className="panel-muted" style={{ fontSize: '.66rem' }}>{fmtBRL(product.netValue)}</div> : null}</td>
-    <td>{fmtInt(product.availableUnits)} un.</td><td>{fmtInt(product.portfolioUnits)} un.</td>
+    <td>{fmtInt(product.availableUnits)} un.</td><td>{portfolioLabel(product)}{product.portfolioCases > 0 ? <div className="panel-muted" style={{ fontSize: '.64rem' }}>{fmtInt(product.portfolioCases)} cx · Un/CX {product.unitsPerCase > 0 ? fmtInt(product.unitsPerCase) : 'não identificado'} · {product.unitsPerCaseSource}</div> : null}</td>
     {mode === 'opportunity' ? <><td><span className={badgeClass(product.opportunityPriority)}>{priorityLabel(product.opportunityPriority)}</span><div className="panel-muted" style={{ fontSize: '.66rem', marginTop: 4 }}>{product.opportunityReason}</div></td><td>{product.recommendedAction || '—'}</td></> : null}
     {mode === 'outside' ? <><td>{product.lineageStatus || classificationLabel(product.classification)}{product.successorEan ? <div className="panel-muted" style={{ fontSize: '.66rem' }}>{product.predecessorEan || product.ean} → {product.successorEan}</div> : null}</td><td>{fmtBRL(product.netValue)}</td></> : null}
-    {mode === 'launch' ? <><td>{product.hasWinthor ? product.winthorCode || 'SIM' : 'SEM WINTHOR'}</td><td>{product.bought ? 'ADOTADO' : product.availableUnits > 0 ? 'DISPONÍVEL AGORA' : product.portfolioUnits > 0 ? 'SOMENTE CARTEIRA' : !product.hasWinthor ? 'BLOQUEADO · CADASTRO' : 'SEM ESTOQUE'}</td></> : null}
+    {mode === 'launch' ? <><td>{product.hasWinthor ? product.winthorCode || 'SIM' : 'SEM WINTHOR'}</td><td>{launchStatus(product)}</td></> : null}
     <td>{product.basePrice === null ? '—' : fmtBRL(product.basePrice)}{product.priceStatus === 'COMPOSICAO_FINAL_PENDENTE' ? <div className="panel-muted" style={{ fontSize: '.64rem' }}>final pendente</div> : null}</td>
   </tr>)}</tbody></table></div>;
 }
