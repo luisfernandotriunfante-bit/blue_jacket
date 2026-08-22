@@ -77,7 +77,7 @@ function normalizeCanonicalTeam(state:CanonicalState|null,config:ManualConfigura
 }
 
 export const DataProvider=({children}:{children:ReactNode})=>{
-  const[produtosState,setProdutosState]=useState<ProdutoEstoque[]>([]);const[metricasState,setMetricasState]=useState<MetricasEstoque>(defaultMetricas);const[sellOut,setSellOutState]=useState<SellOutData|null>(null);const[canonicalBase,setCanonicalBase]=useState<CanonicalState|null>(null);const[manualConfig,setManualConfigState]=useState<ManualConfiguration>(DEFAULT_MANUAL_CONFIGURATION);const[isLoaded,setIsLoaded]=useState(false);
+  const[produtosState,setProdutosState]=useState<ProdutoEstoque[]>([]);const[metricasState,setMetricasState]=useState<MetricasEstoque>(defaultMetricas);const[sellOut,setSellOutState]=useState<SellOutData|null>(null);const[canonicalBase,setCanonicalBase]=useState<CanonicalState|null>(null);const[manualConfig,setManualConfigState]=useState<ManualConfiguration>(DEFAULT_MANUAL_CONFIGURATION);const[manualConfigPersistenceError,setManualConfigPersistenceError]=useState('');const[isLoaded,setIsLoaded]=useState(false);
   React.useEffect(()=>{
     let cancelled=false;
     const hydrate=async()=>{
@@ -86,7 +86,8 @@ export const DataProvider=({children}:{children:ReactNode})=>{
       const storedSellOut=readStored<SellOutData|null>('bj_sellout',null);
       const storedCanonical=await loadCanonicalState(localStorage);
       const competence=competenceFromCanonical(storedCanonical);
-      const storedManual=loadManualConfiguration(localStorage,competence,{migrateLegacy:Boolean(storedCanonical)}).config;
+      const manualLoad=loadManualConfiguration(localStorage,competence,{migrateLegacy:Boolean(storedCanonical)});
+      const storedManual=manualLoad.config;
       const operational=loadOperationalSourceState(localStorage);
       const operationalCanonical=storedCanonical?applyOperationalOverrides(storedCanonical,operational,storedManual).canonical:null;
       const confirmed=loadReceiptConfirmations(localStorage,operational.entry218FileName);
@@ -100,13 +101,18 @@ export const DataProvider=({children}:{children:ReactNode})=>{
       setSellOutState(storedSellOut);
       setCanonicalBase(hydratedCanonical);
       setManualConfigState(storedManual);
+      setManualConfigPersistenceError(manualLoad.persistenceError||'');
       setIsLoaded(Boolean(hydratedCanonical||storedSellOut||storedProdutos.length));
     };
     void hydrate().catch(error=>console.error('Não foi possível restaurar a base salva.',error));
     return()=>{cancelled=true};
   },[]);
   const activeCompetence=useMemo(()=>competenceFromCanonical(canonicalBase),[canonicalBase]);
-  const canonical=useMemo(()=>normalizeCanonicalTeam(applyManualConfiguration(canonicalBase,manualConfig),manualConfig),[canonicalBase,manualConfig]);
+  const canonical=useMemo(()=>{
+    const normalized=normalizeCanonicalTeam(applyManualConfiguration(canonicalBase,manualConfig),manualConfig);
+    if(!normalized||!manualConfigPersistenceError)return normalized;
+    return{...normalized,warnings:Array.from(new Set([...normalized.warnings,manualConfigPersistenceError]))};
+  },[canonicalBase,manualConfig,manualConfigPersistenceError]);
   const produtos=useMemo<ProdutoEstoque[]>(()=>canonical?canonical.inventory.map(item=>({codigo:item.code,descricao:item.description,ean:item.ean,quantidade:item.quantity,saldoMinimo:0,custoUnitario:item.costUnit,vendaUnitario:item.saleUnit,entradas:0,saidas:0,saldoPedido:item.pendingQty,saldoPedidoCaixas:item.pendingCases,saldoPedidoValorCusto:item.pendingCost,saldoPedidoValorVenda:item.pendingSale,isLancamento:item.isLaunch,hasWinthor:item.hasWinthor,factoryCode:item.factoryCode,physicalCases:item.physicalCases,physicalUnits:item.physicalUnits,grossKg:item.grossKg})):produtosState,[canonical,produtosState]);
   const metricas=useMemo<MetricasEstoque>(()=>canonical?{valorEstoqueCompra:canonical.stock.costValue,valorEstoqueVenda:canonical.stock.saleValue,saldoPedidoCusto:canonical.stock.pendingPurchaseCost,saldoPedidoVenda:canonical.stock.pendingPurchaseSale,coberturaDiasAtual:canonical.stock.coverageCurrentDays,coberturaEstoqueMaisSaldo:canonical.stock.coverageProjectedDays,coberturaDiasAtualCusto:canonical.stock.coverageCostCurrentDays,coberturaEstoqueMaisSaldoCusto:canonical.stock.coverageCostProjectedDays,produtosRuptura:canonical.inventory.filter(item=>item.hasWinthor&&item.quantity<=0).length,metaCobertura:canonical.stock.coverageTargetDays}:metricasState,[canonical,metricasState]);
   const setProdutos=(newProdutos:ProdutoEstoque[])=>{setProdutosState(newProdutos);safeLocalStorageWrite(localStorage,'bj_produtos',JSON.stringify(newProdutos));if(newProdutos.length>0)setIsLoaded(true)};
@@ -119,19 +125,25 @@ export const DataProvider=({children}:{children:ReactNode})=>{
       localStorage.removeItem(LEGACY_CANONICAL_KEY);
       void saveCanonicalState(data).catch(error=>console.error('Não foi possível persistir a base canônica no IndexedDB.',error));
       if(nextCompetence&&nextCompetence!==activeCompetence){
-        const nextConfig=loadManualConfiguration(localStorage,nextCompetence).config;
+        const nextLoad=loadManualConfiguration(localStorage,nextCompetence);
+        const nextConfig=nextLoad.config;
         setManualConfigState(nextConfig);
+        setManualConfigPersistenceError(nextLoad.persistenceError||'');
         setMetricasState(current=>({...current,metaCobertura:nextConfig.coverageTargetDays}));
       }
       setIsLoaded(true);
     }else{
+      setManualConfigPersistenceError('');
       void clearCanonicalState(localStorage);
     }
   };
   const setManualConfig=(config:ManualConfiguration)=>{
     const normalized=normalizeManualConfiguration(config);
     setManualConfigState(normalized);
-    if(activeCompetence){try{saveManualConfiguration(localStorage,activeCompetence,normalized)}catch(error){console.error('Não foi possível salvar as configurações da competência.',error)}}
+    if(activeCompetence){
+      try{saveManualConfiguration(localStorage,activeCompetence,normalized);setManualConfigPersistenceError('')}
+      catch(error){const message=`Configuração ${activeCompetence}: falha ao persistir alterações (${error instanceof Error?error.message:'erro desconhecido'}).`;setManualConfigPersistenceError(message);console.error(message,error)}
+    }
     setMetricasState(current=>({...current,metaCobertura:normalized.coverageTargetDays}));
   };
   return <DataContext.Provider value={{produtos,setProdutos,metricas,setMetricas,sellOut,setSellOut,canonical,setCanonical,manualConfig,setManualConfig,isLoaded}}>{children}</DataContext.Provider>;
