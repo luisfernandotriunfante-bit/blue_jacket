@@ -3,7 +3,7 @@ import { useData } from '../store/DataContext';
 import { buildCustomerIntelligence, listCustomerOptions } from '../domain/customerIntelligence';
 import type { CustomerIntelligenceResult, CustomerIntelligenceSupport, ProductCommercialView } from '../domain/customerIntelligenceTypes';
 import { EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT } from '../domain/customerIntelligenceTypes';
-import { loadCustomerIntelligenceSupport, processCustomerIntelligenceFiles, saveCustomerIntelligenceSupport } from '../services/customerIntelligenceRepository';
+import { deleteCustomerIntelligenceSource, loadCustomerIntelligenceSupport, processCustomerIntelligenceFiles, saveCustomerIntelligenceSupport } from '../services/customerIntelligenceRepository';
 import { downloadCustomerCommercialFile, downloadCustomerInternalDossier } from '../services/customerIntelligenceExport';
 import { PanelCard, PanelEmptyState, PanelKpi, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
@@ -81,10 +81,29 @@ function SourceUploader({ support, onChange }: { support: CustomerIntelligenceSu
     catch (error) { setMessage(error instanceof Error ? error.message : 'Falha ao processar as fontes.'); }
     finally { setBusy(false); }
   };
+  const remove = async (sourceKind: string, fileName: string) => {
+    if (!window.confirm(`Excluir a base "${fileName}" de Clientes & Sortimento?`)) return;
+    setBusy(true); setMessage('');
+    try {
+      const next = await deleteCustomerIntelligenceSource(support, sourceKind);
+      onChange(next);
+      setMessage(`Base ${fileName} excluída e removida da persistência.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Falha ao excluir a base.');
+    } finally {
+      setBusy(false);
+    }
+  };
   return <PanelCard>
     <PanelSectionHeader eyebrow="BASE DO MÓDULO" title="Fontes de inteligência por CNPJ" description="Carregue Sortimento Oficial Colgate e a análise com 310 total 2026. A planilha recomendado por CNPJ é aceita apenas como referência funcional, nunca como fonte oficial vigente." action={<button className="panel-secondary-button" onClick={() => input.current?.click()} disabled={busy}>{busy ? 'Processando...' : 'Adicionar arquivos'}</button>} />
     <input ref={input} type="file" accept=".xlsx,.xls,.xlsb" multiple style={{ display: 'none' }} onChange={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void process(files); }} />
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 10, marginTop: 14 }}>{support.sources.map(source => <div key={source.kind} style={{ border: '1px solid rgba(255,255,255,.08)', borderRadius: 12, padding: 12 }}><div style={{ color: 'white', fontWeight: 750 }}>{source.kind}</div><div className="panel-muted" style={{ fontSize: '.7rem', marginTop: 4 }}>{source.fileName}</div><div className="panel-muted" style={{ fontSize: '.66rem', marginTop: 4 }}>{source.note}</div></div>)}</div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 10, marginTop: 14 }}>{support.sources.map(source => <div key={`${source.kind}:${source.fileName}`} style={{ border: '1px solid rgba(255,255,255,.08)', borderRadius: 12, padding: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+        <div style={{ minWidth: 0 }}><div style={{ color: 'white', fontWeight: 750, overflowWrap: 'anywhere' }}>{source.kind}</div><div className="panel-muted" style={{ fontSize: '.7rem', marginTop: 4, overflowWrap: 'anywhere' }}>{source.fileName}</div></div>
+        <button className="panel-icon-button" title={`Excluir ${source.fileName}`} aria-label={`Excluir base ${source.fileName}`} onClick={() => void remove(source.kind, source.fileName)} disabled={busy} style={{ flex: '0 0 auto', color: '#fca5a5' }}>✕</button>
+      </div>
+      <div className="panel-muted" style={{ fontSize: '.66rem', marginTop: 6 }}>{source.note}</div>
+    </div>)}</div>
     {message ? <div style={{ marginTop: 12, color: message.includes('Falha') ? '#fca5a5' : '#86efac', fontSize: '.78rem' }}>{message}</div> : null}
   </PanelCard>;
 }
