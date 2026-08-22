@@ -3,6 +3,12 @@ import { EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT } from '../domain/customerIntellige
 import { enrichAssortmentWith322 } from './customerIntelligence322';
 import { filterCustomerProfilesByDeclaredCnpj } from './customerIntelligenceCustomers';
 import {
+  classifyExternalCustomerSource,
+  externalCustomerSourceNote,
+  isPurchase310Text,
+  parsePurchase310Text,
+} from './customerIntelligence310Text';
+import {
   detectCustomerIntelligenceSource,
   mergeCustomerIntelligenceSupport,
   parseCustomerAndPurchaseWorkbook,
@@ -92,41 +98,118 @@ export async function deleteCustomerIntelligenceSource(support: CustomerIntellig
   return next;
 }
 
+function isTextLikeFile(file: File): boolean {
+  return /\.(txt|csv)$/i.test(file.name) || String(file.type || '').toLowerCase().startsWith('text/');
+}
+
+function externalSourceKind(fileName: string, kind: string): string {
+  return `GLOBAL:${kind}:${fileName}`;
+}
+
+function appendUnknown(result: CustomerIntelligenceSupport, fileName: string): CustomerIntelligenceSupport {
+  return mergeCustomerIntelligenceSupport(result, {
+    source: { kind: `UNKNOWN:${fileName}`, fileName, note: 'Arquivo não reconhecido pelo módulo Clientes & Sortimento; nenhum dado foi aplicado.' },
+    warnings: [`${fileName}: fonte não reconhecida; nenhum dado foi aplicado.`],
+  });
+}
+
+function appendProcessingError(result: CustomerIntelligenceSupport, fileName: string, error: unknown): CustomerIntelligenceSupport {
+  const detail = error instanceof Error ? error.message : 'erro desconhecido';
+  return mergeCustomerIntelligenceSupport(result, {
+    source: { kind: `ERROR:${fileName}`, fileName, note: `Falha ao processar: ${detail}` },
+    warnings: [`${fileName}: falha ao processar (${detail}). As demais fontes selecionadas continuaram sendo processadas.`],
+  });
+}
+
 export async function processCustomerIntelligenceFiles(files: File[], previous: CustomerIntelligenceSupport | null): Promise<CustomerIntelligenceSupport> {
   let result = previous || EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT;
+
   for (const file of files) {
-    const workbook = await readCustomerIntelligenceWorkbook(file);
-    const kind = detectCustomerIntelligenceSource(workbook);
-    if (kind === 'OFFICIAL_ASSORTMENT') {
-      const parsed = parseOfficialAssortmentWorkbook(workbook);
-      const auxiliary322 = enrichAssortmentWith322(workbook, parsed.competences);
-      result = mergeCustomerIntelligenceSupport(result, {
-        assortmentCompetences: auxiliary322.competences,
-        lineage: parsed.lineage,
-        source: { kind, fileName: file.name, note: `${parsed.competences.length} competência(s) oficial(is); ${parsed.lineage.length} vínculo(s) de migração/descontinuação; ${auxiliary322.matchedByEan} correspondência(s) complementada(s) pelo 322 sem alterar recomendação.` },
-      });
-      continue;
+    try {
+      if (isTextLikeFile(file)) {
+        const text = await file.text();
+        if (isPurchase310Text(text, file.name)) {
+          const parsed = parsePurchase310Text(text);
+          result = mergeCustomerIntelligenceSupport(result, {
+            purchases: parsed.purchases,
+            // O TXT 310 não contém cadastro mestre de cliente. Limpar perfis antigos evita
+            // manter dados de uma carga XLSX anterior como se viessem deste novo arquivo.
+            customers: [],
+            source: {
+              kind: 'PURCHASE_310',
+              fileName: file.name,
+              note: `${parsed.parsedLines} linha(s) de produto lida(s); ${parsed.purchases.length} combinação(ões) CNPJ × SKU consolidadas; ${parsed.rejectedIdentifiers} identificador(es) CPF/inválido(s) excluído(s) da inteligência por CNPJ. Perfis, redes e demais atributos do cliente continuam vindo do motor canônico/global.`,
+            },
+          });
+          continue;
+        }
+
+        const externalKind = classifyExternalCustomerSource(file.name);
+        if (externalKind) {
+          result = mergeCustomerIntelligenceSupport(result, {
+            source: {
+              kind: externalSourceKind(file.name, externalKind),
+              fileName: file.name,
+              note: externalCustomerSourceNote(externalKind),
+            },
+          });
+          continue;
+        }
+
+        result = appendUnknown(result, file.name);
+        continue;
+      }
+
+      const workbook = await readCustomerIntelligenceWorkbook(file);
+      const kind = detectCustomerIntelligenceSource(workbook);
+
+      if (kind === 'OFFICIAL_ASSORTMENT') {
+        const parsed = parseOfficialAssortmentWorkbook(workbook);
+        const auxiliary322 = enrichAssortmentWith322(workbook, parsed.competences);
+        result = mergeCustomerIntelligenceSupport(result, {
+          assortmentCompetences: auxiliary322.competences,
+          lineage: parsed.lineage,
+          source: { kind, fileName: file.name, note: `${parsed.competences.length} competência(s) oficial(is); ${parsed.lineage.length} vínculo(s) de migração/descontinuação; ${auxiliary322.matchedByEan} correspondência(s) complementada(s) pelo 322 sem alterar recomendação.` },
+        });
+        continue;
+      }
+
+      if (kind === 'PURCHASE_310') {
+        const parsed = parseCustomerAndPurchaseWorkbook(workbook);
+        const validatedCustomers = filterCustomerProfilesByDeclaredCnpj(workbook, parsed.customers);
+        result = mergeCustomerIntelligenceSupport(result, {
+          purchases: parsed.purchases,
+          customers: validatedCustomers.customers,
+          source: { kind, fileName: file.name, note: `${parsed.purchases.length} combinação(ões) CNPJ × SKU consolidadas; ${validatedCustomers.customers.length} perfil(is) CNPJ válido(s); ${validatedCustomers.removedInvalidType} perfil(is) removido(s) por TIPO CPF/código inválido.` },
+        });
+        continue;
+      }
+
+      if (kind === 'PROTOTYPE') {
+        result = mergeCustomerIntelligenceSupport(result, {
+          source: { kind, fileName: file.name, note: 'Planilha auxiliar registrada somente como referência funcional. Não substitui o Sortimento Oficial vigente e suas promoções não foram ativadas como fonte oficial.' },
+        });
+        continue;
+      }
+
+      const externalKind = classifyExternalCustomerSource(file.name);
+      if (externalKind) {
+        result = mergeCustomerIntelligenceSupport(result, {
+          source: {
+            kind: externalSourceKind(file.name, externalKind),
+            fileName: file.name,
+            note: externalCustomerSourceNote(externalKind),
+          },
+        });
+        continue;
+      }
+
+      result = appendUnknown(result, file.name);
+    } catch (error) {
+      // Uma fonte ruim não deve bloquear todas as outras selecionadas no mesmo upload.
+      result = appendProcessingError(result, file.name, error);
     }
-    if (kind === 'PURCHASE_310') {
-      const parsed = parseCustomerAndPurchaseWorkbook(workbook);
-      const validatedCustomers = filterCustomerProfilesByDeclaredCnpj(workbook, parsed.customers);
-      result = mergeCustomerIntelligenceSupport(result, {
-        purchases: parsed.purchases,
-        customers: validatedCustomers.customers,
-        source: { kind, fileName: file.name, note: `${parsed.purchases.length} combinação(ões) CNPJ × SKU consolidadas; ${validatedCustomers.customers.length} perfil(is) CNPJ válido(s); ${validatedCustomers.removedInvalidType} perfil(is) removido(s) por TIPO CPF/código inválido.` },
-      });
-      continue;
-    }
-    if (kind === 'PROTOTYPE') {
-      result = mergeCustomerIntelligenceSupport(result, {
-        source: { kind, fileName: file.name, note: 'Planilha auxiliar registrada somente como referência funcional. Não substitui o Sortimento Oficial vigente e suas promoções não foram ativadas como fonte oficial.' },
-      });
-      continue;
-    }
-    result = mergeCustomerIntelligenceSupport(result, {
-      source: { kind: `UNKNOWN:${file.name}`, fileName: file.name, note: 'Arquivo não reconhecido pelo módulo Clientes & Sortimento; nenhum dado foi aplicado.' },
-      warnings: [`${file.name}: fonte não reconhecida; nenhum dado foi aplicado.`],
-    });
   }
+
   return result;
 }
