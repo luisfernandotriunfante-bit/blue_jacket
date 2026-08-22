@@ -59,6 +59,39 @@ export async function saveCustomerIntelligenceSupport(support: CustomerIntellige
   db.close();
 }
 
+export function removeCustomerIntelligenceSource(support: CustomerIntelligenceSupport, sourceKind: string): CustomerIntelligenceSupport {
+  const source = support.sources.find(item => item.kind === sourceKind);
+  if (!source) return support;
+
+  const matchesSource = (value: string) => value === source.kind || value === source.fileName;
+  const next: CustomerIntelligenceSupport = {
+    ...support,
+    updatedAt: new Date().toISOString(),
+    sources: support.sources.filter(item => item.kind !== sourceKind),
+    warnings: support.warnings.filter(warning => !warning.includes(source.fileName)),
+    promotions: support.promotions.filter(rule => !matchesSource(rule.source)),
+    pricingRules: support.pricingRules.filter(rule => !matchesSource(rule.source)),
+  };
+
+  if (sourceKind === 'OFFICIAL_ASSORTMENT') {
+    next.assortmentCompetences = [];
+    next.lineage = [];
+  }
+  if (sourceKind === 'PURCHASE_310') {
+    next.purchases = [];
+    next.customers = [];
+  }
+
+  return next;
+}
+
+export async function deleteCustomerIntelligenceSource(support: CustomerIntelligenceSupport, sourceKind: string): Promise<CustomerIntelligenceSupport> {
+  const next = removeCustomerIntelligenceSource(support, sourceKind);
+  if (next === support) return support;
+  await saveCustomerIntelligenceSupport(next);
+  return next;
+}
+
 export async function processCustomerIntelligenceFiles(files: File[], previous: CustomerIntelligenceSupport | null): Promise<CustomerIntelligenceSupport> {
   let result = previous || EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT;
   for (const file of files) {
