@@ -58,7 +58,7 @@ export function parsePremises(rows: Row[]): PremiseClient[] {
     if (normalizeText(row[10]) && normalizeText(row[10]) !== 'MILENIO') continue;
     const normalizedCnpj = normalizeCnpj(row[2],{declaredCnpj:normalizeText(row[13])==='CNPJ'});
     const cnpj = normalizedCnpj.canonical;
-    if (!cnpj) continue;
+    if (!cnpj || normalizedCnpj.status === 'INVALID_LENGTH') continue;
     const profile = String(row[12] ?? '').trim();
     const rawNetwork = String(row[15] ?? '').trim();
     result.push({ cnpj, cnpjRaw:normalizedCnpj.raw, cnpjNormalizationStatus:normalizedCnpj.status, name: String(row[3] ?? '').trim(), city: String(row[6] ?? '').trim(), network: rawNetwork ? displayNetwork(rawNetwork) : '', profile, isTop: normalizeText(profile).includes('TOP VAREJISTA') });
@@ -74,9 +74,14 @@ export function parseActiveRoute(workbook: XLSX.WorkBook): RouteStore[] {
     if (normalizeText(row[1]) !== 'MILENIO') continue;
     const normalizedCnpj = normalizeCnpj(row[2]);
     const cnpj = normalizedCnpj.canonical;
-    if (!cnpj) continue;
+    if (!/^\d{14}$/.test(cnpj)) continue;
     const normalizedManager=normalizeCnpj(row[8]);
-    result.push({ cnpj, cnpjRaw:normalizedCnpj.raw, cnpjNormalizationStatus:normalizedCnpj.status, name: String(row[3] ?? '').trim(), fantasyName: String(row[15] ?? '').trim(), city: String(row[16] ?? '').trim(), networkRaw: String(row[5] ?? '').trim(), managerCnpj: normalizedManager.canonical, managerCnpjRaw:normalizedManager.raw, managerCnpjNormalizationStatus:normalizedManager.status, groupingCode: String(row[9] ?? '').trim(), tier: String(row[10] ?? '').trim(), storeType: String(row[11] ?? '').trim(), target: parseNumber(row[18]) });
+    const routeClass = String(row[10] ?? '').trim();
+    // No Roteiro Top Varejistas atual a coluna 10 é CATEGORIA (OURO/PRATA),
+    // não FAIXA. Só reutilizamos como faixa em layouts que declarem de fato
+    // um valor de faixa/canal reconhecível.
+    const tier = /FAIXA\s*\d|C\s*&\s*C|^CC$/i.test(routeClass) ? routeClass : '';
+    result.push({ cnpj, cnpjRaw:normalizedCnpj.raw, cnpjNormalizationStatus:normalizedCnpj.status, name: String(row[3] ?? '').trim(), fantasyName: String(row[15] ?? '').trim(), city: String(row[16] ?? '').trim(), networkRaw: String(row[5] ?? '').trim(), managerCnpj: normalizedManager.canonical, managerCnpjRaw:normalizedManager.raw, managerCnpjNormalizationStatus:normalizedManager.status, groupingCode: String(row[9] ?? '').trim(), tier, storeType: String(row[11] ?? '').trim(), target: parseNumber(row[18]) });
   }
   return result;
 }
@@ -122,7 +127,7 @@ export function parseLegacyClientNetworkRecords(workbook: XLSX.WorkBook): Refere
     const normalizedCnpj=normalizeCnpj(rows[i][cnpjColumn]);
     const cnpj = normalizedCnpj.canonical;
     const rawNetwork = String(rows[i][networkColumn] ?? '').trim();
-    if (cnpj && rawNetwork) result.push({cnpj,cnpjRaw:normalizedCnpj.raw,cnpjNormalizationStatus:normalizedCnpj.status,network:displayNetwork(rawNetwork)});
+    if (/^\d{14}$/.test(cnpj) && rawNetwork) result.push({cnpj,cnpjRaw:normalizedCnpj.raw,cnpjNormalizationStatus:normalizedCnpj.status,network:displayNetwork(rawNetwork)});
   }
   return result;
 }
@@ -155,7 +160,7 @@ export function parseLegacyClientOwners(workbook: XLSX.WorkBook): Map<string, { 
   for (let i = headerIndex + 1; i < rows.length; i++) {
     const cnpj = cleanCnpj(rows[i][cnpjColumn]);
     const vendorCode = cleanCode(rows[i][vendorColumn]);
-    if (cnpj && vendorCode) result.set(cnpj, { vendorCode, teamCode: teamByVendor.get(vendorCode) || '' });
+    if (/^\d{14}$/.test(cnpj) && vendorCode) result.set(cnpj, { vendorCode, teamCode: teamByVendor.get(vendorCode) || '' });
   }
   return result;
 }

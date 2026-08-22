@@ -8,6 +8,8 @@ interface NetworkIndex<T extends {cnpj:string}> {
   conflicts:Array<{source:CnpjRelationshipSource;cnpj:string;networks:string[]}>;
 }
 
+const operationalCnpj = (value: unknown) => /^\d{14}$/.test(String(value ?? ''));
+
 function indexNetworkRows<T extends {cnpj:string}>(source:CnpjRelationshipSource,rows:T[],getNetwork:(row:T)=>string):NetworkIndex<T> {
   const grouped=new Map<string,T[]>();
   rows.forEach(row=>{const current=grouped.get(row.cnpj)||[];current.push(row);grouped.set(row.cnpj,current)});
@@ -84,9 +86,14 @@ export function buildRelationshipContext(
   routeStores:RouteStore[],
   referenceRecords:ReferenceClientNetwork[],
 ):RelationshipContext {
-  const premiseIndex=indexNetworkRows('PREMISSAS',premises,row=>row.network);
-  const routeIndex=indexNetworkRows('ROTEIRO',routeStores,row=>row.networkRaw);
-  const referenceIndex=indexNetworkRows('REFERENCIA',referenceRecords,row=>row.network);
+  // Registros inválidos/ambíguos permanecem nas estruturas de auditoria abaixo,
+  // porém nunca entram nos mapas usados por Clientes, Redes ou Sortimento.
+  const operationalPremises = premises.filter(row=>operationalCnpj(row.cnpj));
+  const operationalRoute = routeStores.filter(row=>operationalCnpj(row.cnpj));
+  const operationalReference = referenceRecords.filter(row=>operationalCnpj(row.cnpj));
+  const premiseIndex=indexNetworkRows('PREMISSAS',operationalPremises,row=>row.network);
+  const routeIndex=indexNetworkRows('ROTEIRO',operationalRoute,row=>row.networkRaw);
+  const referenceIndex=indexNetworkRows('REFERENCIA',operationalReference,row=>row.network);
   const routeCnpjRows=[...routeStores,...routeStores.filter(row=>Boolean(row.managerCnpjRaw||row.managerCnpj)).map(row=>({cnpj:row.managerCnpj,cnpjRaw:row.managerCnpjRaw,cnpjNormalizationStatus:row.managerCnpjNormalizationStatus}))];
   const salesValues=new Map<string,number>();
   transactions.forEach(row=>salesValues.set(row.cnpj,(salesValues.get(row.cnpj)||0)+row.value));

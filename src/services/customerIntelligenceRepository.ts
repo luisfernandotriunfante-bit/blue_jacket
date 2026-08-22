@@ -8,6 +8,8 @@ import {
   isPurchase310Text,
   parsePurchase310Text,
 } from './customerIntelligence310Text';
+import { officialAssortmentCoverage, normalizeOfficialAssortmentWorkbook } from './customerIntelligenceOfficialWorkbook';
+import { hasStandaloneCustomerProfile, parseStandaloneCustomerProfiles } from './customerIntelligenceProfiles';
 import {
   detectCustomerIntelligenceSource,
   mergeCustomerIntelligenceSupport,
@@ -85,8 +87,10 @@ export function removeCustomerIntelligenceSource(support: CustomerIntelligenceSu
   }
   if (sourceKind === 'PURCHASE_310') {
     next.purchases = [];
-    next.customers = [];
+    const hasIndependentProfileSource = support.sources.some(item => item.kind === 'CUSTOMER_PROFILE');
+    if (!hasIndependentProfileSource) next.customers = [];
   }
+  if (sourceKind === 'CUSTOMER_PROFILE') next.customers = [];
 
   return next;
 }
@@ -121,6 +125,31 @@ function appendProcessingError(result: CustomerIntelligenceSupport, fileName: st
   });
 }
 
+function appendIncompleteAssortment(result: CustomerIntelligenceSupport, fileName: string, coverage: ReturnType<typeof officialAssortmentCoverage>): CustomerIntelligenceSupport {
+  const missing = [!coverage.hasJuly ? 'Julho/26' : '', !coverage.hasAugSep ? 'Agosto/Setembro/26' : ''].filter(Boolean).join(' e ');
+  return mergeCustomerIntelligenceSupport(result, {
+    source: {
+      kind: `INCOMPLETE_ASSORTMENT:${fileName}`,
+      fileName,
+      note: `Arquivo contém parte do Sortimento Oficial, mas falta ${missing}. Nenhuma competência ausente foi inventada.`,
+    },
+    warnings: [`${fileName}: Sortimento Oficial incompleto; falta ${missing}. A ficha fica bloqueada nas datas sem competência.`],
+  });
+}
+
+function mergeCustomerProfileWorkbook(result: CustomerIntelligenceSupport, workbook: Awaited<ReturnType<typeof readCustomerIntelligenceWorkbook>>, fileName: string): CustomerIntelligenceSupport {
+  if (!hasStandaloneCustomerProfile(workbook)) return result;
+  const parsed = parseStandaloneCustomerProfiles(workbook);
+  return mergeCustomerIntelligenceSupport(result, {
+    customers: parsed.customers,
+    source: {
+      kind: 'CUSTOMER_PROFILE',
+      fileName,
+      note: `${parsed.customers.length} CNPJ(s) com Ambiente, Perfil, Faixa, Rede e canal de sortimento; ${parsed.rejectedIdentifiers} identificador(es) inválido(s) rejeitado(s). Fonte: ${parsed.sourceSheet}.`,
+    },
+  });
+}
+
 export async function processCustomerIntelligenceFiles(files: File[], previous: CustomerIntelligenceSupport | null): Promise<CustomerIntelligenceSupport> {
   let result = previous || EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT;
 
@@ -132,13 +161,12 @@ export async function processCustomerIntelligenceFiles(files: File[], previous: 
           const parsed = parsePurchase310Text(text);
           result = mergeCustomerIntelligenceSupport(result, {
             purchases: parsed.purchases,
-            // O TXT 310 não contém cadastro mestre de cliente. Limpar perfis antigos evita
-            // manter dados de uma carga XLSX anterior como se viessem deste novo arquivo.
-            customers: [],
+            // O 310 TXT não contém Ambiente/Faixa/Rede. Portanto ele nunca pode
+            // apagar uma base de clientes válida carregada separadamente.
             source: {
               kind: 'PURCHASE_310',
               fileName: file.name,
-              note: `${parsed.parsedLines} linha(s) de produto lida(s); ${parsed.purchases.length} combinação(ões) CNPJ × SKU consolidadas; ${parsed.rejectedIdentifiers} identificador(es) CPF/inválido(s) excluído(s) da inteligência por CNPJ. Perfis, redes e demais atributos do cliente continuam vindo do motor canônico/global.`,
+              note: `${parsed.parsedLines} linha(s) de produto lida(s); ${parsed.purchases.length} combinação(ões) CNPJ × SKU consolidadas; ${parsed.rejectedIdentifiers} identificador(es) CPF/inválido(s) excluído(s). A segmentação do cliente permanece na fonte CUSTOMER_PROFILE/global.`,
             },
           });
           continue;
@@ -160,8 +188,10 @@ export async function processCustomerIntelligenceFiles(files: File[], previous: 
         continue;
       }
 
-      const workbook = await readCustomerIntelligenceWorkbook(file);
-      const kind = detectCustomerIntelligenceSource(workbook);
+      const rawWorkbook = await readCustomerIntelligenceWorkbook(file);
+      const coverage = officialAssortmentCoverage(rawWorkbook);
+      const workbook = normalizeOfficialAssortmentWorkbook(rawWorkbook);
+      const kind = coverage.hasJuly && coverage.hasAugSep ? 'OFFICIAL_ASSORTMENT' : detectCustomerIntelligenceSource(workbook);
 
       if (kind === 'OFFICIAL_ASSORTMENT') {
         const parsed = parseOfficialAssortmentWorkbook(workbook);
@@ -171,17 +201,23 @@ export async function processCustomerIntelligenceFiles(files: File[], previous: 
           lineage: parsed.lineage,
           source: { kind, fileName: file.name, note: `${parsed.competences.length} competência(s) oficial(is); ${parsed.lineage.length} vínculo(s) de migração/descontinuação; ${auxiliary322.matchedByEan} correspondência(s) complementada(s) pelo 322 sem alterar recomendação.` },
         });
+        result = mergeCustomerProfileWorkbook(result, workbook, file.name);
         continue;
       }
 
       if (kind === 'PURCHASE_310') {
         const parsed = parseCustomerAndPurchaseWorkbook(workbook);
-        const validatedCustomers = filterCustomerProfilesByDeclaredCnpj(workbook, parsed.customers);
         result = mergeCustomerIntelligenceSupport(result, {
           purchases: parsed.purchases,
-          customers: validatedCustomers.customers,
-          source: { kind, fileName: file.name, note: `${parsed.purchases.length} combinação(ões) CNPJ × SKU consolidadas; ${validatedCustomers.customers.length} perfil(is) CNPJ válido(s); ${validatedCustomers.removedInvalidType} perfil(is) removido(s) por TIPO CPF/código inválido.` },
+          source: { kind, fileName: file.name, note: `${parsed.purchases.length} combinação(ões) CNPJ × SKU consolidadas.` },
         });
+        if (hasStandaloneCustomerProfile(workbook)) {
+          const validatedCustomers = filterCustomerProfilesByDeclaredCnpj(workbook, parsed.customers);
+          result = mergeCustomerIntelligenceSupport(result, {
+            customers: validatedCustomers.customers,
+            source: { kind: 'CUSTOMER_PROFILE', fileName: file.name, note: `${validatedCustomers.customers.length} perfil(is) CNPJ válido(s); ${validatedCustomers.removedInvalidType} perfil(is) removido(s) por TIPO CPF/código inválido.` },
+          });
+        }
         continue;
       }
 
@@ -189,8 +225,18 @@ export async function processCustomerIntelligenceFiles(files: File[], previous: 
         result = mergeCustomerIntelligenceSupport(result, {
           source: { kind, fileName: file.name, note: 'Planilha auxiliar registrada somente como referência funcional. Não substitui o Sortimento Oficial vigente e suas promoções não foram ativadas como fonte oficial.' },
         });
+        result = mergeCustomerProfileWorkbook(result, workbook, file.name);
         continue;
       }
+
+      if (coverage.hasJuly || coverage.hasAugSep) result = appendIncompleteAssortment(result, file.name, coverage);
+
+      if (hasStandaloneCustomerProfile(workbook)) {
+        result = mergeCustomerProfileWorkbook(result, workbook, file.name);
+        continue;
+      }
+
+      if (coverage.hasJuly || coverage.hasAugSep) continue;
 
       const externalKind = classifyExternalCustomerSource(file.name);
       if (externalKind) {
