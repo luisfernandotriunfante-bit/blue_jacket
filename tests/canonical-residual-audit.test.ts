@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import * as XLSX from 'xlsx';
 import { buildInboundFacts } from '../src/services/motors/salesMotor.ts';
+import { buildInventoryFromUnified } from '../src/services/motors/calculationService.ts';
 import { buildCanonicalStockWorkbook, summarizeCanonicalStockWorkbook } from '../src/services/stockWorkbook.ts';
 
 const item = {
@@ -11,6 +12,10 @@ const item = {
 
 const operational = {
   version:1,tablePriceFileName:'',tablePrices:{},entry218FileName:'',currentInvoices:[],receiptItems:[],legacy12322FileName:'',legacyInvoices:[],portfolioFileName:'CARTEIRA 20.08.xlsx',portfolioRows:[{sourceRow:3}],portfolioInvoiceColumnDetected:false,portfolioHeader:[],
+} as any;
+
+const manualConfig = {
+  sellOutTarget:0,coverageTargetDays:30,portfolioSaleMarkup:0,lineShares:{},networkTargets:{},holidays:[],
 } as any;
 
 test('Motor de Vendas consome somente sourceRows mantidos pela continuidade da Carteira', () => {
@@ -22,6 +27,22 @@ test('Motor de Vendas consome somente sourceRows mantidos pela continuidade da C
   const result = buildInboundFacts(rows, [item], operational);
   assert.deepEqual(result.inboundOrders.map(row => row.orderNumber), ['901']);
   assert.equal(result.inboundOrders[0].pipelineQtyCases, 3);
+});
+
+test('serviço canônico calcula projetado financeiro depois da reserva 8022 e antes da Carteira', () => {
+  const unified = {
+    items:[{...item,physicalStockUnits:100,costUnit105:5,salePricePvenDa1:10,sourceKeys:{'105':'100'}}],
+    salesFacts:[{salesStatus:'A FATURAR',itemCanonicalId:'WINTHOR:100',units:20}],
+    inboundOrders:[{itemCanonicalId:'WINTHOR:100',inboundStatus:'ORDERED_FROM_COLGATE',remainingInTransitUnits:24,pipelineUnits:24,pipelineQtyCases:2,netValue:120}],
+    historicalSalesFacts:[],
+  } as any;
+  const result = buildInventoryFromUnified(unified,'2026-08-23',manualConfig);
+  assert.equal(result.stock.costValue,500);
+  assert.equal(result.stock.saleValue,1000);
+  assert.equal(result.stock.pendingPurchaseCost,120);
+  assert.equal(result.stock.pendingPurchaseSale,240);
+  assert.equal(result.stock.projectedCostValue,520);
+  assert.equal(result.stock.projectedSaleValue,1040);
 });
 
 test('workbook de Estoque usa Projetado = Disponível + Carteira e não Físico + Carteira', () => {
@@ -44,6 +65,7 @@ test('workbook de Estoque usa Projetado = Disponível + Carteira e não Físico 
   assert.equal(summary.availableUnits, 80);
   assert.equal(summary.pendingUnits, 24);
   assert.equal(summary.projectedUnits, 104);
+  assert.equal(summary.projectedCostValue, 520);
   assert.equal(summary.projectedSaleValue, 1040);
 
   const workbook = buildCanonicalStockWorkbook(state);
@@ -58,6 +80,9 @@ test('workbook de Estoque usa Projetado = Disponível + Carteira e não Físico 
 test('resíduos estruturais permanecem bloqueados por testes de arquitetura', () => {
   const unified = fs.readFileSync(new URL('../src/services/motors/unifiedEngine.ts', import.meta.url), 'utf8');
   const launches = fs.readFileSync(new URL('../src/pages/LancamentosPage.tsx', import.meta.url), 'utf8');
+  const stockPage = fs.readFileSync(new URL('../src/pages/EstoquePage.tsx', import.meta.url), 'utf8');
+  const calculations = fs.readFileSync(new URL('../src/services/motors/calculationService.ts', import.meta.url), 'utf8');
+  const customer = fs.readFileSync(new URL('../src/domain/customerIntelligence.ts', import.meta.url), 'utf8');
   assert.match(unified, /portfolioAllowedSourceRows/);
   assert.match(unified, /HISTORICAL_CURRENT_SALES_OVERLAP/);
   assert.match(unified, /\.filter\(row => row\.period === '2026'\)/);
@@ -65,4 +90,12 @@ test('resíduos estruturais permanecem bloqueados por testes de arquitetura', ()
   assert.doesNotMatch(unified, /unitsPerCase: item\.industryUnitsPerCase \|\| item\.internalUnitsPerCase/);
   assert.match(launches, /hasStock105/);
   assert.doesNotMatch(launches, /hasStock8013/);
+  assert.match(stockPage, /canonical\.stock\.projectedSaleValue/);
+  assert.match(stockPage, /canonical\.stock\.projectedCostValue/);
+  assert.doesNotMatch(stockPage, /canonical\.stock\.saleValue \+ canonical\.stock\.pendingPurchaseSale/);
+  assert.doesNotMatch(stockPage, /canonical\.stock\.costValue \+ canonical\.stock\.pendingPurchaseCost/);
+  assert.match(calculations, /projectedSaleValue = availableSaleValue \+ pendingPurchaseSale/);
+  assert.match(calculations, /projectedCostValue = availableCostValue \+ pendingPurchaseCost/);
+  assert.match(customer, /return '8013'/);
+  assert.doesNotMatch(customer, /internalUnitsPerCase[^\n]+return '105_DERIVED'/);
 });
