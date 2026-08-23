@@ -22,7 +22,7 @@ test('DataContext propaga erro de persistência manual para warnings visíveis',
   const context=readFileSync('src/store/DataContext.tsx','utf8');
   const page=readFileSync('src/pages/ConfiguracoesPage.tsx','utf8');
   assert.match(context,/manualConfigPersistenceError/);
-  assert.match(context,/warnings:Array\.from\(new Set\(\[\.\.\.normalized\.warnings,manualConfigPersistenceError\]\)\)/);
+  assert.match(context,/warnings:\s*Array\.from\(new Set\(\[\.\.\.configured\.warnings,\s*manualConfigPersistenceError\]\)\)/);
   assert.match(page,/canonical\.warnings\.map/);
   assert.match(page,/Pendências conhecidas/);
 });
