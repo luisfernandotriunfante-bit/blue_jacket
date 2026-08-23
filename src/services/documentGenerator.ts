@@ -2,7 +2,7 @@ import type { CanonicalNetworkResult, CanonicalState } from '../domain/canonical
 import { TemplateWorkbook, type TemplateCellValue } from './templateWorkbook';
 
 const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-const DAY_NAMES = ['Domingo','Segunda-Feira','Terça-Feira','Quinta-Feira','Sexta-Feira','Sábado'];
+const DAY_NAMES = ['Domingo','Segunda-Feira','Terça-Feira','Quarta-Feira','Quinta-Feira','Sexta-Feira','Sábado'];
 const PANEL_TEMPLATE = './templates/painel-sell-out-padrao.xlsx';
 
 const ratio = (value:number,target:number) => target > 0 ? value / target : 0;
