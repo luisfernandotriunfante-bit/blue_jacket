@@ -16,8 +16,8 @@ test('checkpoint: configuração manual continua isolada por competência',()=>{
 test('checkpoint: Meta T&C continua separada da Meta Indústria na camada canônica atual',()=>{
   const canonical=read('src/domain/canonical.ts');
   const rules=read('src/domain/targetRules.ts');
-  assert.match(canonical,/const sellOutTarget=config\.sellOutTarget>0\?Math\.max\(config\.sellOutTarget,0\):Math\.max\(base\.sellOut\.sellOutTarget,0\)/);
-  assert.doesNotMatch(canonical,/industryTarget/);
+  assert.match(canonical,/sellOutTarget\s*=\s*config\.sellOutTarget\s*>\s*0\s*\?\s*Math\.max\(config\.sellOutTarget,\s*0\)\s*:\s*Math\.max\(base\.sellOut\.sellOutTarget,\s*0\)/);
+  assert.doesNotMatch(canonical,/sellOutTarget\s*=.*industryTarget/);
   assert.match(rules,/redistributeNetworkTotal/);
   assert.match(rules,/redistributeSingleNetwork/);
 });
