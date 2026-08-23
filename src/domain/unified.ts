@@ -43,6 +43,12 @@ export interface ItemMasterRecord {
   blockedStockUnits: number;
   reservedStockUnits: number;
   availableStockUnits: number;
+  /** Snapshot de custo unitário vindo da posição 105. */
+  costUnit105: number;
+  /** Medidas 8013 preservadas para auditoria logística, não como estoque canônico. */
+  physicalCases8013: number;
+  physicalUnits8013: number;
+  grossKg8013: number;
   salePricePvenDa1: number | null;
   pVenda: number | null;
   vlSt: number | null;
