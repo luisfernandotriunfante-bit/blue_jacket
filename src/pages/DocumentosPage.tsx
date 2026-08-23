@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useData } from '../store/DataContext';
-import { downloadSellOutDocument, downloadTopNetworksDocument } from '../services/documentGenerator';
+import { downloadSellOutDocument } from '../services/documentGenerator';
+import { downloadCanonicalNetworkWorkbook } from '../services/networkWorkbook';
 import { downloadCanonicalStockWorkbook, summarizeCanonicalStockWorkbook } from '../services/stockWorkbook';
 import { PanelAlert, PanelCard, PanelEmptyState, PanelInfoRow, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
@@ -34,7 +35,7 @@ export function DocumentosPage() {
     setError('');
     try {
       if (kind === 'painel') await downloadSellOutDocument(canonical);
-      else if (kind === 'redes') await downloadTopNetworksDocument(canonical);
+      else if (kind === 'redes') downloadCanonicalNetworkWorkbook(canonical);
       else downloadCanonicalStockWorkbook(canonical);
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : 'Não foi possível gerar o arquivo.');
