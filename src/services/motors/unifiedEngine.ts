@@ -51,7 +51,7 @@ const is105 = (file: File) => has(file, '105') || has(file, 'POSICAO ESTOQUE');
 const is8013 = (file: File) => has(file, '8013');
 const is218 = (file: File) => /(^|\D)218(\D|$)/.test(name(file)) || has(file, 'ENTRADA NOTAS');
 const isPctabpr = (file: File) => has(file, 'PCTABPR');
-const isPriceList = (file: File) => has(file, 'LISTA DE PRECO') && !isPctabpr(file);
+const isPriceList = (file: File) => !isPctabpr(file) && (has(file, 'LISTA DE PRECO') || has(file, 'LISTA PRECO') || (has(file, 'COLGATE') && (has(file, 'PRECO') || has(file, 'TABELA OFICIAL'))));
 const isLaunchList = (file: File) => has(file, 'LANCAMENTO') && !has(file, 'SORTIMENTO');
 const isPremises = (file: File) => has(file, 'PREMISSAS');
 const isRca = (file: File) => has(file, 'NOVOS RCAS') || has(file, 'DE PARA') || has(file, 'DE-PARA');
@@ -123,6 +123,13 @@ class FileCache {
     const workbook = await this.workbook(file);
     return sheetRows(workbook, workbook.SheetNames[0]);
   }
+}
+
+export function looksLikeIndustryPriceListRows(rows: Row[]) {
+  return rows.slice(0, 40).some(row => {
+    const header = row.map(value => normalizeText(value).replace(/[^A-Z0-9]/g, ''));
+    return header.includes('SKU') && header.includes('EAN') && header.some(value => value.includes('UN') && value.includes('CX'));
+  });
 }
 
 function simpleHash(buffer: ArrayBuffer) {
@@ -253,7 +260,7 @@ function reconcile310(layer: UnifiedDataLayer, support: CustomerIntelligenceSupp
     }
     const valueDiff = Math.abs(row.netSalesValue - purchase.netValue);
     const returnValueDiff = Math.abs(row.returnValue - purchase.returnValue);
-    const saleUnitsDiff = Math.abs(row.grossSaleUnits - purchase.volumes);
+    const saleUnitsDiff = Math.abs(Math.abs(row.netSignedUnits) - purchase.volumes);
     const returnUnitsDiff = Math.abs(row.returnUnits - purchase.returnVolume);
     const invoiceDiff = Math.abs(row.purchaseInvoiceCount - purchase.quantity);
     if (valueDiff > .02 || returnValueDiff > .02 || saleUnitsDiff > .001 || returnUnitsDiff > .001 || invoiceDiff > .001) {
@@ -271,7 +278,7 @@ function reconcile310(layer: UnifiedDataLayer, support: CustomerIntelligenceSupp
           returnValue310: purchase.returnValue,
           returnValue379: row.returnValue,
           volumes310: purchase.volumes,
-          volumes379: row.grossSaleUnits,
+          volumes379: Math.abs(row.netSignedUnits),
           returnVolume310: purchase.returnVolume,
           returnVolume379: row.returnUnits,
           purchases310: purchase.quantity,
@@ -449,7 +456,20 @@ export async function processUnifiedFiles(input: {
     return file ? cache.workbook(file) : Promise.resolve(null);
   };
 
-  const recognized = input.allFiles.some(file => sourceType(file) !== 'OUTRA');
+  let priceListFile = find(isPriceList);
+  if (!priceListFile) {
+    for (const file of input.allFiles) {
+      if (/\.txt$/i.test(file.name) || isPctabpr(file) || isLaunchList(file)) continue;
+      try {
+        const candidate = await cache.rows(file);
+        if (looksLikeIndustryPriceListRows(candidate)) { priceListFile = file; break; }
+      } catch {
+        // A validação proprietária continua responsável por arquivos reconhecidos por outra fonte.
+      }
+    }
+  }
+
+  const recognized = input.allFiles.some(file => sourceType(file) !== 'OUTRA') || Boolean(priceListFile);
   if (!recognized && !input.previous) throw new Error('Nenhuma fonte reconhecida foi encontrada para iniciar a base canônica unificada.');
 
   const salesRows = await rows(is8022);
@@ -461,7 +481,7 @@ export async function processUnifiedFiles(input: {
     normalized286Rows: await rows(is286),
     stock105Rows: await rows(is105),
     stock8013Rows: await rows(is8013),
-    priceListRows: await rows(isPriceList),
+    priceListRows: priceListFile ? await cache.rows(priceListFile) : [],
     launchRows: await rows(isLaunchList),
     pctabprWorkbook: await workbook(isPctabpr),
     previousItems: previousUnified.items,
@@ -523,7 +543,10 @@ export async function processUnifiedFiles(input: {
 
   const ciFiles = input.allFiles.filter(isCustomerIntelligenceFile);
   const customerIntelligenceSupport = ciFiles.length ? await processCustomerIntelligenceFiles(ciFiles, previousCi) : previousCi;
-  const sourceMetadata = await Promise.all(input.allFiles.map(file => metadata(file, cache, referenceDate)));
+  const sourceMetadata = await Promise.all(input.allFiles.map(async file => {
+    const meta = await metadata(file, cache, referenceDate);
+    return file === priceListFile ? { ...meta, sourceType: 'LISTA_PRECO_COLGATE' } : meta;
+  }));
   const types = new Set(sourceMetadata.map(row => row.sourceType));
   const sources = [...previousUnified.sources.filter(row => !types.has(row.sourceType)), ...sourceMetadata];
 
