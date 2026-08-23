@@ -9,6 +9,8 @@ function baseCanonical() {
     stock: { physicalUnits: 30 },
     vendors: [{ total: 125 }],
     clients: [{ total: 125 }],
+    networks: [{ total: 125 }],
+    lines: [{ total: 125 }],
   } as any;
 }
 
@@ -57,6 +59,9 @@ test('auditoria materializa checks reais nos três níveis e fecha fotografia co
   assert.equal(reconciliation.checks.find(check => check.id === 'INTERNAL_SELL_OUT_CLOSURE')?.status, 'OK');
   assert.equal(reconciliation.checks.find(check => check.id === 'INTERNAL_STOCK_PROJECTION')?.status, 'OK');
   assert.equal(reconciliation.checks.find(check => check.id === 'INTERNAL_TARGET_CLOSURE')?.status, 'OK');
+  assert.equal(reconciliation.checks.find(check => check.id === 'INTERNAL_NETWORK_PROJECTION')?.status, 'OK');
+  assert.equal(reconciliation.checks.find(check => check.id === 'INTERNAL_LINE_CLOSURE')?.status, 'OK');
+  assert.equal(reconciliation.checks.find(check => check.id === 'INTERNAL_LINE_UNCLASSIFIED')?.status, 'OK');
   assert.equal(reconciliation.checks.find(check => check.id === 'SPREADSHEET_310_VOLUMES')?.status, 'OK');
 });
 
