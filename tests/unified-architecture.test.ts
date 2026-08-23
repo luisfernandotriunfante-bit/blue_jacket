@@ -44,8 +44,11 @@ test('serviço de cálculo não usa base.inventory como fallback de negócio', (
   const source = read('src/services/motors/calculationService.ts');
   assert.doesNotMatch(source, /base\.inventory/);
   assert.match(source, /buildInventoryFromUnified/);
-  assert.match(source, /costUnit:item\.costUnit105/);
-  assert.match(source, /saleUnit:item\.salePricePvenDa1/);
+  assert.match(source, /costUnit:\s*item\.costUnit105/);
+  assert.match(source, /saleUnit:\s*item\.salePricePvenDa1/);
+  assert.match(source, /internalUnitsPerCase:\s*item\.internalUnitsPerCase/);
+  assert.match(source, /industryUnitsPerCase:\s*item\.industryUnitsPerCase/);
+  assert.doesNotMatch(source, /physicalCases:\s*item\.physicalCases8013/);
 });
 
 test('motor unificado recebe 105, lançamentos, PCTABPR e Bússola diretamente', () => {
