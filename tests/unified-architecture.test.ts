@@ -16,15 +16,17 @@ test('Configurações possui um único orquestrador canônico e não reaplica ov
   assert.doesNotMatch(source, /setSellOut\s*\(/);
 });
 
-test('base unificada remove projeções locais legadas sem impedir hidratação de snapshots antigos', () => {
+test('DataContext aceita somente UnifiedDataLayer e não restaura projeções locais antigas', () => {
   const source = read('src/store/DataContext.tsx');
-  assert.match(source, /clearLegacyProjectionCache/);
-  assert.match(source, /removeItem\('bj_produtos'\)/);
-  assert.match(source, /removeItem\('bj_metricas'\)/);
-  assert.match(source, /removeItem\('bj_sellout'\)/);
-  assert.match(source, /unifiedStored\?\[\]:readStored<ProdutoEstoque\[]>\('bj_produtos'/);
-  assert.match(source, /if\(isUnifiedCanonicalState\(data\)\)\{clearLegacyProjectionCache/);
-  assert.match(source, /if\(storedCanonical&&!isUnifiedCanonicalState\(storedCanonical\)\)/);
+  assert.match(source, /stored && isUnifiedCanonicalState\(stored\) \? stored : null/);
+  assert.match(source, /if \(stored && !storedCanonical\) await clearCanonicalState\(\)/);
+  assert.match(source, /if \(data && !isUnifiedCanonicalState\(data\)\)/);
+  assert.doesNotMatch(source, /bj_produtos/);
+  assert.doesNotMatch(source, /bj_metricas/);
+  assert.doesNotMatch(source, /bj_sellout/);
+  assert.doesNotMatch(source, /ProdutoEstoque/);
+  assert.doesNotMatch(source, /MetricasEstoque/);
+  assert.doesNotMatch(source, /SellOutData/);
 });
 
 test('rota ativa de Clientes & Sortimento é consumidora da base unificada e não possui uploader próprio', () => {

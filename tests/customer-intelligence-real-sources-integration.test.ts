@@ -6,7 +6,7 @@ import { buildCustomerIntelligence } from '../src/domain/customerIntelligence.ts
 import { processCustomerIntelligenceFiles } from '../src/services/customerIntelligenceRepository.ts';
 import { hasStandaloneCustomerProfile, parseStandaloneCustomerProfiles } from '../src/services/customerIntelligenceProfiles.ts';
 import { normalizeOfficialAssortmentWorkbook, officialAssortmentCoverage } from '../src/services/customerIntelligenceOfficialWorkbook.ts';
-import { parseActiveRoute, parsePremises } from '../src/services/canonical/supportCore.ts';
+import { parsePremisesClassification, parseTopRetailerSnapshot } from '../src/services/motors/customerMotor.ts';
 
 function workbookFile(name: string, workbook: XLSX.WorkBook): File {
   const data = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
@@ -62,20 +62,25 @@ test('Exportação PDVs isolada fornece Ambiente, Perfil, Faixa, Rede e canal po
 });
 
 test('Premissas não deixa código de cliente curto como 11846 virar CNPJ selecionável', () => {
+  const header = ['SEMESTRE_PREMISSA','AMBIENTE','COD CLIENTE','NOME_CLIENTE','FAIXAS','ESTADO','CIDADE','IND_CLUSTER_COD','IND_CLUSTER_DESC','AVG 12 MESES','AREA DISTRIBUIDOR','AREA NIELSEN','PERFIL','TIPO','CHECK PDV','REDE'];
   const row = Array(16).fill('');
-  row[2] = '11846'; row[3] = 'CLIENTE INVALIDO'; row[6] = 'CAMPO GRANDE'; row[10] = 'MILENIO'; row[12] = 'REPASSE VAREJO'; row[13] = 'CNPJ';
-  assert.equal(parsePremises([Array(16).fill(''), row]).length, 0);
+  row[0] = '2SEM26 - Q3'; row[2] = '11846'; row[3] = 'CLIENTE INVALIDO'; row[6] = 'CAMPO GRANDE'; row[10] = 'MILENIO'; row[12] = 'REPASSE VAREJO'; row[13] = 'CNPJ';
+  const parsed = parsePremisesClassification([header, row]);
+  assert.equal(parsed.classifications.length, 0);
+  assert.equal(parsed.qualityIssues.some(issue => issue.code === 'PREMISES_INVALID_CNPJ'), true);
 });
 
-test('Roteiro rejeita identificador curto e não interpreta OURO como faixa', () => {
+test('Roteiro rejeita identificador curto e mantém OURO apenas como categoria', () => {
   const header = Array(19).fill('');
+  header[1] = 'DISTRIBUIDOR'; header[2] = 'CNPJ'; header[3] = 'LOJA'; header[5] = 'REDE'; header[8] = 'CNPJ GESTOR'; header[9] = 'COD AGRUPAMENTO'; header[10] = 'CATEGORIA'; header[11] = 'TIPO LOJA'; header[15] = 'NOME FANTASIA'; header[16] = 'CIDADE'; header[18] = 'META AGOSTO';
   const invalid = Array(19).fill(''); invalid[1] = 'MILENIO'; invalid[2] = '11846'; invalid[10] = 'OURO';
   const valid = Array(19).fill(''); valid[1] = 'MILENIO'; valid[2] = '4757459000519'; valid[3] = 'ABV'; valid[5] = 'REDE ABV'; valid[10] = 'OURO'; valid[15] = 'ABV'; valid[16] = 'DOURADOS';
   const workbook = { SheetNames: ['Roteiro Ativo'], Sheets: { 'Roteiro Ativo': XLSX.utils.aoa_to_sheet([header, invalid, valid]) } } as XLSX.WorkBook;
-  const parsed = parseActiveRoute(workbook);
+  const parsed = parseTopRetailerSnapshot(workbook, '2026-08');
   assert.equal(parsed.length, 1);
   assert.equal(parsed[0].cnpj, '04757459000519');
-  assert.equal(parsed[0].tier, '');
+  assert.equal(parsed[0].topCategory, 'OURO');
+  assert.equal('range' in parsed[0], false);
 });
 
 test('nomes reais variantes de Julho e Agosto/Setembro são reconhecidos sem inventar competência', () => {
@@ -113,7 +118,7 @@ test('perfil + 310 + sortimento oficial de agosto produzem ficha usando Valor Co
     support: {
       products: [{ sku: '61000001', ean: '7891000000011', description: 'Produto 1', category: '', subcategory: '', brand: 'COLGATE', isLaunch: false, boxPrice: 0, unitPrice: 10, unitsPerCase: 12, line: '' }],
       itemCodes: [{ internalCode: '11100001', description: 'Produto 1', ean: '7891000000011', factoryCode: '61000001' }],
-      clients: [], activeRoute: [], rcas: [], vendorTargets: [], legacyNetworkTargets: {}, legacyNetworkOwners: {}, legacyClientNetworks: {}, legacyClientOwners: {},
+      clients: [], activeRoute: [], rcas: [], vendorTargets: [],
     },
     clients: [], vendors: [], transactions: [], sellOut: { businessDaysElapsed: 10 }, stock: { costValue: 0, saleValue: 0 },
     inventory: [{ code: '11100001', description: 'Produto 1', ean: '7891000000011', quantity: 24, costUnit: 5, saleUnit: 10, pendingQty: 0, pendingCases: 0, pendingCost: 0, pendingSale: 0, isLaunch: false, hasWinthor: true, factoryCode: '61000001', physicalCases: 0, physicalUnits: 0, grossKg: 0 }],

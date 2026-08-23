@@ -1,35 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { LEGACY_CANONICAL_KEY, safeLocalStorageWrite } from '../src/store/canonicalPersistence';
+import { safeLocalStorageWrite } from '../src/store/canonicalPersistence.ts';
 
 class QuotaStorage {
-  values = new Map<string, string>([[LEGACY_CANONICAL_KEY, 'base-grande-antiga']]);
+  values = new Map<string, string>();
   setItem(key: string, value: string) {
-    if (this.values.has(LEGACY_CANONICAL_KEY)) throw new Error('QuotaExceededError');
+    if (value.length > 10) throw new Error('QuotaExceededError');
     this.values.set(key, value);
   }
   getItem(key: string) { return this.values.get(key) ?? null; }
   removeItem(key: string) { this.values.delete(key); }
 }
 
-test('escrita pequena libera bj_canonical legado e não propaga erro de quota', () => {
+test('escrita auxiliar não apaga outras chaves para contornar quota', () => {
   const storage = new QuotaStorage();
-  assert.equal(safeLocalStorageWrite(storage, 'bj_metricas', '{"ok":true}'), true);
-  assert.equal(storage.getItem(LEGACY_CANONICAL_KEY), null);
-  assert.equal(storage.getItem('bj_metricas'), '{"ok":true}');
+  storage.values.set('outra-chave','preservada');
+  assert.equal(safeLocalStorageWrite(storage, 'config', '12345678901'), false);
+  assert.equal(storage.getItem('outra-chave'), 'preservada');
+  assert.equal(storage.getItem('config'), null);
 });
 
-test('DataContext persiste a base grande no IndexedDB e não em localStorage', () => {
+test('DataContext persiste a base canônica somente no IndexedDB', () => {
   const source = fs.readFileSync(new URL('../src/store/DataContext.tsx', import.meta.url), 'utf8');
-  assert.match(source, /loadCanonicalState\(localStorage\)/);
+  const persistence = fs.readFileSync(new URL('../src/store/canonicalPersistence.ts', import.meta.url), 'utf8');
+  assert.match(source, /loadCanonicalState\(\)/);
   assert.match(source, /saveCanonicalState\(data\)/);
-  assert.match(source, /LEGACY_CANONICAL_KEY/);
-  assert.doesNotMatch(source, /localStorage\.setItem\(['"]bj_canonical['"]/);
+  assert.doesNotMatch(source, /bj_canonical|bj_produtos|bj_metricas|bj_sellout/);
+  assert.match(persistence, /indexedDB\.open/);
+  assert.doesNotMatch(persistence, /LEGACY_CANONICAL_KEY|bj_canonical/);
 });
 
-test('hidratação reaplica fontes operacionais salvas, incluindo PCTABPR', () => {
+test('hidratação rejeita snapshot anterior à UnifiedDataLayer em vez de reaplicar overlays', () => {
   const source = fs.readFileSync(new URL('../src/store/DataContext.tsx', import.meta.url), 'utf8');
-  assert.match(source, /loadOperationalSourceState\(localStorage\)/);
-  assert.match(source, /applyOperationalOverrides\(storedCanonical,operational,storedManual\)/);
+  assert.match(source, /stored && isUnifiedCanonicalState\(stored\) \? stored : null/);
+  assert.match(source, /if \(stored && !storedCanonical\) await clearCanonicalState\(\)/);
+  assert.doesNotMatch(source, /loadOperationalSourceState|applyOperationalOverrides|applyReceiptReconciliation/);
 });

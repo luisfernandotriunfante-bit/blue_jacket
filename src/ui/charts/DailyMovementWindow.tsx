@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { DailyMovementChart } from './DailyMovementChart';
 import { DailyPositivityChart } from './DailyPositivityChart';
+import './charts.css';
 
 type MovementDay = { date:string; invoiced:number; toInvoice:number; total:number; invoicedPositivation:number; totalPositivation:number; };
 const WINDOW_DAYS=10;
-const WINDOW_STORAGE_KEY='bj_sellout_daily_window_end';
+const WINDOW_STORAGE_KEY='blue_jacket_sellout_daily_window_end';
 const fmtBRL=(value:number)=>value.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const fmtInt=(value:number)=>Math.round(value||0).toLocaleString('pt-BR');
 const fmtDate=(date:string)=>new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR');
@@ -13,7 +14,7 @@ function addDays(date:string,amount:number){const value=new Date(`${date}T12:00:
 function firstDayOfMonth(date:string){return `${date.slice(0,7)}-01`}
 function buildCalendar(data:MovementDay[]){if(!data.length)return [] as MovementDay[];const ordered=[...data].sort((a,b)=>a.date.localeCompare(b.date));const byDate=new Map(ordered.map(item=>[item.date,item]));const monthStart=firstDayOfMonth(ordered[0].date);const latest=ordered[ordered.length-1].date;const minimumWindowStart=addDays(latest,-(WINDOW_DAYS-1));const start=monthStart<minimumWindowStart?monthStart:minimumWindowStart;const days:MovementDay[]=[];for(let cursor=start;cursor<=latest;cursor=addDays(cursor,1)){days.push(byDate.get(cursor)||{date:cursor,invoiced:0,toInvoice:0,total:0,invoicedPositivation:0,totalPositivation:0})}return days}
 function readStoredEndDate(){try{return typeof window==='undefined'?'':window.sessionStorage.getItem(WINDOW_STORAGE_KEY)||''}catch{return''}}
-function storeEndDate(date:string){try{if(typeof window!=='undefined'&&date)window.sessionStorage.setItem(WINDOW_STORAGE_KEY,date)}catch{/* storage indisponível não deve quebrar o painel */}}
+function storeEndDate(date:string){try{if(typeof window!=='undefined'&&date)window.sessionStorage.setItem(WINDOW_STORAGE_KEY,date)}catch{/* storage indisponível não quebra a visualização */}}
 
 export function DailyMovementWindow({data}:{data:MovementDay[]}){
  const calendar=useMemo(()=>buildCalendar(data),[data]);
@@ -35,18 +36,30 @@ export function DailyMovementWindow({data}:{data:MovementDay[]}){
  const selectEnd=(index:number)=>{const target=Math.min(maxEnd,Math.max(minEnd,index));setSelectedEndDate(calendar[target]?.date||latestDate)};
  const move=(direction:number)=>selectEnd(safeEnd+direction);
  const goCurrent=()=>setSelectedEndDate(latestDate);
- return <div style={{marginTop:'16px'}}>
-  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'18px',padding:'11px 14px',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'13px',background:'rgba(0,0,0,0.14)',marginBottom:'14px'}}><div style={{minWidth:0}}><div style={{color:'var(--panel-muted)',fontSize:'0.62rem',fontWeight:850,letterSpacing:'0.1em',textTransform:'uppercase'}}>Janela sincronizada · {WINDOW_DAYS} dias</div><div style={{color:'white',fontSize:'0.9rem',fontWeight:780,marginTop:'3px'}}>{fmtDate(periodStart)} — {fmtDate(periodEnd)}</div></div><div style={{display:'flex',alignItems:'center',gap:'7px',flexShrink:0}}><button type="button" onClick={()=>move(-1)} disabled={isEarliest} aria-label="Voltar um dia" style={navButtonStyle(isEarliest)}>‹</button><button type="button" onClick={goCurrent} disabled={isLatest} style={currentButtonStyle(isLatest)}>Atual</button><button type="button" onClick={()=>move(1)} disabled={isLatest} aria-label="Avançar um dia" style={navButtonStyle(isLatest)}>›</button></div></div>
-  <div style={{display:'grid',gridTemplateColumns:'minmax(0, 1.18fr) minmax(560px, 0.82fr)',gap:'14px',alignItems:'stretch',overflowX:'auto'}}>
-   <div style={{display:'grid',gap:'12px',minWidth:'650px'}}><MovementPanel eyebrow="MOVIMENTO FINANCEIRO" title="Sell Out diário"><DailyMovementChart data={visible}/></MovementPanel><MovementPanel eyebrow="MOVIMENTO DE POSITIVAÇÃO" title="Clientes positivados por dia"><DailyPositivityChart data={visible}/></MovementPanel></div>
-   <div style={{minWidth:'560px',border:'1px solid rgba(255,255,255,0.08)',borderRadius:'14px',background:'rgba(255,255,255,0.025)',overflow:'hidden',display:'flex',flexDirection:'column',height:'100%'}}><div style={{padding:'16px 16px 12px',borderBottom:'1px solid rgba(255,255,255,0.08)'}}><div style={{color:'#ef3340',fontSize:'0.62rem',fontWeight:900,letterSpacing:'0.11em',textTransform:'uppercase'}}>PLANILHA DIÁRIA</div><div style={{color:'white',fontSize:'0.94rem',fontWeight:760,marginTop:'4px'}}>Financeiro + positivação</div><div style={{color:'var(--panel-muted)',fontSize:'0.68rem',marginTop:'3px'}}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div></div>
-    <div style={{overflowX:'auto',flex:1,minHeight:0}}><table style={{width:'100%',height:'100%',borderCollapse:'collapse',fontSize:'0.75rem',tableLayout:'fixed'}}><colgroup><col style={{width:'16%'}}/><col style={{width:'19%'}}/><col style={{width:'18%'}}/><col style={{width:'18%'}}/><col style={{width:'14.5%'}}/><col style={{width:'14.5%'}}/></colgroup><thead><tr>{['Data','Sell Out','Faturado','A Faturar','Pos. Fat.','Pos. Total'].map((heading,index)=><th key={heading} style={{padding:'10px 8px',textAlign:index===0?'left':'right',color:'var(--panel-muted)',fontSize:'0.61rem',textTransform:'uppercase',borderBottom:'1px solid rgba(255,255,255,0.08)',whiteSpace:'nowrap'}}>{heading}</th>)}</tr></thead><tbody>{visible.map((day,index)=><tr key={day.date} style={{borderBottom:index===visible.length-1?'none':'1px solid rgba(255,255,255,0.055)',background:index===visible.length-1?'rgba(239,51,64,0.045)':'transparent'}}><td style={{padding:'9px 8px',color:'white',fontWeight:720}}>{fmtShortDate(day.date)}</td><td style={{padding:'9px 8px',textAlign:'right',fontWeight:800}}>{fmtBRL(day.total)}</td><td style={{padding:'9px 8px',textAlign:'right',color:'#93c5fd'}}>{fmtBRL(day.invoiced)}</td><td style={{padding:'9px 8px',textAlign:'right',color:'#4ade80'}}>{fmtBRL(day.toInvoice)}</td><td style={{padding:'9px 8px',textAlign:'right',color:'#93c5fd'}}>{fmtInt(day.invoicedPositivation)}</td><td style={{padding:'9px 8px',textAlign:'right',color:'#c4b5fd'}}>{fmtInt(day.totalPositivation)}</td></tr>)}</tbody></table></div>
-    <div style={{borderTop:'1px solid rgba(255,255,255,0.08)',background:'rgba(0,0,0,0.12)'}}><WeekTotal label="Sell Out da janela" value={fmtBRL(visible.reduce((sum,day)=>sum+day.total,0))}/></div>
+
+ return <div className="chart-window">
+  <div className="chart-window-toolbar">
+    <div><div className="chart-window-title">Janela sincronizada · {WINDOW_DAYS} dias</div><div className="chart-window-period">{fmtDate(periodStart)} — {fmtDate(periodEnd)}</div></div>
+    <div className="chart-window-actions">
+      <button type="button" className="chart-nav-button" onClick={()=>move(-1)} disabled={isEarliest} aria-label="Voltar um dia">‹</button>
+      <button type="button" className="chart-nav-button" onClick={goCurrent} disabled={isLatest}>Atual</button>
+      <button type="button" className="chart-nav-button" onClick={()=>move(1)} disabled={isLatest} aria-label="Avançar um dia">›</button>
+    </div>
+  </div>
+  <div className="chart-pair">
+   <div className="chart-stack">
+    <MovementPanel eyebrow="MOVIMENTO FINANCEIRO" title="Sell Out diário"><DailyMovementChart data={visible}/></MovementPanel>
+    <MovementPanel eyebrow="MOVIMENTO DE POSITIVAÇÃO" title="Clientes positivados por dia"><DailyPositivityChart data={visible}/></MovementPanel>
+   </div>
+   <div className="chart-daily-table">
+    <div className="chart-daily-header"><div className="panel-eyebrow">PLANILHA DIÁRIA</div><div className="panel-section-title">Financeiro + positivação</div><div className="panel-muted" style={{fontSize:'var(--panel-font-caption)',marginTop:3}}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div></div>
+    <div className="chart-daily-body"><table className="panel-table"><thead><tr><th>Data</th><th className="is-right">Sell Out</th><th className="is-right">Faturado</th><th className="is-right">A Faturar</th><th className="is-right">Pos. Fat.</th><th className="is-right">Pos. Total</th></tr></thead><tbody>{visible.map(day=><tr key={day.date}><td className="is-strong">{fmtShortDate(day.date)}</td><td className="is-right is-strong">{fmtBRL(day.total)}</td><td className="is-right is-blue">{fmtBRL(day.invoiced)}</td><td className="is-right is-green">{fmtBRL(day.toInvoice)}</td><td className="is-right is-blue">{fmtInt(day.invoicedPositivation)}</td><td className="is-right">{fmtInt(day.totalPositivation)}</td></tr>)}</tbody></table></div>
+    <div className="chart-daily-footer"><div className="panel-mini-label">Sell Out da janela</div><div className="panel-mini-value">{fmtBRL(visible.reduce((sum,day)=>sum+day.total,0))}</div></div>
    </div>
   </div>
  </div>;
 }
-function MovementPanel({eyebrow,title,children}:{eyebrow:string;title:string;children:React.ReactNode}){return <div style={{border:'1px solid rgba(255,255,255,0.08)',borderRadius:'14px',background:'rgba(255,255,255,0.025)',padding:'14px 14px 8px',overflow:'hidden'}}><div style={{marginBottom:'2px'}}><div style={{color:'#ef3340',fontSize:'0.6rem',fontWeight:900,letterSpacing:'0.1em',textTransform:'uppercase'}}>{eyebrow}</div><div style={{color:'white',fontSize:'0.88rem',fontWeight:760,marginTop:'3px'}}>{title}</div></div><div style={{overflowX:'auto'}}>{children}</div></div>}
-function WeekTotal({label,value}:{label:string;value:string}){return <div style={{padding:'12px 14px'}}><div style={{color:'var(--panel-muted)',fontSize:'0.6rem',textTransform:'uppercase',fontWeight:800}}>{label}</div><div style={{color:'white',fontSize:'0.86rem',fontWeight:800,marginTop:'3px'}}>{value}</div></div>}
-function navButtonStyle(disabled:boolean){return{width:'34px',height:'34px',borderRadius:'9px',border:'1px solid rgba(255,255,255,0.1)',background:disabled?'rgba(255,255,255,0.02)':'rgba(255,255,255,0.065)',color:disabled?'rgba(255,255,255,0.2)':'white',cursor:disabled?'default':'pointer',fontSize:'1.35rem',lineHeight:1}as const}
-function currentButtonStyle(disabled:boolean){return{height:'34px',padding:'0 12px',borderRadius:'9px',border:`1px solid ${disabled?'rgba(255,255,255,0.08)':'rgba(239,51,64,0.35)'}`,background:disabled?'rgba(255,255,255,0.025)':'rgba(239,51,64,0.08)',color:disabled?'var(--panel-muted)':'#ef3340',cursor:disabled?'default':'pointer',fontSize:'0.68rem',fontWeight:850,textTransform:'uppercase' as const}as const}
+
+function MovementPanel({eyebrow,title,children}:{eyebrow:string;title:string;children:React.ReactNode}){
+ return <div className="chart-panel"><div className="chart-panel-copy"><div className="panel-eyebrow">{eyebrow}</div><div className="chart-panel-title">{title}</div></div>{children}</div>;
+}

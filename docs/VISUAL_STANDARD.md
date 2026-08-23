@@ -1,80 +1,134 @@
-# Blue Jacket — Visual Standard v1
+# Blue Jacket — Visual Standard v2
 
-Este documento registra o padrão visual atualmente preservado no projeto.
+Este documento é o contrato visual vigente do Blue Jacket.
 
-## 1. Princípios
+## 1. Princípio central
 
-1. **Uma única camada de tema.** Não criar arquivos de correção final, sobrescritas sucessivas ou CSS de emergência.
-2. **Vidro é um primitive.** Superfícies que precisem do material usam a mesma receita de `GlassSurface` e tokens compartilhados.
-3. **Navegação é estrutural.** Sidebar e tabs devem continuar reutilizáveis e independentes das regras de negócio.
-4. **Somente peças validadas entram no `main`.** Novos componentes e regras são implementados e validados incrementalmente.
+O projeto possui **uma única fonte de verdade visual**:
 
-## 2. Fundo e tema
+- `src/ui/theme/tokens.css` concentra tokens;
+- `src/ui/theme/foundation.css` governa shell e navegação;
+- `src/ui/theme/panel-visual.css` governa componentes e padrões;
+- `src/ui/pattern/PanelVisual.tsx` expõe os primitives/patterns compartilhados.
 
-O shell visual deve continuar centralizando o fundo e os tokens globais. Páginas individuais não devem criar fundos globais paralelos nem camadas decorativas que disputem com o shell.
+Páginas não devem criar um segundo design system com cores, sombras, raios, tabs, inputs, alerts ou cards próprios.
 
-## 3. Material de vidro
+## 2. Tokens oficiais
 
-Receita base:
+Usar somente os tokens `--panel-*`.
 
-```css
-background: rgba(13, 24, 38, .23);
-border: 1px solid rgba(191, 211, 234, .12);
-backdrop-filter: blur(18px) saturate(116%);
--webkit-backdrop-filter: blur(18px) saturate(116%);
-box-shadow: 0 20px 48px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255, 255, 255, .08);
-```
+Não criar uma segunda família de variáveis para a mesma função. Valores de cor, espaçamento, tipografia, raio, sombra, foco e camadas devem entrar primeiro em `tokens.css` quando forem reutilizáveis.
 
-Variações podem mudar densidade, raio e espaçamento sem substituir o material por preenchimentos sólidos desnecessários.
+## 3. Superfícies
 
-Uso previsto:
+As superfícies oficiais são:
 
-- KPIs;
-- menu lateral;
-- menu horizontal;
-- tabelas;
-- contêineres de gráficos;
-- painéis auxiliares.
+- `.panel-card` / `PanelCard`;
+- `.panel-kpi` / `PanelKpi`;
+- `.panel-stat` / `PanelStat`;
+- `.panel-surface` para composições especiais.
 
-## 4. Contrato de camadas
+O antigo `GlassSurface` não faz mais parte da arquitetura.
 
-A ordem visual atual é:
+## 4. Tipografia
 
-| Camada | Responsabilidade |
-|---|---|
-| Fundo | shell e gradiente principal |
-| Conteúdo | páginas, superfícies e informações |
-| Tabs | navegação horizontal |
-| Sidebar | navegação lateral retrátil |
+A família oficial é Inter, carregada nos pesos 400, 500, 600, 700, 800 e 900.
 
-## 5. Sidebar
+Escala semântica:
 
-Desktop:
+- caption: `--panel-font-caption`;
+- label: `--panel-font-label`;
+- body small: `--panel-font-body-sm`;
+- body: `--panel-font-body`;
+- subtitle: `--panel-font-subtitle`;
+- title: `--panel-font-title`;
+- KPI: `--panel-font-kpi`.
 
-- fixa à esquerda;
-- largura aberta de `246px`;
-- estado padrão fora da viewport com `translateX(-100%)`;
-- abertura por hover/foco;
-- usa o material de vidro do projeto.
+Evitar novos tamanhos arbitrários quando um token ou componente existente atende à necessidade.
 
-Mobile:
+## 5. Cores
 
-- mantém comportamento retrátil;
-- detalhes podem ser refinados quando necessário, sem duplicar a implementação desktop.
+`--panel-red` é a cor principal da marca e de destaque.
 
-## 6. Navegação horizontal
+Cores semânticas compartilhadas:
 
-- centralizada na parte alta da tela;
-- `width: max-content`;
+- vermelho: erro, ruptura, bloqueio crítico;
+- âmbar: atenção, pendência, bloqueio não crítico;
+- verde: sucesso, disponível, OK;
+- azul: informação operacional;
+- roxo: categorias secundárias como lançamentos.
+
+Não usar hexadecimais locais em páginas quando houver token equivalente.
+
+## 6. Navegação
+
+### Sidebar
+
+- retrátil;
+- abertura por hover/foco em desktop continua disponível;
+- existe sempre um botão explícito de abertura;
+- em touch/mobile o botão é a forma principal de acesso;
+- foco por teclado deve permanecer visível.
+
+### Tabs principais
+
+- usar `TopTabs`;
 - sticky no topo;
-- material de vidro compartilhado;
-- recebe as tabs por propriedades.
+- horizontal e rolável quando necessário;
+- estado ativo sempre usa `--panel-red`.
 
-## 7. Regras para páginas
+### Tabs internas
 
-1. usar `BlueJacketShell` como estrutura raiz;
-2. manter conteúdo dentro de `.bj-content`;
-3. reutilizar `GlassSurface` e classes compartilhadas;
-4. não redefinir shell, sidebar ou tabs dentro de páginas específicas;
-5. não adicionar CSS global apenas para corrigir um componente isolado;
-6. manter regras de dados e cálculos separadas dos primitives de UI.
+- usar `PanelTabs`;
+- não recriar tabs manualmente em páginas.
+
+## 7. Componentes obrigatórios
+
+Antes de criar CSS local, verificar se o caso pode usar:
+
+- `PanelPage`;
+- `PanelCard`;
+- `PanelKpi`;
+- `PanelStat`;
+- `PanelSectionHeader`;
+- `PanelTabs`;
+- `PanelAlert`;
+- `PanelEmptyState`;
+- `PanelInfoRow`;
+- `.panel-input` / `.panel-select`;
+- `.panel-primary-button` / `.panel-secondary-button`;
+- `.panel-badge`;
+- `.panel-table`.
+
+## 8. Empty states
+
+`PanelEmptyState` tem três variantes:
+
+- `page`: página sem dados;
+- `section`: conteúdo vazio dentro de seção;
+- `compact`: tabela/bloco pequeno vazio.
+
+Uma página operacional vazia deve continuar exibindo `PanelPage`, preservando contexto e navegação.
+
+## 9. Responsividade
+
+- grids devem empilhar abaixo dos breakpoints compartilhados;
+- layouts de dois painéis largos devem usar `.panel-responsive-pair`;
+- inputs devem poder ocupar 100% no mobile;
+- tabela pode rolar horizontalmente quando a quantidade de colunas exigir, mas a página não deve depender de largura fixa para funcionar;
+- navegação principal deve ser utilizável sem hover.
+
+## 10. Acessibilidade mínima
+
+Todos os controles interativos precisam de:
+
+- `:focus-visible` reconhecível;
+- estado disabled visual;
+- label ou `aria-label` quando não houver texto;
+- alvo de toque adequado em controles principais.
+
+## 11. Regra para páginas
+
+A página é responsável por composição e dados, não por inventar primitives visuais.
+
+Inline style é aceitável somente para um valor realmente dinâmico que não possa ser representado por classe/prop. Espaçamento, grid, cor, tipografia, borda, radius, hover, foco e estado devem ficar no design system compartilhado.

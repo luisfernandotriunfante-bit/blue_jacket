@@ -20,23 +20,50 @@ function App() {
   const [activeEstoqueTopTab, setActiveEstoqueTopTab] = useState('overview')
   const [activeAtividadesTopTab, setActiveAtividadesTopTab] = useState('combo')
   const [activeClientesTopTab, setActiveClientesTopTab] = useState<ClientesSortimentoView>('overview')
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  const selectSection = (id: string) => {
+    setActiveTab(id)
+    setSidebarOpen(false)
+  }
 
   const sidebarItems = [
-    { id: 'estoque', label: 'Estoque', active: activeTab === 'estoque', onSelect: () => setActiveTab('estoque') },
-    { id: 'sellout', label: 'Sell Out', active: activeTab === 'sellout', onSelect: () => setActiveTab('sellout') },
-    { id: 'pex', label: 'PEX', description: 'Em construção', active: activeTab === 'pex', onSelect: () => setActiveTab('pex') },
-    { id: 'sortimento', label: 'Clientes & Sortimento', active: activeTab === 'sortimento', onSelect: () => setActiveTab('sortimento') },
-    { id: 'atividades', label: 'Atividades', active: activeTab === 'atividades', onSelect: () => setActiveTab('atividades') },
-    { id: 'relatorios', label: 'Documentos', active: activeTab === 'relatorios', onSelect: () => setActiveTab('relatorios') },
-    { id: 'metas', label: 'Metas', active: activeTab === 'metas', onSelect: () => setActiveTab('metas') },
-    { id: 'configuracoes', label: 'Configurações', active: activeTab === 'configuracoes', onSelect: () => setActiveTab('configuracoes') },
+    { id: 'estoque', label: 'Estoque', active: activeTab === 'estoque', onSelect: () => selectSection('estoque') },
+    { id: 'sellout', label: 'Sell Out', active: activeTab === 'sellout', onSelect: () => selectSection('sellout') },
+    { id: 'pex', label: 'PEX', description: 'Em construção', active: activeTab === 'pex', onSelect: () => selectSection('pex') },
+    { id: 'sortimento', label: 'Clientes & Sortimento', active: activeTab === 'sortimento', onSelect: () => selectSection('sortimento') },
+    { id: 'atividades', label: 'Atividades', active: activeTab === 'atividades', onSelect: () => selectSection('atividades') },
+    { id: 'relatorios', label: 'Documentos', active: activeTab === 'relatorios', onSelect: () => selectSection('relatorios') },
+    { id: 'metas', label: 'Metas', active: activeTab === 'metas', onSelect: () => selectSection('metas') },
+    { id: 'configuracoes', label: 'Configurações', active: activeTab === 'configuracoes', onSelect: () => selectSection('configuracoes') },
   ]
 
   const sidebar = (
-    <HoverSidebar
-      brand={<div style={{ padding: '24px', fontWeight: 'bold', fontSize: '1.2rem', color: 'white' }}>BLUE JACKET</div>}
-      items={sidebarItems}
-    />
+    <>
+      <button
+        type="button"
+        className="bj-sidebar-trigger"
+        data-open={sidebarOpen ? 'true' : 'false'}
+        aria-label={sidebarOpen ? 'Fechar navegação principal' : 'Abrir navegação principal'}
+        aria-expanded={sidebarOpen}
+        onClick={() => setSidebarOpen(open => !open)}
+      >
+        <span className="bj-sidebar-trigger-lines" aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="bj-sidebar-backdrop"
+        data-open={sidebarOpen ? 'true' : 'false'}
+        aria-label="Fechar navegação principal"
+        tabIndex={sidebarOpen ? 0 : -1}
+        onClick={() => setSidebarOpen(false)}
+      />
+      <HoverSidebar
+        forceOpen={sidebarOpen}
+        brand={<div className="bj-brand"><span className="bj-brand-mark" aria-hidden="true" /><span>BLUE JACKET</span></div>}
+        items={sidebarItems}
+      />
+    </>
   )
 
   const estoqueTopTabs = [
@@ -61,7 +88,7 @@ function App() {
     <TopTabs tabs={clientesTopTabs} activeId={activeClientesTopTab} onChange={value => setActiveClientesTopTab(value as ClientesSortimentoView)} />
   ) : null
 
-  const currentLabel = sidebarItems.find(i => i.id === activeTab)?.label ?? activeTab
+  const currentLabel = sidebarItems.find(item => item.id === activeTab)?.label ?? activeTab
   const estoqueView = activeEstoqueTopTab === 'products' ? 'products' : activeEstoqueTopTab === 'movements' ? 'movements' : 'overview'
 
   return (
@@ -76,7 +103,7 @@ function App() {
       : activeTab === 'configuracoes' ? <ConfiguracoesPage />
       : (
         <PanelPage title={currentLabel}>
-          <PanelEmptyState icon="◆" title={`${currentLabel} em construção`} description="Este módulo faz parte do roadmap e ainda não está disponível para uso operacional." />
+          <PanelEmptyState variant="page" title={`${currentLabel} em construção`} description="Este módulo faz parte do roadmap e ainda não está disponível para uso operacional." />
         </PanelPage>
       )}
     </BlueJacketShell>

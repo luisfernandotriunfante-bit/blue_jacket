@@ -8,26 +8,28 @@ test('checkpoint: configuração manual continua isolada por competência',()=>{
   const persistence=read('src/store/competencePersistence.ts');
   const context=read('src/store/DataContext.tsx');
   assert.match(persistence,/MANUAL_CONFIG_PREFIX='bj_manual_config:'/);
-  assert.match(context,/loadManualConfiguration\(localStorage,competence/);
-  assert.match(context,/saveManualConfiguration\(localStorage,activeCompetence/);
+  assert.match(context,/loadManualConfiguration\(localStorage, competence/);
+  assert.match(context,/saveManualConfiguration\(localStorage, activeCompetence/);
   assert.doesNotMatch(context,/localStorage\.setItem\('bj_manual_config'/);
 });
 
-test('checkpoint: Meta T&C continua separada da Meta Indústria',()=>{
-  const engine=read('src/services/canonicalEngine.ts');
+test('checkpoint: Meta T&C continua separada da Meta Indústria na camada canônica atual',()=>{
+  const canonical=read('src/domain/canonical.ts');
   const rules=read('src/domain/targetRules.ts');
-  assert.match(engine,/resolveSellOutTarget\(config\.sellOutTarget\)/);
-  assert.match(engine,/Meta Sell Out T&C não informada/);
-  assert.doesNotMatch(engine,/config\.sellOutTarget > 0 \? config\.sellOutTarget : Math\.max\(industryTarget/);
+  assert.match(canonical,/sellOutTarget\s*=\s*config\.sellOutTarget\s*>\s*0\s*\?\s*Math\.max\(config\.sellOutTarget,\s*0\)\s*:\s*Math\.max\(base\.sellOut\.sellOutTarget,\s*0\)/);
+  assert.doesNotMatch(canonical,/sellOutTarget\s*=.*industryTarget/);
   assert.match(rules,/redistributeNetworkTotal/);
   assert.match(rules,/redistributeSingleNetwork/);
 });
 
-test('checkpoint: exportação TOP REDES mantém K=REDES, L=TOPS e rede canônica',()=>{
-  const generator=read('src/services/documentGenerator.ts');
-  assert.match(generator,/values\[ref\('K',row\)\] = network\.networkAttainment/);
-  assert.match(generator,/values\[ref\('L',row\)\] = network\.topAttainment/);
-  assert.match(generator,/values\[ref\('D',row\)\] = result\?\.network \|\| client\.network/);
+test('checkpoint: exportação de Redes usa o contrato canônico atual sem 319 ou 12.326',()=>{
+  const generator=read('src/services/networkWorkbook.ts');
+  assert.match(generator,/state\.networks/);
+  assert.match(generator,/'% Meta Rede'/);
+  assert.match(generator,/'% Meta Tops'/);
+  assert.match(generator,/network\.networkTarget/);
+  assert.match(generator,/network\.topTarget/);
+  assert.doesNotMatch(generator,/319|12\.326|top-redes-padrao/);
 });
 
 test('checkpoint: auditoria oficial é a reconciliação canônica em três níveis',()=>{

@@ -8,7 +8,7 @@ import type {
   TopRetailerSnapshotRecord,
 } from '../../domain/unified';
 import { cleanCode, normalizeCnpj, normalizeText, parseNumber, sheetRows } from '../canonical/utils';
-import { parseRcaMap } from '../canonical/support';
+import { parseRcaMap } from './sourceParsers';
 import type { Row } from '../canonical/runtime';
 
 const validCnpj=(value:string)=>/^\d{14}$/.test(value);

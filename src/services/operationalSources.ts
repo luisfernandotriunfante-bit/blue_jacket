@@ -1,8 +1,5 @@
 import * as XLSX from 'xlsx';
-import type { CanonicalInventoryProduct, CanonicalState, ManualConfiguration } from '../domain/canonical';
 import { parseInvoiceIdentity } from '../domain/invoiceIdentity';
-import { packagingFactorsAgree, type UnitsPerCaseSource } from '../domain/packaging';
-import type { MetricasEstoque, ProdutoEstoque } from '../store/DataContext';
 import { cleanCode, cleanDigits, normalizeText, parseNumber, toIsoDate } from './canonical/utils';
 
 const STORAGE_KEY = 'blue-jacket:operational-sources:v1';
@@ -140,7 +137,7 @@ function firstRows(workbook: XLSX.WorkBook): unknown[][] {
 export function parseWinthorTablePrices(rows: unknown[][]): Record<string, number> {
   const headerIndex = rows.findIndex(row => {
     const normalized = row.map(normalizeText);
-    return normalized.includes('CODPROD') && (normalized.includes('PVENDA1') || normalized.includes('PTABELA'));
+    return normalized.includes('CODPROD') && normalized.includes('PVENDA1');
   });
   if (headerIndex < 0) throw new Error('Tabela de Preços Winthor: cabeçalho CODPROD/PVENDA1 não encontrado.');
   const header = rows[headerIndex].map(normalizeText);
@@ -151,8 +148,6 @@ export function parseWinthorTablePrices(rows: unknown[][]): Record<string, numbe
   const regionNameCol = col('REGIAO');
   const statusCol = col('STATUSREGIAO');
   const price1Col = col('PVENDA1');
-  const legacyTableCol = col('PTABELA');
-  const tableCol = price1Col >= 0 ? price1Col : legacyTableCol;
   const prices: Record<string, number> = {};
   for (let i = headerIndex + 1; i < rows.length; i++) {
     const row = rows[i];
@@ -164,7 +159,7 @@ export function parseWinthorTablePrices(rows: unknown[][]): Record<string, numbe
     const status = statusCol >= 0 ? normalizeText(row[statusCol]) : 'A';
     const isMcdCampoGrande = region === '11' || branch === '11' || regionName.includes('CAMPO GRANDE') && regionName.includes('MCD');
     if (!isMcdCampoGrande || (status && status !== 'A')) continue;
-    const rawPrice = parseNumber(row[tableCol]);
+    const rawPrice = parseNumber(row[price1Col]);
     const price = Math.round((rawPrice + Number.EPSILON) * 100) / 100;
     if (price <= 0) continue;
     const existing = prices[code];
@@ -336,115 +331,6 @@ export async function prepareOperationalSources(files: File[], storage?: Storage
   }
   saveOperationalSourceState(state, storage);
   return { engineFiles, state };
-}
-
-type InventoryWithPackaging = CanonicalInventoryProduct & {
-  unitsPerCase?: number;
-  unitsPerCaseSource?: UnitsPerCaseSource;
-  unitsPerCaseConflict?: boolean;
-  portfolioLines?: unknown[];
-};
-
-function cloneInventory(canonical: CanonicalState): InventoryWithPackaging[] {
-  return canonical.inventory.map(item => ({ ...item, portfolioLines: [] } as InventoryWithPackaging));
-}
-
-function reconciledUnitsPerCase(product: InventoryWithPackaging, masterFactor: number): number {
-  const productFactor = product.unitsPerCaseConflict || product.unitsPerCaseSource === 'CONFLICT' || product.unitsPerCaseSource === 'UNKNOWN' ? 0 : Math.max(Number(product.unitsPerCase) || 0, 0);
-  const supportFactor = Math.max(Number(masterFactor) || 0, 0);
-  if (productFactor > 0 && supportFactor > 0 && !packagingFactorsAgree(productFactor, supportFactor)) return 0;
-  return productFactor || supportFactor;
-}
-
-/**
- * Aplica somente overrides que NÃO representam recebimento: preço e reconstrução
- * da Carteira bruta/comparável. A baixa de 12.322/218 pertence exclusivamente a
- * applyReceiptReconciliation, impedindo dupla dedução no pipeline real.
- */
-export function applyOperationalOverrides(canonical: CanonicalState, state: OperationalSourceState, config: ManualConfiguration): { canonical: CanonicalState; priceMatched: number; priceDivergences: number; portfolioDeductedRows: number; portfolioDeductedCost: number; portfolioBlocked: boolean } {
-  const inventory = cloneInventory(canonical);
-  const byCode = new Map(inventory.map(item => [cleanCode(item.code), item]));
-  const byFactory = new Map(inventory.filter(item => cleanCode(item.factoryCode)).map(item => [cleanCode(item.factoryCode), item]));
-  const byEan = new Map(inventory.filter(item => cleanDigits(item.ean)).map(item => [cleanDigits(item.ean), item]));
-  const itemByInternal = new Map((canonical.support.itemCodes || []).map(item => [cleanCode(item.internalCode), item]));
-  const internalByFactory = new Map((canonical.support.itemCodes || []).filter(item => cleanCode(item.factoryCode)).map(item => [cleanCode(item.factoryCode), cleanCode(item.internalCode)]));
-  const productBySku = new Map((canonical.support.products || []).filter(item => cleanCode(item.sku)).map(item => [cleanCode(item.sku), item]));
-  const productByEan = new Map((canonical.support.products || []).filter(item => cleanDigits(item.ean)).map(item => [cleanDigits(item.ean), item]));
-
-  let priceMatched = 0;
-  let priceDivergences = 0;
-  inventory.forEach(item => {
-    const authoritative = Number(state.tablePrices[cleanCode(item.code)] || 0);
-    if (authoritative <= 0) return;
-    priceMatched += 1;
-    if (item.saleUnit > 0 && Math.abs(item.saleUnit - authoritative) > 0.005) priceDivergences += 1;
-    item.saleUnit = authoritative;
-  });
-
-  const canRebuildPortfolio = state.portfolioRows.length > 0;
-  if (canRebuildPortfolio) {
-    inventory.forEach(item => { item.pendingQty = 0; item.pendingCases = 0; item.pendingCost = 0; item.pendingSale = 0; item.portfolioLines = []; });
-    for (const row of state.portfolioRows) {
-      const material = cleanCode(row.materialCode);
-      const mappedInternal = itemByInternal.has(material) ? material : internalByFactory.get(material) || '';
-      const cad = mappedInternal ? itemByInternal.get(mappedInternal) : undefined;
-      const ean = cleanDigits(cad?.ean || '');
-      const master = productBySku.get(material) || (ean ? productByEan.get(ean) : undefined);
-      const product = (mappedInternal ? byCode.get(mappedInternal) : undefined) || byCode.get(material) || byFactory.get(material) || (ean ? byEan.get(ean) : undefined);
-      if (!product) continue;
-      const unitsPerCase = reconciledUnitsPerCase(product, Number(master?.unitsPerCase) || 0);
-      const cases = row.orderQty + row.billQty;
-      const units = unitsPerCase > 0 ? cases * unitsPerCase : 0;
-      const sale = row.costValue * (1 + Math.max(Number(config.portfolioSaleMarkup) || 0, 0));
-      product.pendingCases += cases;
-      product.pendingQty += units;
-      product.pendingCost += row.costValue;
-      product.pendingSale += sale;
-      product.portfolioLines = [...(product.portfolioLines || []), { sourceRow: row.sourceRow, materialCode: material, orderQty: row.orderQty, billQty: row.billQty, totalCases: cases, unitsPerCase, totalUnits: units, costValue: row.costValue, saleValue: sale, internalCode: product.code, ean: product.ean, description: product.description, hasWinthor: product.hasWinthor }];
-    }
-  }
-
-  const stockCost = inventory.reduce((sum, item) => sum + item.quantity * item.costUnit, 0);
-  const stockSale = inventory.reduce((sum, item) => sum + item.quantity * item.saleUnit, 0);
-  const pendingCost = inventory.reduce((sum, item) => sum + item.pendingCost, 0);
-  const pendingSale = inventory.reduce((sum, item) => sum + item.pendingSale, 0);
-  const historyAverage = canonical.history.average3ClosedMonths || 0;
-  const coverageCurrentDays = historyAverage > 0 ? Math.round(stockSale / historyAverage * 30) : 0;
-  const coverageProjectedDays = historyAverage > 0 ? Math.round((stockSale + pendingSale) / historyAverage * 30) : 0;
-  const coverageCostCurrentDays = historyAverage > 0 ? Math.round(stockCost / historyAverage * 30) : 0;
-  const coverageCostProjectedDays = historyAverage > 0 ? Math.round((stockCost + pendingCost) / historyAverage * 30) : 0;
-
-  const warnings = canonical.warnings.filter(warning => !warning.startsWith('Tabela PCTABPR:') && !warning.startsWith('Entrada de notas:') && !warning.startsWith('Abatimento da Carteira:') && !warning.startsWith('Persistência operacional:'));
-  if (Object.keys(state.tablePrices).length) warnings.push(`Tabela PCTABPR: ${Object.keys(state.tablePrices).length} preço(s) ativo(s) carregado(s); ${priceMatched} SKU(s) do estoque receberam Preço 1 (PVENDA1) como prioridade${priceDivergences ? `, com ${priceDivergences} divergência(s) contra a fonte anterior` : ', sem divergência nos SKUs comparáveis'}.`);
-  if (state.currentInvoices.length || state.legacyInvoices.length) warnings.push(`Entrada de notas: ${state.currentInvoices.length} NF(s) do 218 + ${state.legacyInvoices.length} NF(s) históricas do 12.322 registradas. A baixa é aplicada exclusivamente pela reconciliação de recebimentos.`);
-  if (canRebuildPortfolio) warnings.push(`Abatimento da Carteira: Carteira bruta/comparável reconstruída com ${state.portfolioRows.length} linha(s); nenhum recebimento foi abatido nesta camada.`);
-  if (state.persistenceError) warnings.push(`Persistência operacional: ${state.persistenceError}`);
-
-  const next: CanonicalState = {
-    ...canonical,
-    inventory,
-    stock: {
-      ...canonical.stock,
-      costValue: stockCost,
-      saleValue: stockSale,
-      pendingPurchaseCost: pendingCost,
-      pendingPurchaseSale: pendingSale,
-      projectedCostValue: stockCost + pendingCost,
-      projectedSaleValue: stockSale + pendingSale,
-      coverageCurrentDays,
-      coverageProjectedDays,
-      coverageCostCurrentDays,
-      coverageCostProjectedDays,
-    },
-    warnings,
-  };
-  return { canonical: next, priceMatched, priceDivergences, portfolioDeductedRows: 0, portfolioDeductedCost: 0, portfolioBlocked: false };
-}
-
-export function operationalLegacyData(canonical: CanonicalState, coverageTarget: number): { produtos: ProdutoEstoque[]; metricas: MetricasEstoque } {
-  const produtos: ProdutoEstoque[] = canonical.inventory.map(item => ({ codigo: item.code, descricao: item.description, ean: item.ean, quantidade: item.quantity, saldoMinimo: 0, custoUnitario: item.costUnit, vendaUnitario: item.saleUnit, entradas: 0, saidas: 0, saldoPedido: item.pendingQty, saldoPedidoCaixas: item.pendingCases, saldoPedidoValorCusto: item.pendingCost, saldoPedidoValorVenda: item.pendingSale, isLancamento: item.isLaunch, hasWinthor: item.hasWinthor, factoryCode: item.factoryCode, physicalCases: item.physicalCases, physicalUnits: item.physicalUnits, grossKg: item.grossKg }));
-  const metricas: MetricasEstoque = { valorEstoqueCompra: canonical.stock.costValue, valorEstoqueVenda: canonical.stock.saleValue, saldoPedidoCusto: canonical.stock.pendingPurchaseCost, saldoPedidoVenda: canonical.stock.pendingPurchaseSale, coberturaDiasAtual: canonical.stock.coverageCurrentDays, coberturaEstoqueMaisSaldo: canonical.stock.coverageProjectedDays, coberturaDiasAtualCusto: canonical.stock.coverageCostCurrentDays, coberturaEstoqueMaisSaldoCusto: canonical.stock.coverageCostProjectedDays, produtosRuptura: canonical.inventory.filter(item => item.hasWinthor && item.quantity <= 0).length, metaCobertura: coverageTarget };
-  return { produtos, metricas };
 }
 
 export function operationalReceiptMovements(state = loadOperationalSourceState()) {
