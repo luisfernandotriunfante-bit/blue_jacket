@@ -3,12 +3,15 @@ import { applyManualConfiguration, type CanonicalState, DEFAULT_MANUAL_CONFIGURA
 import { isUnifiedCanonicalState } from '../services/motors/unifiedEngine';
 import { clearCanonicalState, loadCanonicalState, saveCanonicalState } from './canonicalPersistence';
 import { competenceFromCanonical, loadManualConfiguration, normalizeManualConfiguration, saveManualConfiguration } from './competencePersistence';
+import { getCanonicalSnapshotCompatibilityIssue } from './snapshotCompatibility';
 
 interface DataContextType {
   canonical: CanonicalState | null;
   setCanonical: (data: CanonicalState | null) => void;
   manualConfig: ManualConfiguration;
   setManualConfig: (config: ManualConfiguration) => void;
+  dataNotice: string;
+  clearDataNotice: () => void;
 }
 
 const DataContext = createContext<DataContextType>({
@@ -16,23 +19,29 @@ const DataContext = createContext<DataContextType>({
   setCanonical: () => {},
   manualConfig: DEFAULT_MANUAL_CONFIGURATION,
   setManualConfig: () => {},
+  dataNotice: '',
+  clearDataNotice: () => {},
 });
 
 export const DataProvider = ({ children }: { children: ReactNode }) => {
   const [canonicalBase, setCanonicalBase] = useState<CanonicalState | null>(null);
   const [manualConfig, setManualConfigState] = useState<ManualConfiguration>(DEFAULT_MANUAL_CONFIGURATION);
   const [manualConfigPersistenceError, setManualConfigPersistenceError] = useState('');
+  const [dataNotice, setDataNotice] = useState('');
 
   React.useEffect(() => {
     let cancelled = false;
     const hydrate = async () => {
       const stored = await loadCanonicalState();
-      const storedCanonical = stored && isUnifiedCanonicalState(stored) ? stored : null;
+      const storedUnified = stored && isUnifiedCanonicalState(stored) ? stored : null;
+      const compatibilityIssue = getCanonicalSnapshotCompatibilityIssue(storedUnified || stored);
+      const storedCanonical = storedUnified && !compatibilityIssue ? storedUnified : null;
       if (stored && !storedCanonical) await clearCanonicalState();
       const competence = competenceFromCanonical(storedCanonical);
       const manualLoad = loadManualConfiguration(localStorage, competence, { migrateLegacy: false });
       if (cancelled) return;
       setCanonicalBase(storedCanonical);
+      setDataNotice(compatibilityIssue);
       setManualConfigState(manualLoad.config);
       setManualConfigPersistenceError(manualLoad.persistenceError || '');
     };
@@ -56,6 +65,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     const nextCompetence = competenceFromCanonical(data);
     setCanonicalBase(data);
     if (data) {
+      setDataNotice('');
       void saveCanonicalState(data).catch(error => console.error('Não foi possível persistir a base canônica no IndexedDB.', error));
       if (nextCompetence && nextCompetence !== activeCompetence) {
         const nextLoad = loadManualConfiguration(localStorage, nextCompetence, { migrateLegacy: false });
@@ -83,7 +93,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   };
 
   return (
-    <DataContext.Provider value={{ canonical, setCanonical, manualConfig, setManualConfig }}>
+    <DataContext.Provider value={{ canonical, setCanonical, manualConfig, setManualConfig, dataNotice, clearDataNotice: () => setDataNotice('') }}>
       {children}
     </DataContext.Provider>
   );
