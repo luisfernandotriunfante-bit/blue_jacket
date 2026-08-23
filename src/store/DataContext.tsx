@@ -2,6 +2,7 @@ import React, { createContext, useContext, useMemo, useState, ReactNode } from '
 import { applyManualConfiguration, CanonicalState, CanonicalVendorResult, DEFAULT_MANUAL_CONFIGURATION, ManualConfiguration } from '../domain/canonical';
 import { applyOperationalOverrides, loadOperationalSourceState } from '../services/operationalSources';
 import { applyReceiptReconciliation, loadReceiptConfirmations } from '../services/receiptReconciliation';
+import { isUnifiedCanonicalState } from '../services/motors/unifiedEngine';
 import { clearCanonicalState, LEGACY_CANONICAL_KEY, loadCanonicalState, safeLocalStorageWrite, saveCanonicalState } from './canonicalPersistence';
 import { competenceFromCanonical, loadManualConfiguration, normalizeManualConfiguration, saveManualConfiguration } from './competencePersistence';
 
@@ -26,126 +27,31 @@ const defaultMetricas:MetricasEstoque={valorEstoqueCompra:0,valorEstoqueVenda:0,
 const DataContext=createContext<DataContextType>({produtos:[],setProdutos:()=>{},metricas:defaultMetricas,setMetricas:()=>{},sellOut:null,setSellOut:()=>{},canonical:null,setCanonical:()=>{},manualConfig:DEFAULT_MANUAL_CONFIGURATION,setManualConfig:()=>{},isLoaded:false});
 
 function readStored<T>(key:string,fallback:T):T{try{const raw=localStorage.getItem(key);return raw?JSON.parse(raw) as T:fallback}catch{return fallback}}
-function canonicalCoordinatorName(value:string){
-  const original=value?.trim()||'SEM COORDENADOR';
-  const normalized=original.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
-  if(normalized.includes('CLAUDIO'))return'FLAVIO';
-  if(normalized==='THIAGO'||normalized.includes('THIAGO DA SILVA CONEGUNDES'))return'THIAGO';
-  return original;
-}
+function canonicalCoordinatorName(value:string){const original=value?.trim()||'SEM COORDENADOR';const normalized=original.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim().toUpperCase();if(normalized.includes('CLAUDIO'))return'FLAVIO';if(normalized==='THIAGO'||normalized.includes('THIAGO DA SILVA CONEGUNDES'))return'THIAGO';return original;}
 
-/** Dias trabalhados pertencem sempre à competência apurada. */
-function standardWorkedDays(periodStart:string,periodEnd:string,referenceDate:string,holidays:string[]){
-  if(!periodStart||!periodEnd||!referenceDate)return 0;
-  const start=new Date(`${periodStart}T12:00:00Z`);const periodLimit=new Date(`${periodEnd}T12:00:00Z`);const reference=new Date(`${referenceDate}T12:00:00Z`);
-  if(Number.isNaN(start.getTime())||Number.isNaN(periodLimit.getTime())||Number.isNaN(reference.getTime()))return 0;
-  const end=reference<periodLimit?reference:periodLimit;
-  const holidaySet=new Set(holidays||[]);let count=0;const cursor=new Date(start);
-  while(cursor<=end){const iso=cursor.toISOString().slice(0,10);const dow=cursor.getUTCDay();if(dow!==0&&dow!==6&&!holidaySet.has(iso))count+=1;cursor.setUTCDate(cursor.getUTCDate()+1)}
-  return count;
-}
+function standardWorkedDays(periodStart:string,periodEnd:string,referenceDate:string,holidays:string[]){if(!periodStart||!periodEnd||!referenceDate)return 0;const start=new Date(`${periodStart}T12:00:00Z`);const periodLimit=new Date(`${periodEnd}T12:00:00Z`);const reference=new Date(`${referenceDate}T12:00:00Z`);if(Number.isNaN(start.getTime())||Number.isNaN(periodLimit.getTime())||Number.isNaN(reference.getTime()))return 0;const end=reference<periodLimit?reference:periodLimit;const holidaySet=new Set(holidays||[]);let count=0;const cursor=new Date(start);while(cursor<=end){const iso=cursor.toISOString().slice(0,10);const dow=cursor.getUTCDay();if(dow!==0&&dow!==6&&!holidaySet.has(iso))count+=1;cursor.setUTCDate(cursor.getUTCDate()+1)}return count;}
 
 function normalizeCanonicalTeam(state:CanonicalState|null,config:ManualConfiguration):CanonicalState|null{
   if(!state)return null;
-
-  const calculatedTotal=standardWorkedDays(state.periodStart,state.periodEnd,state.periodEnd,config.holidays);
-  const totalDays=calculatedTotal>0?calculatedTotal:state.sellOut.businessDaysTotal;
-  const calculatedWorked=standardWorkedDays(state.periodStart,state.periodEnd,state.referenceDate,config.holidays);
-  const workedDays=calculatedWorked>0?calculatedWorked:state.sellOut.businessDaysElapsed;
-  const remainingDays=Math.max(totalDays-workedDays,0);
-  const invoicedDailyAverage=workedDays>0?state.sellOut.invoiced/workedDays:0;
-  const totalDailyAverage=workedDays>0?state.sellOut.total/workedDays:0;
-  const invoicedTrend=workedDays>0?invoicedDailyAverage*totalDays:0;
-  const totalTrend=workedDays>0?totalDailyAverage*totalDays:0;
-  const sellOutGap=Math.max(state.sellOut.sellOutTarget-state.sellOut.total,0);
-  const neededDailyAverage=remainingDays>0?sellOutGap/remainingDays:sellOutGap;
-  const sellOut={...state.sellOut,businessDaysElapsed:workedDays,businessDaysRemaining:remainingDays,invoicedDailyAverage,totalDailyAverage,neededDailyAverage,invoicedTrend,totalTrend};
-
-  const canonicalCode=new Map<string,string>();
-  state.vendors.forEach(v=>{const canonicalName=canonicalCoordinatorName(v.coordinatorName);if(v.coordinatorCode&&!canonicalCode.has(canonicalName))canonicalCode.set(canonicalName,v.coordinatorCode)});
-  const vendors:CanonicalVendorResult[]=state.vendors.map(v=>{
-    const coordinatorName=canonicalCoordinatorName(v.coordinatorName);
-    const idealSalesToday=totalDays>0?v.salesTarget*(workedDays/totalDays):0;
-    const idealPositivationToday=totalDays>0?v.positivityTarget*(workedDays/totalDays):0;
-    const positivityGapToTarget=Math.max(v.positivityTarget-v.totalPositivation,0);
-    return{...v,coordinatorName,coordinatorCode:canonicalCode.get(coordinatorName)||v.coordinatorCode,idealSalesToday,salesGapToIdeal:Math.max(idealSalesToday-v.total,0),idealPositivationToday,positivityGapToIdeal:Math.max(idealPositivationToday-v.totalPositivation,0),positivityGapToTarget,positivityDailyTarget:remainingDays>0?positivityGapToTarget/remainingDays:positivityGapToTarget}
-  });
-  const groups=new Map<string,CanonicalVendorResult[]>();
-  vendors.forEach(v=>{const key=v.coordinatorName||'SEM COORDENADOR';if(!groups.has(key))groups.set(key,[]);groups.get(key)!.push(v)});
-  const coordinators=Array.from(groups.entries()).map(([name,members])=>{const salesTarget=members.reduce((s,v)=>s+v.salesTarget,0);const positivityTarget=members.reduce((s,v)=>s+v.positivityTarget,0);const invoiced=members.reduce((s,v)=>s+v.invoiced,0);const toInvoice=members.reduce((s,v)=>s+v.toInvoice,0);const total=invoiced+toInvoice;const invoicedPositivation=members.reduce((s,v)=>s+v.invoicedPositivation,0);const futurePositivation=members.reduce((s,v)=>s+v.futurePositivation,0);const totalPositivation=invoicedPositivation+futurePositivation;return{code:canonicalCode.get(name)||members[0]?.coordinatorCode||name,name,salesTarget,positivityTarget,invoiced,toInvoice,total,attainment:salesTarget>0?total/salesTarget:0,invoicedPositivation,futurePositivation,totalPositivation,positivityAttainment:positivityTarget>0?totalPositivation/positivityTarget:0,vendors:members.sort((a,b)=>b.total-a.total)}}).sort((a,b)=>b.salesTarget-a.salesTarget||b.total-a.total);
-  return{...state,sellOut,vendors,coordinators};
+  const calculatedTotal=standardWorkedDays(state.periodStart,state.periodEnd,state.periodEnd,config.holidays);const totalDays=calculatedTotal>0?calculatedTotal:state.sellOut.businessDaysTotal;const calculatedWorked=standardWorkedDays(state.periodStart,state.periodEnd,state.referenceDate,config.holidays);const workedDays=calculatedWorked>0?calculatedWorked:state.sellOut.businessDaysElapsed;const remainingDays=Math.max(totalDays-workedDays,0);const invoicedDailyAverage=workedDays>0?state.sellOut.invoiced/workedDays:0;const totalDailyAverage=workedDays>0?state.sellOut.total/workedDays:0;const invoicedTrend=workedDays>0?invoicedDailyAverage*totalDays:0;const totalTrend=workedDays>0?totalDailyAverage*totalDays:0;const sellOutGap=Math.max(state.sellOut.sellOutTarget-state.sellOut.total,0);const neededDailyAverage=remainingDays>0?sellOutGap/remainingDays:sellOutGap;const sellOut={...state.sellOut,businessDaysElapsed:workedDays,businessDaysRemaining:remainingDays,invoicedDailyAverage,totalDailyAverage,neededDailyAverage,invoicedTrend,totalTrend};
+  const canonicalCode=new Map<string,string>();state.vendors.forEach(v=>{const canonicalName=canonicalCoordinatorName(v.coordinatorName);if(v.coordinatorCode&&!canonicalCode.has(canonicalName))canonicalCode.set(canonicalName,v.coordinatorCode)});const vendors:CanonicalVendorResult[]=state.vendors.map(v=>{const coordinatorName=canonicalCoordinatorName(v.coordinatorName);const idealSalesToday=totalDays>0?v.salesTarget*(workedDays/totalDays):0;const idealPositivationToday=totalDays>0?v.positivityTarget*(workedDays/totalDays):0;const positivityGapToTarget=Math.max(v.positivityTarget-v.totalPositivation,0);return{...v,coordinatorName,coordinatorCode:canonicalCode.get(coordinatorName)||v.coordinatorCode,idealSalesToday,salesGapToIdeal:Math.max(idealSalesToday-v.total,0),idealPositivationToday,positivityGapToIdeal:Math.max(idealPositivationToday-v.totalPositivation,0),positivityGapToTarget,positivityDailyTarget:remainingDays>0?positivityGapToTarget/remainingDays:positivityGapToTarget}});const groups=new Map<string,CanonicalVendorResult[]>();vendors.forEach(v=>{const key=v.coordinatorName||'SEM COORDENADOR';if(!groups.has(key))groups.set(key,[]);groups.get(key)!.push(v)});const coordinators=Array.from(groups.entries()).map(([name,members])=>{const salesTarget=members.reduce((s,v)=>s+v.salesTarget,0);const positivityTarget=members.reduce((s,v)=>s+v.positivityTarget,0);const invoiced=members.reduce((s,v)=>s+v.invoiced,0);const toInvoice=members.reduce((s,v)=>s+v.toInvoice,0);const total=invoiced+toInvoice;const invoicedPositivation=members.reduce((s,v)=>s+v.invoicedPositivation,0);const futurePositivation=members.reduce((s,v)=>s+v.futurePositivation,0);const totalPositivation=invoicedPositivation+futurePositivation;return{code:canonicalCode.get(name)||members[0]?.coordinatorCode||name,name,salesTarget,positivityTarget,invoiced,toInvoice,total,attainment:salesTarget>0?total/salesTarget:0,invoicedPositivation,futurePositivation,totalPositivation,positivityAttainment:positivityTarget>0?totalPositivation/positivityTarget:0,vendors:members.sort((a,b)=>b.total-a.total)}}).sort((a,b)=>b.salesTarget-a.salesTarget||b.total-a.total);return{...state,sellOut,vendors,coordinators};
 }
 
 export const DataProvider=({children}:{children:ReactNode})=>{
   const[produtosState,setProdutosState]=useState<ProdutoEstoque[]>([]);const[metricasState,setMetricasState]=useState<MetricasEstoque>(defaultMetricas);const[sellOut,setSellOutState]=useState<SellOutData|null>(null);const[canonicalBase,setCanonicalBase]=useState<CanonicalState|null>(null);const[manualConfig,setManualConfigState]=useState<ManualConfiguration>(DEFAULT_MANUAL_CONFIGURATION);const[manualConfigPersistenceError,setManualConfigPersistenceError]=useState('');const[isLoaded,setIsLoaded]=useState(false);
-  React.useEffect(()=>{
-    let cancelled=false;
-    const hydrate=async()=>{
-      const storedProdutos=readStored<ProdutoEstoque[]>('bj_produtos',[]);
-      const storedMetricas=readStored<MetricasEstoque>('bj_metricas',defaultMetricas);
-      const storedSellOut=readStored<SellOutData|null>('bj_sellout',null);
-      const storedCanonical=await loadCanonicalState(localStorage);
-      const competence=competenceFromCanonical(storedCanonical);
-      const manualLoad=loadManualConfiguration(localStorage,competence,{migrateLegacy:Boolean(storedCanonical)});
-      const storedManual=manualLoad.config;
-      const operational=loadOperationalSourceState(localStorage);
-      const operationalCanonical=storedCanonical?applyOperationalOverrides(storedCanonical,operational,storedManual).canonical:null;
-      const confirmed=loadReceiptConfirmations(localStorage,operational.entry218FileName);
-      const hydratedCanonical=operationalCanonical?applyReceiptReconciliation(operationalCanonical,operational,storedManual,confirmed).canonical:null;
-      if(hydratedCanonical){
-        void saveCanonicalState(hydratedCanonical).catch(error=>console.error('Não foi possível atualizar o cache canônico no IndexedDB.',error));
-      }
-      if(cancelled)return;
-      setProdutosState(storedProdutos);
-      setMetricasState({...defaultMetricas,...storedMetricas,metaCobertura:storedManual.coverageTargetDays});
-      setSellOutState(storedSellOut);
-      setCanonicalBase(hydratedCanonical);
-      setManualConfigState(storedManual);
-      setManualConfigPersistenceError(manualLoad.persistenceError||'');
-      setIsLoaded(Boolean(hydratedCanonical||storedSellOut||storedProdutos.length));
-    };
-    void hydrate().catch(error=>console.error('Não foi possível restaurar a base salva.',error));
-    return()=>{cancelled=true};
-  },[]);
+  React.useEffect(()=>{let cancelled=false;const hydrate=async()=>{const storedProdutos=readStored<ProdutoEstoque[]>('bj_produtos',[]);const storedMetricas=readStored<MetricasEstoque>('bj_metricas',defaultMetricas);const storedSellOut=readStored<SellOutData|null>('bj_sellout',null);const storedCanonical=await loadCanonicalState(localStorage);const competence=competenceFromCanonical(storedCanonical);const manualLoad=loadManualConfiguration(localStorage,competence,{migrateLegacy:Boolean(storedCanonical)});const storedManual=manualLoad.config;let hydratedCanonical=storedCanonical;
+      // Snapshots schema v1/v2 anteriores ainda recebem a migração legada uma única vez.
+      // Depois que a base possui UnifiedDataLayer, reaplicar overrides/receipt aqui criaria
+      // uma segunda autoridade e alteraria os números após os motores.
+      if(storedCanonical&&!isUnifiedCanonicalState(storedCanonical)){const operational=loadOperationalSourceState(localStorage);const operationalCanonical=applyOperationalOverrides(storedCanonical,operational,storedManual).canonical;const confirmed=loadReceiptConfirmations(localStorage,operational.entry218FileName);hydratedCanonical=applyReceiptReconciliation(operationalCanonical,operational,storedManual,confirmed).canonical;void saveCanonicalState(hydratedCanonical).catch(error=>console.error('Não foi possível atualizar o cache canônico legado no IndexedDB.',error));}
+      if(cancelled)return;setProdutosState(storedProdutos);setMetricasState({...defaultMetricas,...storedMetricas,metaCobertura:storedManual.coverageTargetDays});setSellOutState(storedSellOut);setCanonicalBase(hydratedCanonical);setManualConfigState(storedManual);setManualConfigPersistenceError(manualLoad.persistenceError||'');setIsLoaded(Boolean(hydratedCanonical||storedSellOut||storedProdutos.length));};void hydrate().catch(error=>console.error('Não foi possível restaurar a base salva.',error));return()=>{cancelled=true};},[]);
   const activeCompetence=useMemo(()=>competenceFromCanonical(canonicalBase),[canonicalBase]);
-  const canonical=useMemo(()=>{
-    const normalized=normalizeCanonicalTeam(applyManualConfiguration(canonicalBase,manualConfig),manualConfig);
-    if(!normalized||!manualConfigPersistenceError)return normalized;
-    return{...normalized,warnings:Array.from(new Set([...normalized.warnings,manualConfigPersistenceError]))};
-  },[canonicalBase,manualConfig,manualConfigPersistenceError]);
+  const canonical=useMemo(()=>{const normalized=normalizeCanonicalTeam(applyManualConfiguration(canonicalBase,manualConfig),manualConfig);if(!normalized||!manualConfigPersistenceError)return normalized;return{...normalized,warnings:Array.from(new Set([...normalized.warnings,manualConfigPersistenceError]))};},[canonicalBase,manualConfig,manualConfigPersistenceError]);
   const produtos=useMemo<ProdutoEstoque[]>(()=>canonical?canonical.inventory.map(item=>({codigo:item.code,descricao:item.description,ean:item.ean,quantidade:item.quantity,saldoMinimo:0,custoUnitario:item.costUnit,vendaUnitario:item.saleUnit,entradas:0,saidas:0,saldoPedido:item.pendingQty,saldoPedidoCaixas:item.pendingCases,saldoPedidoValorCusto:item.pendingCost,saldoPedidoValorVenda:item.pendingSale,isLancamento:item.isLaunch,hasWinthor:item.hasWinthor,factoryCode:item.factoryCode,physicalCases:item.physicalCases,physicalUnits:item.physicalUnits,grossKg:item.grossKg})):produtosState,[canonical,produtosState]);
   const metricas=useMemo<MetricasEstoque>(()=>canonical?{valorEstoqueCompra:canonical.stock.costValue,valorEstoqueVenda:canonical.stock.saleValue,saldoPedidoCusto:canonical.stock.pendingPurchaseCost,saldoPedidoVenda:canonical.stock.pendingPurchaseSale,coberturaDiasAtual:canonical.stock.coverageCurrentDays,coberturaEstoqueMaisSaldo:canonical.stock.coverageProjectedDays,coberturaDiasAtualCusto:canonical.stock.coverageCostCurrentDays,coberturaEstoqueMaisSaldoCusto:canonical.stock.coverageCostProjectedDays,produtosRuptura:canonical.inventory.filter(item=>item.hasWinthor&&item.quantity<=0).length,metaCobertura:canonical.stock.coverageTargetDays}:metricasState,[canonical,metricasState]);
-  const setProdutos=(newProdutos:ProdutoEstoque[])=>{setProdutosState(newProdutos);safeLocalStorageWrite(localStorage,'bj_produtos',JSON.stringify(newProdutos));if(newProdutos.length>0)setIsLoaded(true)};
-  const setMetricas=(newMetricas:MetricasEstoque)=>{const normalized={...defaultMetricas,...newMetricas,metaCobertura:manualConfig.coverageTargetDays};setMetricasState(normalized);safeLocalStorageWrite(localStorage,'bj_metricas',JSON.stringify(normalized))};
-  const setSellOut=(data:SellOutData|null)=>{setSellOutState(data);if(data){safeLocalStorageWrite(localStorage,'bj_sellout',JSON.stringify(data));setIsLoaded(true)}else localStorage.removeItem('bj_sellout')};
-  const setCanonical=(data:CanonicalState|null)=>{
-    const nextCompetence=competenceFromCanonical(data);
-    setCanonicalBase(data);
-    if(data){
-      localStorage.removeItem(LEGACY_CANONICAL_KEY);
-      void saveCanonicalState(data).catch(error=>console.error('Não foi possível persistir a base canônica no IndexedDB.',error));
-      if(nextCompetence&&nextCompetence!==activeCompetence){
-        const nextLoad=loadManualConfiguration(localStorage,nextCompetence);
-        const nextConfig=nextLoad.config;
-        setManualConfigState(nextConfig);
-        setManualConfigPersistenceError(nextLoad.persistenceError||'');
-        setMetricasState(current=>({...current,metaCobertura:nextConfig.coverageTargetDays}));
-      }
-      setIsLoaded(true);
-    }else{
-      setManualConfigPersistenceError('');
-      void clearCanonicalState(localStorage);
-    }
-  };
-  const setManualConfig=(config:ManualConfiguration)=>{
-    const normalized=normalizeManualConfiguration(config);
-    setManualConfigState(normalized);
-    if(activeCompetence){
-      try{saveManualConfiguration(localStorage,activeCompetence,normalized);setManualConfigPersistenceError('')}
-      catch(error){const message=`Configuração ${activeCompetence}: falha ao persistir alterações (${error instanceof Error?error.message:'erro desconhecido'}).`;setManualConfigPersistenceError(message);console.error(message,error)}
-    }
-    setMetricasState(current=>({...current,metaCobertura:normalized.coverageTargetDays}));
-  };
+  const setProdutos=(newProdutos:ProdutoEstoque[])=>{setProdutosState(newProdutos);safeLocalStorageWrite(localStorage,'bj_produtos',JSON.stringify(newProdutos));if(newProdutos.length>0)setIsLoaded(true)};const setMetricas=(newMetricas:MetricasEstoque)=>{const normalized={...defaultMetricas,...newMetricas,metaCobertura:manualConfig.coverageTargetDays};setMetricasState(normalized);safeLocalStorageWrite(localStorage,'bj_metricas',JSON.stringify(normalized))};const setSellOut=(data:SellOutData|null)=>{setSellOutState(data);if(data){safeLocalStorageWrite(localStorage,'bj_sellout',JSON.stringify(data));setIsLoaded(true)}else localStorage.removeItem('bj_sellout')};
+  const setCanonical=(data:CanonicalState|null)=>{const nextCompetence=competenceFromCanonical(data);setCanonicalBase(data);if(data){localStorage.removeItem(LEGACY_CANONICAL_KEY);void saveCanonicalState(data).catch(error=>console.error('Não foi possível persistir a base canônica no IndexedDB.',error));if(nextCompetence&&nextCompetence!==activeCompetence){const nextLoad=loadManualConfiguration(localStorage,nextCompetence);const nextConfig=nextLoad.config;setManualConfigState(nextConfig);setManualConfigPersistenceError(nextLoad.persistenceError||'');setMetricasState(current=>({...current,metaCobertura:nextConfig.coverageTargetDays}))}setIsLoaded(true)}else{setManualConfigPersistenceError('');void clearCanonicalState(localStorage)}};
+  const setManualConfig=(config:ManualConfiguration)=>{const normalized=normalizeManualConfiguration(config);setManualConfigState(normalized);if(activeCompetence){try{saveManualConfiguration(localStorage,activeCompetence,normalized);setManualConfigPersistenceError('')}catch(error){const message=`Configuração ${activeCompetence}: falha ao persistir alterações (${error instanceof Error?error.message:'erro desconhecido'}).`;setManualConfigPersistenceError(message);console.error(message,error)}}setMetricasState(current=>({...current,metaCobertura:normalized.coverageTargetDays}))};
   return <DataContext.Provider value={{produtos,setProdutos,metricas,setMetricas,sellOut,setSellOut,canonical,setCanonical,manualConfig,setManualConfig,isLoaded}}>{children}</DataContext.Provider>;
 };
 
