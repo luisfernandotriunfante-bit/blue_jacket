@@ -2,9 +2,9 @@ export * from './stockModelCore';
 
 import type { CanonicalInventoryProduct, CanonicalProductSupport } from './canonical';
 import type { UnitsPerCaseSource } from './packaging';
+import type { ReceiptHeaderRecord, ReceiptItemRecord } from './unified';
 import { buildStockPresentation as buildCore } from './stockModelCore';
 import type { StockMovement, StockPresentationInput as CoreStockPresentationInput, StockPresentation, StockReconciliationCheck } from './stockModelCore';
-import { operationalReceiptMovements } from '../services/operationalSources';
 
 export interface StockItemCodeSupport { internalCode: string; ean: string; factoryCode: string; }
 export interface StockPortfolioLine {
@@ -30,7 +30,11 @@ type InventoryWithPackaging = CanonicalInventoryProduct & {
   physicalSource105?: boolean;
   portfolioLines?: StockPortfolioLine[];
 };
-export type StockPresentationInputWithPackaging = CoreStockPresentationInput & { itemCodeSupport?: StockItemCodeSupport[] };
+export type StockPresentationInputWithPackaging = CoreStockPresentationInput & {
+  itemCodeSupport?: StockItemCodeSupport[];
+  receiptHeaders?: ReceiptHeaderRecord[];
+  receiptItems?: ReceiptItemRecord[];
+};
 
 const clean = (value: unknown) => String(value ?? '').replace(/\D/g, '').replace(/^0+/, '');
 const cleanCode = (value: unknown) => String(value ?? '').trim().replace(/^0+/, '');
@@ -152,9 +156,46 @@ function enrichPortfolioMovements(result: StockPresentation, inventory: Canonica
   return { ...result, movements };
 }
 
-function enrichRealizedReceiptMovements(result: StockPresentation): StockPresentation {
-  const receipts = operationalReceiptMovements();
-  if (!receipts.length) return result;
+/**
+ * Entrada realizada é uma projeção exclusiva de RECEIPT_HEADER + RECEIPT_ITEM.
+ * Nenhum estado paralelo de operationalSources participa da tela após a materialização do motor.
+ */
+function enrichCanonicalReceiptMovements(result: StockPresentation, headers: ReceiptHeaderRecord[], items: ReceiptItemRecord[]): StockPresentation {
+  if (!items.length) return result;
+  const headerById = new Map(headers.map(header => [header.receiptId, header]));
+  const productByCode = new Map(result.products.map(product => [cleanCode(product.code), product]));
+  const receipts: StockMovement[] = items.map((item, index) => {
+    const header = headerById.get(item.receiptId);
+    const lookupCode = cleanCode(item.winthorProductCode || item.itemCanonicalId);
+    const product = productByCode.get(lookupCode);
+    const totalUnits = Math.max(Number(item.receivedUnits) || 0, 0);
+    const factor = Math.max(Number(product?.unitsPerCase) || 0, 0);
+    const cases = factor > 0 ? Math.floor((totalUnits + 0.001) / factor) : 0;
+    const looseUnits = factor > 0 ? Math.max(totalUnits - cases * factor, 0) : 0;
+    const invoice = header?.invoiceRaw || header?.invoiceNormalized || '';
+    return {
+      id: `218:${item.receiptId}:${item.winthorProductCode || item.itemCanonicalId}:${index}`,
+      direction: 'ENTRADA',
+      stage: 'REALIZADA',
+      kind: 'ENTRADA_REALIZADA',
+      status: 'Entrada realizada',
+      movement: 'Recebimento NF',
+      date: header?.receiptDate || '',
+      document: invoice,
+      order: '',
+      invoice,
+      sku: product?.code || item.winthorProductCode || item.itemCanonicalId,
+      ean: product?.ean || '',
+      product: product?.description || item.description,
+      partner: header?.supplier || 'Colgate',
+      partnerDocument: header?.supplierCnpj || '',
+      cases,
+      looseUnits,
+      totalUnits,
+      value: totalUnits * Math.max(Number(item.unitPrice) || 0, 0),
+      origin: 'RECEIPT_ITEM · 218',
+    };
+  });
   const existingIds = new Set(result.movements.map(movement => movement.id));
   const movements = [...receipts.filter(movement => !existingIds.has(movement.id)), ...result.movements]
     .sort((left, right) => { if (left.date && right.date && left.date !== right.date) return right.date.localeCompare(left.date); if (left.date && !right.date) return -1; if (!left.date && right.date) return 1; return left.id.localeCompare(right.id); });
@@ -196,15 +237,22 @@ function enrichReconciliation(result: StockPresentation): StockPresentation {
 
 export function buildStockPresentation(input: StockPresentationInputWithPackaging) {
   const restoredInventory = restoreLaunchCatalog(input.inventory || [], input.productSupport || []);
-  const { itemCodeSupport: _itemCodeSupport, ...coreInput } = { ...input, inventory: restoredInventory };
+  const {
+    itemCodeSupport: _itemCodeSupport,
+    receiptHeaders = [],
+    receiptItems = [],
+    ...coreInput
+  } = { ...input, inventory: restoredInventory };
   const inferred105 = restoredInventory.some(item => Boolean((item as InventoryWithPackaging).physicalSource105));
   const result = buildCore({ ...coreInput, hasStock105: input.hasStock105 ?? inferred105, productSupport: input.productSupport || [] });
   return enrichReconciliation(
-    enrichRealizedReceiptMovements(
+    enrichCanonicalReceiptMovements(
       enrichPortfolioMovements(
         enrichMovementPackaging(refreshOperationalNoWinthorCount(result)),
         restoredInventory,
       ),
+      receiptHeaders,
+      receiptItems,
     ),
   );
 }
