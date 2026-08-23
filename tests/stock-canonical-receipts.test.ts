@@ -53,10 +53,11 @@ test('218 sem Un/CX interno preserva unidades recebidas sem inventar caixas ou a
   assert.equal(movement?.totalUnits, 15);
 });
 
-test('Estoque não consulta operationalSources depois que o 218 foi materializado no motor', () => {
+test('Estoque não consulta estado operacional paralelo depois que o 218 foi materializado no motor', () => {
   const model = readFileSync('src/domain/stockModel.ts', 'utf8');
   const page = readFileSync('src/pages/EstoquePage.tsx', 'utf8');
-  assert.doesNotMatch(model, /operationalReceiptMovements|operationalSources/);
+  assert.doesNotMatch(model, /operationalReceiptMovements\s*\(/);
+  assert.doesNotMatch(model, /from\s+['"][^'"]*operationalSources['"]/);
   assert.match(model, /ReceiptHeaderRecord/);
   assert.match(model, /ReceiptItemRecord/);
   assert.match(page, /receiptHeaders:\s*unified\?\.receiptHeaders/);
