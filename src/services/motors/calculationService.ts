@@ -336,7 +336,7 @@ export function buildInventoryFromUnified(unified:UnifiedDataLayer, referenceDat
   };
 }
 
-function buildNetworks(unified:UnifiedDataLayer, config:ManualConfiguration):CanonicalNetworkResult[] {
+export function buildNetworks(unified:UnifiedDataLayer, config:ManualConfiguration):CanonicalNetworkResult[] {
   const latest = new Map<string,string>();
   unified.customerClassifications.forEach(row => { if (row.premiseNetwork) latest.set(row.cnpj,row.premiseNetwork); });
   const salesByCnpj = new Map<string,SalesFactRecord[]>();
@@ -346,26 +346,35 @@ function buildNetworks(unified:UnifiedDataLayer, config:ManualConfiguration):Can
     rows.push(row);
     salesByCnpj.set(row.cnpj,rows);
   });
-  const topsByNetwork = new Map<string,typeof unified.topRetailerSnapshots>();
+  const topByCnpj = new Map<string,typeof unified.topRetailerSnapshots>();
   unified.topRetailerSnapshots.forEach(row => {
-    const key = row.topRetailerNetwork || 'SEM_REDE_TOP';
-    const rows = topsByNetwork.get(key) || [];
+    const rows = topByCnpj.get(row.cnpj) || [];
     rows.push(row);
-    topsByNetwork.set(key,rows);
+    topByCnpj.set(row.cnpj,rows);
   });
+
+  // Rede Premissas é a taxonomia operacional do agrupamento. Roteiro é preservado
+  // somente como linhagem Top e nunca é equiparado por semelhança de nome.
+  const allCnpjs = new Set<string>([
+    ...latest.keys(),
+    ...salesByCnpj.keys(),
+    ...unified.topRetailerSnapshots.map(row => row.cnpj).filter(Boolean),
+  ]);
   const networks = new Map<string,string[]>();
-  latest.forEach((network,cnpj) => {
+  allCnpjs.forEach(cnpj => {
+    const network = latest.get(cnpj) || 'SEM REDE';
     const rows = networks.get(network) || [];
     rows.push(cnpj);
     networks.set(network,rows);
   });
+
   return Array.from(networks.entries()).map(([name,cnpjs]) => {
     const rows = cnpjs.flatMap(cnpj => salesByCnpj.get(cnpj) || []);
     const invoiced = sum(rows.filter(row => row.salesStatus === 'FATURADO'),row => row.value);
     const total = sum(rows,row => row.value);
-    const key = normalizeText(name) || name;
-    const target = Math.max(config.networkTargets[key] ?? config.networkTargets[name] ?? 0,0);
-    const topRows = topsByNetwork.get(name) || [];
+    const key = name === 'SEM REDE' ? 'SEM REDE' : (normalizeText(name) || name);
+    const target = name === 'SEM REDE' ? 0 : Math.max(config.networkTargets[key] ?? config.networkTargets[name] ?? 0,0);
+    const topRows = cnpjs.flatMap(cnpj => topByCnpj.get(cnpj) || []);
     const topTarget = sum(topRows,row => row.target);
     const stores:CanonicalNetworkStore[] = topRows.map(store => {
       const storeSales = salesByCnpj.get(store.cnpj) || [];
@@ -379,6 +388,7 @@ function buildNetworks(unified:UnifiedDataLayer, config:ManualConfiguration):Can
         groupingCode: store.groupCode,
         tier: store.topCategory,
         storeType: store.storeType,
+        routeNetwork: store.topRetailerNetwork,
         topTarget: store.target,
         invoiced: storeInvoiced,
         toInvoice: sum(storeSales,row => row.value) - storeInvoiced,
