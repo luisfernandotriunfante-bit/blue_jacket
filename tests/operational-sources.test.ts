@@ -26,6 +26,20 @@ test('PCTABPR sem PVENDA1 é rejeitada sem fallback silencioso para PTABELA', ()
   assert.throws(() => parseWinthorTablePrices(rows), /CODPROD\/PVENDA1/);
 });
 
+test('PCTABPR ignora mesmo CODPROD fora de NUMREGIAO=11 mesmo quando CODFILIAL ou nome parecem MCD', () => {
+  const rows = [
+    ['CODPROD', 'NUMREGIAO', 'REGIAO', 'CODFILIAL', 'STATUSREGIAO', 'PVENDA1'],
+    [5924, 11, 'REGIAO 11', 11, 'A', 46.32],
+    [5924, 95, 'TABELA CAMPO GRANDE - MCD 2', 11, 'A', 45.39],
+  ];
+  assert.deepEqual(parseWinthorTablePrices(rows), { '5924': 46.32 });
+});
+
+test('PCTABPR exige NUMREGIAO e não usa CODFILIAL como substituto', () => {
+  const rows = [['CODPROD','CODFILIAL','STATUSREGIAO','PVENDA1'],[5924,11,'A',46.32]];
+  assert.throws(() => parseWinthorTablePrices(rows), /NUMREGIAO/i);
+});
+
 test('PCTABPR consolida PVENDA1 elegível repetido quando os valores são iguais',()=>{
   const rows=[['CODPROD','NUMREGIAO','STATUSREGIAO','PVENDA1'],[565,11,'A',20.27],[565,11,'A',20.27]];
   assert.deepEqual(parseWinthorTablePrices(rows),{'565':20.27});

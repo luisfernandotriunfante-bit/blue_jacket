@@ -144,29 +144,25 @@ export function parseWinthorTablePrices(rows: unknown[][]): Record<string, numbe
   const col = (name: string) => header.findIndex(value => value === name);
   const codeCol = col('CODPROD');
   const regionCol = col('NUMREGIAO');
-  const branchCol = col('CODFILIAL');
-  const regionNameCol = col('REGIAO');
   const statusCol = col('STATUSREGIAO');
   const price1Col = col('PVENDA1');
+  if (regionCol < 0) throw new Error('Tabela de Preços Winthor: campo obrigatório NUMREGIAO não encontrado.');
   const prices: Record<string, number> = {};
   for (let i = headerIndex + 1; i < rows.length; i++) {
     const row = rows[i];
     const code = cleanCode(row[codeCol]);
     if (!/^\d+$/.test(code)) continue;
-    const region = regionCol >= 0 ? cleanCode(row[regionCol]) : '';
-    const branch = branchCol >= 0 ? cleanCode(row[branchCol]) : '';
-    const regionName = regionNameCol >= 0 ? normalizeText(row[regionNameCol]) : '';
+    const region = cleanCode(row[regionCol]);
     const status = statusCol >= 0 ? normalizeText(row[statusCol]) : 'A';
-    const isMcdCampoGrande = region === '11' || branch === '11' || regionName.includes('CAMPO GRANDE') && regionName.includes('MCD');
-    if (!isMcdCampoGrande || (status && status !== 'A')) continue;
+    if (region !== '11' || (status && status !== 'A')) continue;
     const rawPrice = parseNumber(row[price1Col]);
     const price = Math.round((rawPrice + Number.EPSILON) * 100) / 100;
     if (price <= 0) continue;
     const existing = prices[code];
-    if (existing !== undefined && Math.abs(existing - price) > 0.005) throw new Error(`Tabela de Preços Winthor: conflito para CODPROD ${code}; preços elegíveis ${existing.toFixed(2)} e ${price.toFixed(2)}. Nenhum critério "última linha vence" foi aplicado.`);
+    if (existing !== undefined && Math.abs(existing - price) > 0.005) throw new Error(`Tabela de Preços Winthor: conflito para CODPROD ${code} dentro da NUMREGIAO=11; preços elegíveis ${existing.toFixed(2)} e ${price.toFixed(2)}. Nenhum critério "última linha vence" foi aplicado.`);
     prices[code] = price;
   }
-  if (!Object.keys(prices).length) throw new Error('Tabela de Preços Winthor: nenhum Preço 1 (PVENDA1) ativo da região MCD/Campo Grande foi encontrado.');
+  if (!Object.keys(prices).length) throw new Error('Tabela de Preços Winthor: nenhum PVENDA1 ativo com NUMREGIAO=11 foi encontrado.');
   return prices;
 }
 
@@ -301,8 +297,12 @@ export async function prepareOperationalSources(files: File[], storage?: Storage
   for (const file of files) {
     const supplemental = supplementalSourceKind(file.name);
     if (supplemental === 'winthorTablePrices') {
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-      state = { ...state, persistenceError: undefined, tablePriceFileName: file.name, tablePrices: parseWinthorTablePrices(firstRows(workbook)) };
+      try {
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        state = { ...state, persistenceError: undefined, tablePriceFileName: file.name, tablePrices: parseWinthorTablePrices(firstRows(workbook)) };
+      } catch (error) {
+        throw new Error(`${file.name}: ${error instanceof Error ? error.message : 'falha ao processar PCTABPR'}`);
+      }
       continue;
     }
     if (supplemental === 'entryNotes218') {
