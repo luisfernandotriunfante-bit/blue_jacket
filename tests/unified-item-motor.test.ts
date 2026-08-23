@@ -65,6 +65,21 @@ test('Motor de Itens preserva layout compacto aprovado de 286 e 105', () => {
   assert.equal(item.salePricePvenDa1, 11.46, 'PVENDA1 região 11 deve prevalecer sobre P.Venda do 105');
 });
 
+test('Cadastro 286 prioriza assinatura Winthor filial 11 + código na coluna 1 mesmo com cabeçalho ambíguo', () => {
+  const header = Array(21).fill('');
+  header[0] = 'Código'; header[1] = 'Produto'; header[2] = 'Descrição'; header[17] = 'Barras'; header[18] = 'Fábrica';
+  const cadastro = Array(21).fill('');
+  cadastro[0] = '11'; cadastro[1] = 857; cadastro[2] = 'ED COLG COLORS'; cadastro[17] = '7509546688091'; cadastro[18] = '61036090';
+  const stock = Array(10).fill('');
+  stock[0] = 857; stock[1] = 'ED COLG COLORS'; stock[4] = 1812; stock[6] = 8.864053; stock[9] = 20.27;
+
+  const result = runItemMotor({ normalized286Rows: [header, cadastro], stock105Rows: [stock], stock8013Rows: [], priceListRows: [], launchRows: [], pctabprWorkbook: null, previousItems: [] });
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].winthorCode, '857');
+  assert.equal(result.items[0].physicalStockUnits, 1812);
+  assert.equal(result.qualityIssues.some(issue => issue.code === 'STOCK_105_CODE_NOT_IN_ITEM_MASTER'), false);
+});
+
 test('Motor de Itens reconhece layout expandido atual do 105 com P. Venda pontuado', () => {
   const header = ['Código','Descrição','','','Emb.','','','FL','Qt.Est.','Master','Real+ICMS','','Real','Financ.','P. Venda','','Pr. Comp.'];
   const row = [893,'SAB LIQ PROTEX PRO SER HIALURON','','','01X250ML','','','N',1099,91.5833333333,8.0448,'',8.0448,8.0448,13.1,'',9.349692];
