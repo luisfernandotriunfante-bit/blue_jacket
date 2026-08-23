@@ -31,12 +31,16 @@ test('serviço de cálculo não usa base.inventory como fallback de negócio', (
   assert.match(source, /saleUnit:item\.salePricePvenDa1/);
 });
 
-test('motor unificado recebe 105, lançamentos e Bússola diretamente', () => {
+test('motor unificado recebe 105, lançamentos, PCTABPR e Bússola diretamente', () => {
   const source = read('src/services/motors/unifiedEngine.ts');
-  assert.match(source, /stock105Rows:await rows\(is105\)/);
-  assert.match(source, /launchRows:await rows\(isLaunchList\)/);
-  assert.match(source, /compassWorkbook:await workbook\(isCompass\)/);
-  assert.doesNotMatch(source, /inventory:base\.inventory/);
-  assert.doesNotMatch(source, /sales:base\.transactions/);
-  assert.doesNotMatch(source, /support:base\.support/);
+  assert.match(source, /runItemMotor\s*\(/);
+  assert.match(source, /stock105Rows\s*:\s*await\s+rows\(is105\)/);
+  assert.match(source, /launchRows\s*:\s*await\s+rows\(isLaunchList\)/);
+  assert.match(source, /pctabprWorkbook\s*:\s*await\s+workbook\(isPctabpr\)/);
+  assert.match(source, /runSalesMotor\s*\(/);
+  assert.match(source, /compassWorkbook\s*:\s*await\s+workbook\(isCompass\)/);
+  assert.doesNotMatch(source, /processCanonicalFiles/);
+  assert.doesNotMatch(source, /inventory\s*:\s*base\.inventory/);
+  assert.doesNotMatch(source, /sales\s*:\s*base\.transactions/);
+  assert.doesNotMatch(source, /support\s*:\s*base\.support/);
 });
