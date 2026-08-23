@@ -66,16 +66,16 @@ export async function clearCanonicalState(_storage?: LocalStorageLike | null): P
       db.close();
     }
   } catch {
-    // Navegadores sem IndexedDB começam sem snapshot persistido.
+    // Limpeza é best-effort em navegadores sem IndexedDB.
   }
 }
 
+/**
+ * Ausência de registro retorna null; falha de acesso/leitura é propagada para que a UI
+ * não trate persistência corrompida ou indisponível como se o usuário nunca tivesse carregado dados.
+ */
 export async function loadCanonicalState(_storage?: LocalStorageLike | null): Promise<CanonicalState | null> {
-  try {
-    return await readIndexedCanonical();
-  } catch {
-    return null;
-  }
+  return readIndexedCanonical();
 }
 
 export function safeLocalStorageWrite(storage: LocalStorageLike | null | undefined, key: string, value: string): boolean {
