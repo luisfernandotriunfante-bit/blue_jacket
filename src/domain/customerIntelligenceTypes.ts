@@ -3,7 +3,7 @@ export type OpportunityPriority = 'MAXIMA' | 'MUITO_ALTA' | 'ALTA' | 'MEDIA' | '
 export type AvailabilityStatus = 'DISPONIVEL' | 'SOMENTE_CARTEIRA' | 'SEM_ESTOQUE' | 'SEM_WINTHOR' | 'DESCONTINUADO' | 'MIGRACAO';
 export type LineageStatus = 'MIGRACAO_VIGENTE' | 'MIGRACAO_FUTURA' | 'DESCONTINUADO';
 export type PromotionStatus = 'ATIVA' | 'FUTURA' | 'EXPIRADA' | 'SEM_FONTE_ESTRUTURADA';
-export type CommercialPackagingSource = '105_DERIVED' | 'PRICE_LIST' | 'TABELA_OFICIAL' | 'UNKNOWN' | 'CONFLICT';
+export type CommercialPackagingSource = '8013' | '105_DERIVED' | 'PRICE_LIST' | 'TABELA_OFICIAL' | 'UNKNOWN' | 'CONFLICT';
 export interface AssortmentRecommendation { channel:string; value:number; }
 export interface OfficialAssortmentSku { ean:string; colgateSku:string; winthorCode:string; description:string; categoryMaster:string; category:string; subcategory:string; brand:string; subbrand:string; segment:string; subsegment:string; contents:string; amount:string; promoPack:string; launchLabel:string; lifecycleStatus:string; recommendations:AssortmentRecommendation[]; sourceSheet:string; }
 export interface AssortmentCompetence { key:string; label:string; validFrom:string; validTo:string; sourceSheet:string; products:OfficialAssortmentSku[]; expectedTotalsByChannel:Record<string,{total:number;mandatory:number;important:number}>; }

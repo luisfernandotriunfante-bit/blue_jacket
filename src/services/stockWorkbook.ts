@@ -1,60 +1,123 @@
 import * as XLSX from 'xlsx';
-import type { CanonicalState } from '../domain/canonical';
+import type { CanonicalInventoryProduct, CanonicalState } from '../domain/canonical';
+import { buildStockPresentation } from '../domain/stockModel';
 
 export interface CanonicalStockWorkbookSummary {
   skuCount: number;
   launchCount: number;
   physicalUnits: number;
+  reservedUnits: number;
+  availableUnits: number;
   pendingUnits: number;
   projectedUnits: number;
+  costValue: number;
   saleValue: number;
+  availableCostValue: number;
+  availableSaleValue: number;
+  projectedCostValue: number;
   projectedSaleValue: number;
 }
 
+function stockPresentationFromState(state: CanonicalState) {
+  return buildStockPresentation({
+    inventory: state.inventory,
+    productSupport: state.support.products,
+    itemCodeSupport: state.support.itemCodes,
+    transactions: state.transactions,
+    businessDaysElapsed: state.sellOut.businessDaysElapsed,
+    stockCostValue: state.stock.costValue,
+    stockSaleValue: state.stock.saleValue,
+    hasStock105: state.sources.some(source => source.kind === 'stock105' && source.loaded)
+      || state.inventory.some(item => Boolean((item as CanonicalInventoryProduct & { physicalSource105?: boolean }).physicalSource105)),
+  });
+}
+
+function inventoryIndex(state: CanonicalState) {
+  return new Map(state.inventory.map(item => [item.code, item]));
+}
+
 export function summarizeCanonicalStockWorkbook(state: CanonicalState): CanonicalStockWorkbookSummary {
-  return state.inventory.reduce<CanonicalStockWorkbookSummary>((summary, item) => {
-    summary.skuCount += 1;
-    if (item.isLaunch) summary.launchCount += 1;
-    summary.physicalUnits += Number(item.quantity) || 0;
-    summary.pendingUnits += Number(item.pendingQty) || 0;
-    summary.projectedUnits += (Number(item.quantity) || 0) + (Number(item.pendingQty) || 0);
-    summary.saleValue += (Number(item.quantity) || 0) * (Number(item.saleUnit) || 0);
-    summary.projectedSaleValue += ((Number(item.quantity) || 0) * (Number(item.saleUnit) || 0)) + (Number(item.pendingSale) || 0);
-    return summary;
-  }, { skuCount: 0, launchCount: 0, physicalUnits: 0, pendingUnits: 0, projectedUnits: 0, saleValue: 0, projectedSaleValue: 0 });
+  const presentation = stockPresentationFromState(state);
+  const rawByCode = inventoryIndex(state);
+  let availableCostValue = 0;
+  let availableSaleValue = 0;
+  let projectedCostValue = 0;
+  let projectedSaleValue = 0;
+  for (const product of presentation.products) {
+    const raw = rawByCode.get(product.code);
+    const availableCost = product.availableUnits * product.costUnit;
+    const availableSale = product.availableUnits * product.saleUnit;
+    const pendingCost = Number(raw?.pendingCost) || 0;
+    const pendingSale = Number(raw?.pendingSale) || 0;
+    availableCostValue += availableCost;
+    availableSaleValue += availableSale;
+    projectedCostValue += availableCost + pendingCost;
+    projectedSaleValue += availableSale + pendingSale;
+  }
+  return {
+    skuCount: presentation.summary.skuCount,
+    launchCount: presentation.summary.launchCount,
+    physicalUnits: presentation.summary.physicalUnits,
+    reservedUnits: presentation.summary.reservedUnits,
+    availableUnits: presentation.summary.availableUnits,
+    pendingUnits: presentation.summary.pendingUnits,
+    projectedUnits: presentation.summary.projectedUnits,
+    costValue: presentation.summary.costValue,
+    saleValue: presentation.summary.saleValue,
+    availableCostValue,
+    availableSaleValue,
+    projectedCostValue,
+    projectedSaleValue,
+  };
 }
 
 export function buildCanonicalStockWorkbook(state: CanonicalState): XLSX.WorkBook {
-  const rows = state.inventory.map(item => ({
-    'Código Winthor': item.hasWinthor && !item.code.startsWith('EAN-') ? item.code : '',
-    'Código Fabricante': item.factoryCode || '',
-    EAN: item.ean || '',
-    Produto: item.description || '',
-    'Un/CX': item.physicalCases && item.physicalCases > 0 && item.physicalUnits && item.physicalUnits > 0
-      ? item.physicalUnits / item.physicalCases
-      : '',
-    'Estoque Físico (un.)': Number(item.quantity) || 0,
-    'Estoque Físico (cx)': Number(item.physicalCases) || 0,
-    'Carteira (un.)': Number(item.pendingQty) || 0,
-    'Carteira (cx)': Number(item.pendingCases) || 0,
-    'Estoque Projetado (un.)': (Number(item.quantity) || 0) + (Number(item.pendingQty) || 0),
-    'Custo Unitário': Number(item.costUnit) || 0,
-    'PVENDA1': Number(item.saleUnit) || 0,
-    'Valor Estoque a Venda': (Number(item.quantity) || 0) * (Number(item.saleUnit) || 0),
-    'Valor Carteira a Venda': Number(item.pendingSale) || 0,
-    'Potencial Projetado': ((Number(item.quantity) || 0) * (Number(item.saleUnit) || 0)) + (Number(item.pendingSale) || 0),
-    Lançamento: item.isLaunch ? 'SIM' : 'NÃO',
-    'Possui Winthor': item.hasWinthor ? 'SIM' : 'NÃO',
-  }));
+  const presentation = stockPresentationFromState(state);
+  const rawByCode = inventoryIndex(state);
+  const rows = presentation.products.map(product => {
+    const raw = rawByCode.get(product.code);
+    const pendingSale = Number(raw?.pendingSale) || 0;
+    const pendingCost = Number(raw?.pendingCost) || 0;
+    const availableSale = product.availableUnits * product.saleUnit;
+    const availableCost = product.availableUnits * product.costUnit;
+    return {
+      'Código Winthor': product.hasWinthor && !product.code.startsWith('EAN-') ? product.code : '',
+      'Código Fabricante': product.factoryCode || '',
+      EAN: product.ean || '',
+      Produto: product.description || '',
+      'Un/CX Interno · 8013': product.unitsPerCase > 0 ? product.unitsPerCase : '',
+      'Un/CX Indústria · Lista Colgate': product.industryUnitsPerCase > 0 ? product.industryUnitsPerCase : '',
+      'Estoque Físico 105 (un.)': product.physicalTotalUnits,
+      'Estoque Físico (cx completas)': product.physicalCases,
+      'Unidades Avulsas': product.looseUnits,
+      'Reservado · 8022 A Faturar': product.reservedUnits,
+      'Disponível (un.)': product.availableUnits,
+      'Carteira (un.)': product.pendingUnits,
+      'Carteira (cx)': product.pendingCases,
+      'Estoque Projetado (un.)': product.projectedUnits,
+      'Custo Unitário': product.costUnit,
+      PVENDA1: product.saleUnit,
+      'Valor Estoque Físico a Venda': product.positionSaleValue,
+      'Valor Disponível a Venda': availableSale,
+      'Valor Disponível a Custo': availableCost,
+      'Valor Carteira a Venda': pendingSale,
+      'Valor Carteira a Custo': pendingCost,
+      'Potencial Projetado a Venda': availableSale + pendingSale,
+      'Potencial Projetado a Custo': availableCost + pendingCost,
+      Lançamento: product.isLaunch ? 'SIM' : 'NÃO',
+      'Possui Winthor': product.hasWinthor ? 'SIM' : 'NÃO',
+    };
+  });
 
   const workbook = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(rows);
-  sheet['!autofilter'] = { ref: sheet['!ref'] || 'A1:Q1' };
+  sheet['!autofilter'] = { ref: sheet['!ref'] || 'A1:Y1' };
   sheet['!cols'] = [
-    { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 52 }, { wch: 10 },
-    { wch: 18 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 22 },
-    { wch: 16 }, { wch: 14 }, { wch: 22 }, { wch: 22 }, { wch: 22 },
-    { wch: 12 }, { wch: 14 },
+    { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 52 }, { wch: 20 },
+    { wch: 24 }, { wch: 22 }, { wch: 24 }, { wch: 16 }, { wch: 24 },
+    { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 22 }, { wch: 16 },
+    { wch: 14 }, { wch: 26 }, { wch: 24 }, { wch: 24 }, { wch: 22 },
+    { wch: 22 }, { wch: 26 }, { wch: 26 }, { wch: 12 }, { wch: 14 },
   ];
   XLSX.utils.book_append_sheet(workbook, sheet, 'Estoque');
 
