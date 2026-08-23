@@ -31,24 +31,30 @@ const blankItem=(winthor='',ean='',sku=''):ItemMasterRecord=>({
 
 function parse286(rows:Row[]):Detailed286[]{
   const result:Detailed286[]=[];if(!rows.length)return result;
-  const headerIndex=rows.findIndex(row=>{const n=row.map(headerToken);return n.includes('CODIGO')&&n.includes('DESCRICAO')&&n.includes('BARRAS')&&n.includes('FABRICA')});
-  if(headerIndex>=0){
-    const h=rows[headerIndex].map(headerToken);const col=(...names:string[])=>{for(const name of names){const found=h.indexOf(headerToken(name));if(found>=0)return found}return-1};
-    const cCode=col('Código'),cDesc=col('Descrição'),cEan=col('Barras'),cFactory=col('Fábrica'),cPhysical=col('Físico'),cBlocked=col('Bloq.'),cReserved=col('Reserv.'),cAvailable=col('Disp.');
-    for(let i=headerIndex+1;i<rows.length;i++){
-      const row=rows[i];const code=cleanCode(row[cCode]);if(!/^\d+$/.test(code))continue;
-      result.push({code,description:String(row[cDesc]??'').trim(),ean:validBarcode(row[cEan]),factoryCode:cleanCode(row[cFactory]),physical:cPhysical>=0?parseNumber(row[cPhysical]):0,blocked:cBlocked>=0?parseNumber(row[cBlocked]):0,reserved:cReserved>=0?parseNumber(row[cReserved]):0,available:cAvailable>=0?parseNumber(row[cAvailable]):0});
-    }
-  } else {
-    // Layout compacto aprovado em agosto/2026: 21 colunas úteis, sem cabeçalho.
-    // Mantemos também os índices do layout expandido como fallback defensivo.
-    for(const row of rows){
-      if(String(row[0]??'').trim()!=='11')continue;const code=cleanCode(row[1]);if(!/^\d+$/.test(code))continue;
+
+  // Layouts Winthor 286 aprovados: filial na coluna 0 e Código do produto na coluna 1.
+  // Esta assinatura estrutural tem precedência sobre cabeçalhos genéricos, porque alguns relatórios
+  // exibem um cabeçalho "Código" sobre a coluna da filial e poderiam transformar a filial 11 em SKU.
+  const positionalRows=rows.filter(row=>String(row[0]??'').trim()==='11'&&/^\d+$/.test(cleanCode(row[1])));
+  if(positionalRows.length){
+    for(const row of positionalRows){
+      const code=cleanCode(row[1]);
       const compact=row.length<=22;
       const ean=validBarcode(compact?row[17]:row[20])||validBarcode(row[17])||validBarcode(row[20]);
       const factoryCode=cleanCode(compact?row[18]:row[23])||cleanCode(row[18])||cleanCode(row[23]);
       result.push({code,description:String(row[2]??'').trim(),ean,factoryCode,physical:parseNumber(compact?row[7]:row[10]),blocked:parseNumber(compact?row[8]:row[11]),reserved:parseNumber(compact?row[9]:row[12]),available:parseNumber(compact?row[10]:row[13])});
     }
+    return result;
+  }
+
+  const headerIndex=rows.findIndex(row=>{const n=row.map(headerToken);return n.includes('CODIGO')&&n.includes('DESCRICAO')&&n.includes('BARRAS')&&n.includes('FABRICA')});
+  if(headerIndex>=0){
+    const h=rows[headerIndex].map(headerToken);const col=(...names:string[])=>{for(const name of names){const found=h.indexOf(headerToken(name));if(found>=0)return found}return-1};
+    const cCode=col('Código'),cDesc=col('Descrição'),cEan=col('Barras'),cFactory=col('Fábrica'),cPhysical=col('Físico'),cBlocked=col('Bloq.'),cReserved=col('Reserv.'),cAvailable=col('Disp.');
+    if(cCode>=0){for(let i=headerIndex+1;i<rows.length;i++){
+      const row=rows[i];const code=cleanCode(row[cCode]);if(!/^\d+$/.test(code))continue;
+      result.push({code,description:cDesc>=0?String(row[cDesc]??'').trim():'',ean:cEan>=0?validBarcode(row[cEan]):'',factoryCode:cFactory>=0?cleanCode(row[cFactory]):'',physical:cPhysical>=0?parseNumber(row[cPhysical]):0,blocked:cBlocked>=0?parseNumber(row[cBlocked]):0,reserved:cReserved>=0?parseNumber(row[cReserved]):0,available:cAvailable>=0?parseNumber(row[cAvailable]):0});
+    }}
   }
   if(!result.length)throw new Error('Cadastro 286: nenhum produto válido foi reconhecido nos layouts aprovado compacto ou expandido.');
   return result;
