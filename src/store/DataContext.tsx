@@ -45,7 +45,13 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       setManualConfigState(manualLoad.config);
       setManualConfigPersistenceError(manualLoad.persistenceError || '');
     };
-    void hydrate().catch(error => console.error('Não foi possível restaurar a base canônica.', error));
+    void hydrate().catch(error => {
+      if (cancelled) return;
+      const message = `Persistência da Base Unificada: não foi possível restaurar o snapshot (${error instanceof Error ? error.message : 'erro desconhecido'}). Reprocesse as fontes em Configurações; o sistema não tratou a falha como base vazia válida.`;
+      setCanonicalBase(null);
+      setDataNotice(message);
+      console.error('Não foi possível restaurar a base canônica.', error);
+    });
     return () => { cancelled = true; };
   }, []);
 
@@ -66,7 +72,11 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     setCanonicalBase(data);
     if (data) {
       setDataNotice('');
-      void saveCanonicalState(data).catch(error => console.error('Não foi possível persistir a base canônica no IndexedDB.', error));
+      void saveCanonicalState(data).catch(error => {
+        const message = `Persistência da Base Unificada: a fotografia atual está em memória, mas não pôde ser salva (${error instanceof Error ? error.message : 'erro desconhecido'}). Uma atualização da página exigirá reprocessar as fontes.`;
+        setDataNotice(message);
+        console.error('Não foi possível persistir a base canônica no IndexedDB.', error);
+      });
       if (nextCompetence && nextCompetence !== activeCompetence) {
         const nextLoad = loadManualConfiguration(localStorage, nextCompetence, { migrateLegacy: false });
         setManualConfigState(nextLoad.config);
