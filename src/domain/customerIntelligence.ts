@@ -184,7 +184,7 @@ function packagingSourceFor(state: CanonicalState, stockProduct: StockProductVie
   const raw = state.inventory.find(item => cleanCode(item.code) === cleanCode(stockProduct.code)
     || (cleanDigits(item.ean) && cleanDigits(item.ean) === cleanDigits(stockProduct.ean))
     || (cleanCode(item.factoryCode) && cleanCode(item.factoryCode) === cleanCode(stockProduct.factoryCode))) as (CanonicalInventoryProduct & { internalUnitsPerCase?:number|null }) | undefined;
-  if ((raw?.internalUnitsPerCase || 0) > 0) return '105_DERIVED';
+  if ((raw?.internalUnitsPerCase || 0) > 0) return '8013';
   return stockProduct.unitsPerCase > 0 ? 'PRICE_LIST' : 'UNKNOWN';
 }
 
