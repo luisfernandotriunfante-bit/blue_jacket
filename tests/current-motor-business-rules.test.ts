@@ -35,6 +35,23 @@ test('Carteira sem Un/CX industrial preserva caixas e não inventa unidades',()=
   assert.equal(result.qualityIssues.some(issue=>issue.code==='INDUSTRIAL_PACK_MISSING'),true);
 });
 
+test('218 reduz somente o pipeline correspondente e materializa recebimento parcial no Motor de Vendas',()=>{
+  const rows=[
+    ['Order Date','Customer Number','Customer Name','Order Number','Material','Description','Order Qty','Bill Qty','Net Value ( ZINV )','Nota Fiscal Number','Billing Type','Billing Date','Gross Weight'],
+    ['2026-08-20','1','Milenio','902','MAT1','Produto',2,3,100,'123','ZINV','2026-08-21',0],
+  ];
+  const receiptState={...operational,
+    currentInvoices:[{invoice:'123',invoiceRaw:'123',invoiceNormalized:'123',invoiceSeries:'',entryDate:'2026-08-22',issueDate:'2026-08-21',totalValue:20,source:'218'}],
+    receiptItems:[{invoice:'123',invoiceRaw:'123',invoiceNormalized:'123',invoiceSeries:'',entryDate:'2026-08-22',issueDate:'2026-08-21',sku:'100',product:'Produto',units:12,unitPrice:10,supplierName:'Colgate',supplierDocument:''}],
+  } as any;
+  const result=buildInboundFacts(rows,[item()],receiptState);
+  assert.equal(result.inboundOrders[0].pipelineUnits,60);
+  assert.equal(result.inboundOrders[0].receivedUnits,12);
+  assert.equal(result.inboundOrders[0].remainingInTransitUnits,48);
+  assert.equal(result.inboundOrders[0].inboundStatus,'PARTIALLY_RECEIVED');
+  assert.equal(result.receiptItems[0].inboundMatchStatus,'PARTIAL');
+});
+
 test('Lançamento é redefinido exclusivamente pela lista oficial por EAN',()=>{
   const prior=item({isLaunch:false});
   const result=runItemMotor({normalized286Rows:[],stock105Rows:[],stock8013Rows:[],priceListRows:[],launchRows:[['EAN'],['7891000000011']],pctabprWorkbook:null,previousItems:[prior]});
