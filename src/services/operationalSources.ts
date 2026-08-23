@@ -137,7 +137,7 @@ function firstRows(workbook: XLSX.WorkBook): unknown[][] {
 export function parseWinthorTablePrices(rows: unknown[][]): Record<string, number> {
   const headerIndex = rows.findIndex(row => {
     const normalized = row.map(normalizeText);
-    return normalized.includes('CODPROD') && (normalized.includes('PVENDA1') || normalized.includes('PTABELA'));
+    return normalized.includes('CODPROD') && normalized.includes('PVENDA1');
   });
   if (headerIndex < 0) throw new Error('Tabela de Preços Winthor: cabeçalho CODPROD/PVENDA1 não encontrado.');
   const header = rows[headerIndex].map(normalizeText);
@@ -148,8 +148,6 @@ export function parseWinthorTablePrices(rows: unknown[][]): Record<string, numbe
   const regionNameCol = col('REGIAO');
   const statusCol = col('STATUSREGIAO');
   const price1Col = col('PVENDA1');
-  const legacyTableCol = col('PTABELA');
-  const tableCol = price1Col >= 0 ? price1Col : legacyTableCol;
   const prices: Record<string, number> = {};
   for (let i = headerIndex + 1; i < rows.length; i++) {
     const row = rows[i];
@@ -161,7 +159,7 @@ export function parseWinthorTablePrices(rows: unknown[][]): Record<string, numbe
     const status = statusCol >= 0 ? normalizeText(row[statusCol]) : 'A';
     const isMcdCampoGrande = region === '11' || branch === '11' || regionName.includes('CAMPO GRANDE') && regionName.includes('MCD');
     if (!isMcdCampoGrande || (status && status !== 'A')) continue;
-    const rawPrice = parseNumber(row[tableCol]);
+    const rawPrice = parseNumber(row[price1Col]);
     const price = Math.round((rawPrice + Number.EPSILON) * 100) / 100;
     if (price <= 0) continue;
     const existing = prices[code];
