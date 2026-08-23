@@ -59,12 +59,12 @@ test('218 não depende mais da lista de confirmações armazenada', () => { cons
 
 test('218 ignora itens anteriores a 01/08/2026', () => { const operational = state({ legacy: false }); operational.receiptItems[0].entryDate = '2026-07-31'; const result = applyReceiptReconciliation(baseCanonical(), operational, config); assert.equal(result.canonical.inventory[0].pendingQty, 1000); assert.equal(result.canonical.stock.pendingPurchaseCost, 10000); assert.equal(result.audit.confirmedItems, 0); });
 
-test('configurações usa o 218 como autoridade automática e mantém tabela de auditoria item a item', () => {
+test('configurações usa o 218 como autoridade canônica e mantém tabela de auditoria item a item', () => {
   const page = fs.readFileSync(new URL('../src/pages/ConfiguracoesPage.tsx', import.meta.url), 'utf8');
   assert.match(page, /Autoridade do recebimento físico/);
   assert.match(page, /Auditoria item a item do 218/);
-  assert.match(page, /aplicado automaticamente/i);
-  assert.match(page, /ABATIDO AUTOMATICAMENTE/);
+  assert.match(page, /baixa canônica ocorre dentro do Motor de Vendas\/Operação/);
+  assert.match(page, /MOTOR 218/);
   assert.doesNotMatch(page, /Aplicar confirmações/);
 });
 
