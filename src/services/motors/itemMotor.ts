@@ -23,10 +23,16 @@ export interface ItemMotorResult { items:ItemMasterRecord[]; qualityIssues:DataQ
 
 function parse286(rows:Row[]):Detailed286[]{
   const result:Detailed286[]=[];
-  for(const row of rows){
-    if(String(row[0]??'').trim()!=='11')continue; const code=cleanCode(row[1]); if(!/^\d+$/.test(code))continue;
-    result.push({code,description:String(row[2]??'').trim(),ean:validBarcode(row[20]),factoryCode:cleanCode(row[23]),physical:parseNumber(row[10]),blocked:parseNumber(row[11]),reserved:parseNumber(row[12]),available:parseNumber(row[13])});
+  const headerIndex=rows.findIndex(row=>{const n=row.map(normalizeText);return n.includes('CODIGO')&&n.includes('DESCRICAO')&&n.includes('BARRAS')&&n.includes('FABRICA')});
+  if(headerIndex>=0){
+    const h=rows[headerIndex].map(normalizeText);const col=(...names:string[])=>{for(const name of names){const found=h.indexOf(normalizeText(name));if(found>=0)return found}return-1};
+    const cCode=col('Código'),cDesc=col('Descrição'),cEan=col('Barras'),cFactory=col('Fábrica'),cPhysical=col('Físico'),cBlocked=col('Bloq.'),cReserved=col('Reserv.'),cAvailable=col('Disp.');
+    for(let i=headerIndex+1;i<rows.length;i++){const row=rows[i];const code=cleanCode(row[cCode]);if(!/^\d+$/.test(code))continue;result.push({code,description:String(row[cDesc]??'').trim(),ean:validBarcode(row[cEan]),factoryCode:cleanCode(row[cFactory]),physical:cPhysical>=0?parseNumber(row[cPhysical]):0,blocked:cBlocked>=0?parseNumber(row[cBlocked]):0,reserved:cReserved>=0?parseNumber(row[cReserved]):0,available:cAvailable>=0?parseNumber(row[cAvailable]):0})}
+    return result;
   }
+  // Compatibilidade com a matriz normalizada da versão anterior. O fallback é
+  // posicional somente para o formato interno conhecido, nunca para um layout bruto desconhecido.
+  for(const row of rows){if(String(row[0]??'').trim()!=='11')continue;const code=cleanCode(row[1]);if(!/^\d+$/.test(code))continue;result.push({code,description:String(row[2]??'').trim(),ean:validBarcode(row[20]||row[17]),factoryCode:cleanCode(row[23]||row[18]),physical:parseNumber(row[10]||row[7]),blocked:parseNumber(row[11]||row[8]),reserved:parseNumber(row[12]||row[9]),available:parseNumber(row[13]||row[10])})}
   return result;
 }
 
@@ -43,12 +49,10 @@ function parseInternalPack(rows:Row[]):Map<string,number>{
 }
 
 export function parsePctabprRegion11(workbook:XLSX.WorkBook|null):Map<string,PriceRecord>{
-  const map=new Map<string,PriceRecord>(); if(!workbook)return map; const sheet=workbook.Sheets['pctabpr']; if(!sheet)throw new Error('PCTABPR: a aba bruta "pctabpr" é obrigatória; Planilha1 filtrada não é fonte canônica.');
-  const rows=sheetRows({SheetNames:['pctabpr'],Sheets:{pctabpr:sheet}} as XLSX.WorkBook,'pctabpr'); const headerIndex=rows.findIndex(row=>{const n=row.map(normalizeText);return n.includes('CODPROD')&&n.includes('NUMREGIAO')&&n.includes('PVENDA1')}); if(headerIndex<0)throw new Error('PCTABPR: cabeçalho bruto CODPROD/NUMREGIAO/PVENDA1 não encontrado.');
+  const map=new Map<string,PriceRecord>();if(!workbook)return map;const sheet=workbook.Sheets['pctabpr'];if(!sheet)throw new Error('PCTABPR: a aba bruta "pctabpr" é obrigatória; Planilha1 filtrada não é fonte canônica.');
+  const rows=sheetRows({SheetNames:['pctabpr'],Sheets:{pctabpr:sheet}} as XLSX.WorkBook,'pctabpr');const headerIndex=rows.findIndex(row=>{const n=row.map(normalizeText);return n.includes('CODPROD')&&n.includes('NUMREGIAO')&&n.includes('PVENDA1')});if(headerIndex<0)throw new Error('PCTABPR: cabeçalho bruto CODPROD/NUMREGIAO/PVENDA1 não encontrado.');
   const h=rows[headerIndex].map(normalizeText);const col=(name:string)=>h.indexOf(name);const cCode=col('CODPROD'),cRegion=col('NUMREGIAO'),cPv1=col('PVENDA1'),cPv=col('PVENDA'),cSt=col('VLST'),cBranch=col('CODFILIAL'),cName=col('REGIAO');
-  for(let i=headerIndex+1;i<rows.length;i++){const row=rows[i];if(cleanCode(row[cRegion])!=='11')continue;const code=cleanCode(row[cCode]);if(!/^\d+$/.test(code))continue;const record={pVenda1:parseNumber(row[cPv1]),pVenda:parseNumber(row[cPv]),vlSt:parseNumber(row[cSt])};const prior=map.get(code);if(prior&&Math.abs(prior.pVenda1-record.pVenda1)>.005)throw new Error(`PCTABPR região 11: conflito de PVENDA1 para CODPROD ${code}.`);map.set(code,record);
-    const branch=cleanCode(row[cBranch]);const regionName=normalizeText(row[cName]);if(branch&&branch!=='11'&&!regionName.includes('CAMPO GRANDE')){/* validação contextual, não redefine o filtro NUMREGIAO=11 */}
-  }
+  for(let i=headerIndex+1;i<rows.length;i++){const row=rows[i];if(cleanCode(row[cRegion])!=='11')continue;const code=cleanCode(row[cCode]);if(!/^\d+$/.test(code))continue;const record={pVenda1:parseNumber(row[cPv1]),pVenda:parseNumber(row[cPv]),vlSt:parseNumber(row[cSt])};const prior=map.get(code);if(prior&&Math.abs(prior.pVenda1-record.pVenda1)>.005)throw new Error(`PCTABPR região 11: conflito de PVENDA1 para CODPROD ${code}.`);map.set(code,record);const branch=cleanCode(row[cBranch]);const regionName=normalizeText(row[cName]);if(branch&&branch!=='11'&&!regionName.includes('CAMPO GRANDE')){/* somente auditoria contextual; NUMREGIAO=11 continua sendo o filtro */}}
   return map;
 }
 
