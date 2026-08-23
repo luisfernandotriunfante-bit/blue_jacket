@@ -1,24 +1,24 @@
 import { useState } from 'react';
 import { useData } from '../store/DataContext';
 import { downloadSellOutDocument, downloadTopNetworksDocument } from '../services/documentGenerator';
-import { downloadLegacyStockReport } from '../services/legacyStockReport';
-import { summarizeLegacyStockReport } from '../services/legacyStockReportSummary';
-import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
+import { downloadCanonicalStockWorkbook, summarizeCanonicalStockWorkbook } from '../services/stockWorkbook';
+import { PanelAlert, PanelCard, PanelEmptyState, PanelInfoRow, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const fmtInt = (value: number) => Math.round(value || 0).toLocaleString('pt-BR');
 
 export function DocumentosPage() {
   const { canonical } = useData();
-  const [generating, setGenerating] = useState<'painel'|'redes'|'estoque'|null>(null);
+  const [generating, setGenerating] = useState<'painel' | 'redes' | 'estoque' | null>(null);
   const [error, setError] = useState('');
 
   if (!canonical) {
     return (
       <PanelPage title="Documentos">
         <PanelEmptyState
-          icon="▤"
+          variant="page"
           title="Base ainda não processada"
-          description="Carregue os relatórios em Configurações. Os documentos serão gerados pela mesma base canônica usada no sistema."
+          description="Carregue as fontes em Configurações. Os documentos serão gerados pela mesma base canônica usada no sistema."
         />
       </PanelPage>
     );
@@ -27,14 +27,15 @@ export function DocumentosPage() {
   const sourceCount = canonical.sources.filter(source => source.loaded).length;
   const officialNetworks = canonical.networks.filter(network => network.key !== 'SEM REDE');
   const networkCount = officialNetworks.filter(network => network.networkTarget > 0 || network.topTarget > 0 || network.total > 0).length;
-  const stockReportSummary = summarizeLegacyStockReport(canonical);
+  const stockSummary = summarizeCanonicalStockWorkbook(canonical);
 
-  const generate = async (kind:'painel'|'redes'|'estoque') => {
-    setGenerating(kind); setError('');
+  const generate = async (kind: 'painel' | 'redes' | 'estoque') => {
+    setGenerating(kind);
+    setError('');
     try {
       if (kind === 'painel') await downloadSellOutDocument(canonical);
       else if (kind === 'redes') await downloadTopNetworksDocument(canonical);
-      else downloadLegacyStockReport(canonical);
+      else downloadCanonicalStockWorkbook(canonical);
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : 'Não foi possível gerar o arquivo.');
     } finally {
@@ -48,86 +49,76 @@ export function DocumentosPage() {
       metricLabel="Referência"
       metricValue={new Date(`${canonical.referenceDate}T12:00:00`).toLocaleDateString('pt-BR')}
     >
-      <div className="panel-grid panel-grid-2">
-        <PanelCard>
-          <PanelSectionHeader
-            eyebrow="ENTREGA DIÁRIA"
-            title="Painel Sell Out MILENIO"
-            description="Consolida Sell Out, metas, positivação, movimento diário, linhas, equipe e estoque usando a base canônica atual."
-          />
-          <div style={{ display: 'grid', gap: '8px', margin: '20px 0' }}>
-            <Info label="Sell Out total" value={fmtBRL(canonical.sellOut.total)} />
-            <Info label="Meta T&C" value={fmtBRL(canonical.sellOut.sellOutTarget)} />
-            <Info label="Meta indústria" value={fmtBRL(canonical.industryTarget)} />
-            <Info label="Carteira / estoque em trânsito" value={fmtBRL(canonical.stock.pendingPurchaseCost)} />
-          </div>
-          <button className="panel-primary-button" disabled={generating!==null} onClick={() => void generate('painel')}>
-            {generating==='painel'?'Gerando modelo padrão...':'Gerar Painel Sell Out'}
-          </button>
-        </PanelCard>
+      <div className="panel-stack">
+        <div className="panel-grid panel-grid-3">
+          <PanelCard>
+            <PanelSectionHeader
+              eyebrow="ENTREGA DIÁRIA"
+              title="Painel Sell Out MILENIO"
+              description="Consolida Sell Out, metas, positivação, movimento diário, linhas, equipe e estoque usando a base canônica atual."
+            />
+            <div>
+              <PanelInfoRow label="Sell Out total" value={fmtBRL(canonical.sellOut.total)} />
+              <PanelInfoRow label="Meta T&C" value={fmtBRL(canonical.sellOut.sellOutTarget)} />
+              <PanelInfoRow label="Meta indústria" value={fmtBRL(canonical.industryTarget)} />
+              <PanelInfoRow label="Carteira / estoque em trânsito" value={fmtBRL(canonical.stock.pendingPurchaseCost)} />
+            </div>
+            <button className="panel-primary-button" disabled={generating !== null} onClick={() => void generate('painel')} style={{ marginTop: 20 }}>
+              {generating === 'painel' ? 'Gerando documento...' : 'Gerar Painel Sell Out'}
+            </button>
+          </PanelCard>
 
-        <PanelCard>
-          <PanelSectionHeader
-            eyebrow="ENTREGA DIÁRIA"
-            title="TOP REDES"
-            description="Preenche o modelo oficial com Top Redes, Loja a Loja, Equipe e abas auxiliares usando a mesma base do painel."
-          />
-          <div style={{ display: 'grid', gap: '8px', margin: '20px 0' }}>
-            <Info label="Redes apuradas" value={networkCount.toLocaleString('pt-BR')} />
-            <Info label="Meta Tops" value={fmtBRL(officialNetworks.reduce((sum, network) => sum + network.topTarget, 0))} />
-            <Info label="Realizado + A faturar" value={fmtBRL(officialNetworks.reduce((sum, network) => sum + network.total, 0))} />
-            <Info label="Arquivos válidos na base" value={sourceCount.toLocaleString('pt-BR')} />
-          </div>
-          <button className="panel-primary-button" disabled={generating!==null} onClick={() => void generate('redes')}>
-            {generating==='redes'?'Gerando modelo padrão...':'Gerar TOP REDES'}
-          </button>
-        </PanelCard>
+          <PanelCard>
+            <PanelSectionHeader
+              eyebrow="REDES"
+              title="Relatório de Redes"
+              description="Gera a visão de redes a partir das metas configuradas, Roteiro Ativo e Sell Out canônico, sem reler arquivos de origem."
+            />
+            <div>
+              <PanelInfoRow label="Redes apuradas" value={networkCount.toLocaleString('pt-BR')} />
+              <PanelInfoRow label="Meta Tops" value={fmtBRL(officialNetworks.reduce((sum, network) => sum + network.topTarget, 0))} />
+              <PanelInfoRow label="Realizado + A faturar" value={fmtBRL(officialNetworks.reduce((sum, network) => sum + network.total, 0))} />
+              <PanelInfoRow label="Fontes válidas na base" value={sourceCount.toLocaleString('pt-BR')} />
+            </div>
+            <button className="panel-primary-button" disabled={generating !== null} onClick={() => void generate('redes')} style={{ marginTop: 20 }}>
+              {generating === 'redes' ? 'Gerando documento...' : 'Gerar Relatório de Redes'}
+            </button>
+          </PanelCard>
 
-        <PanelCard>
-          <PanelSectionHeader
-            eyebrow="ESTOQUE"
-            title="Relatório de Estoque · padrão antigo"
-            description="Gera somente COD, EAN, descrição, embalagem, múltiplo, preços, estoque em caixas e lançamentos no formato antigo. O painel de Estoque não é alterado."
-          />
-          <div style={{ display: 'grid', gap: '8px', margin: '20px 0' }}>
-            <Info label="SKUs Winthor" value={stockReportSummary.skuWinthorCount.toLocaleString('pt-BR')} />
-            <Info label="Estoque CX" value={stockReportSummary.stock8013Loaded ? '8013 carregado' : '8013 não carregado · coluna ficará vazia'} />
-            <Info label="Lançamentos oficiais conciliados" value={stockReportSummary.launchCount.toLocaleString('pt-BR')} />
-            <Info label="Múltiplo / ST" value="Referência da Tabela Oficial Colgate antiga" />
-          </div>
-          <button className="panel-primary-button" disabled={generating!==null} onClick={() => void generate('estoque')}>
-            {generating==='estoque'?'Gerando relatório...':'Gerar Relatório de Estoque'}
-          </button>
-        </PanelCard>
+          <PanelCard>
+            <PanelSectionHeader
+              eyebrow="ESTOQUE"
+              title="Relatório de Estoque"
+              description="Exporta a mesma posição canônica exibida no módulo Estoque, incluindo físico, Carteira, projetado, custo, PVENDA1 e lançamentos."
+            />
+            <div>
+              <PanelInfoRow label="SKUs na posição" value={fmtInt(stockSummary.skuCount)} />
+              <PanelInfoRow label="Lançamentos" value={fmtInt(stockSummary.launchCount)} />
+              <PanelInfoRow label="Físico" value={`${fmtInt(stockSummary.physicalUnits)} un.`} />
+              <PanelInfoRow label="Projetado" value={`${fmtInt(stockSummary.projectedUnits)} un.`} />
+              <PanelInfoRow label="Potencial projetado" value={fmtBRL(stockSummary.projectedSaleValue)} />
+            </div>
+            <button className="panel-primary-button" disabled={generating !== null} onClick={() => void generate('estoque')} style={{ marginTop: 20 }}>
+              {generating === 'estoque' ? 'Gerando relatório...' : 'Gerar Relatório de Estoque'}
+            </button>
+          </PanelCard>
+        </div>
+
+        {error ? <PanelAlert tone="error">{error}</PanelAlert> : null}
+
+        {canonical.warnings.length > 0 ? (
+          <PanelCard>
+            <PanelSectionHeader
+              eyebrow="CONFERÊNCIA"
+              title="Pendências antes do fechamento"
+              description="Os arquivos podem ser gerados, mas estes pontos continuam sinalizados pelos motores para não mascarar divergências."
+            />
+            <div className="panel-stack" style={{ gap: 8 }}>
+              {canonical.warnings.map((warning, index) => <PanelAlert tone="warning" key={`${warning}-${index}`}>{warning}</PanelAlert>)}
+            </div>
+          </PanelCard>
+        ) : null}
       </div>
-
-      {error ? <div style={{color:'#fca5a5',padding:'12px 14px',border:'1px solid rgba(248,113,113,.22)',borderRadius:'10px',background:'rgba(248,113,113,.06)'}}>{error}</div> : null}
-
-      {canonical.warnings.length > 0 ? (
-        <PanelCard>
-          <PanelSectionHeader
-            eyebrow="CONFERÊNCIA"
-            title="Pendências antes do fechamento"
-            description="Os arquivos podem ser gerados, mas estes pontos continuam sinalizados pelo motor para não mascarar divergências."
-          />
-          <div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>
-            {canonical.warnings.map((warning, index) => (
-              <div key={`${warning}-${index}`} style={{ color: '#fcd34d', padding: '10px 12px', border: '1px solid rgba(245,158,11,0.2)', background: 'rgba(245,158,11,0.06)', borderRadius: '10px', fontSize: '0.82rem' }}>
-                {warning}
-              </div>
-            ))}
-          </div>
-        </PanelCard>
-      ) : null}
     </PanelPage>
-  );
-}
-
-function Info({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-      <span style={{ color: 'var(--panel-muted)', fontSize: '0.8rem' }}>{label}</span>
-      <strong style={{ color: 'white', fontSize: '0.84rem', textAlign: 'right' }}>{value}</strong>
-    </div>
   );
 }
