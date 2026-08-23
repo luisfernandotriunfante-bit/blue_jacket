@@ -58,7 +58,7 @@ test('sortimento oficial é versionado por competência e preserva controles da 
   assert.ok(parsed.lineage.some(item => item.status === 'DESCONTINUADO' && item.oldEan === '7891000077778'));
 });
 
-test('310 recompõe CNPJ em 14 dígitos e valor líquido não desconta desconto', () => {
+test('310 recompõe CNPJ e preserva Valor Compras já líquido sem abater devolução ou desconto de novo', () => {
   const workbook = { SheetNames: ['310 total 2026','Exportação PDVs (9)'], Sheets: {
     '310 total 2026': assortmentSheet([
       ['Codigo','Descricao','Volumes','QtdCompra','PesoLiquido','ValorCompras','Bonificacao','Desconto','VolumeDevolucao','PesoDevolucao','ValorDevolucoes','CNPJ','Vendedor','Agrupamento','DescricaoAgrupamento'],
@@ -73,7 +73,7 @@ test('310 recompõe CNPJ em 14 dígitos e valor líquido não desconta desconto'
   assert.equal(parsed.purchases[0].cnpj, '04594132000140');
   assert.equal(parsed.purchases[0].purchaseValue, 100);
   assert.equal(parsed.purchases[0].returnValue, 10);
-  assert.equal(parsed.purchases[0].netValue, 90);
+  assert.equal(parsed.purchases[0].netValue, 100);
   assert.equal(parsed.customers[0].assortmentChannel, 'Hiper');
 });
 
@@ -117,5 +117,5 @@ test('motor por CNPJ separa oficial, executável, lançamento, bloqueio e compra
   assert.equal(result.blockedByRegistration, 2);
   assert.equal(result.opportunities.find(item => item.ean === '7891000000011')?.opportunityPriority, 'MAXIMA');
   assert.equal(result.audit.find(item => item.id === 'historical.conformity')?.status, 'BLOCKED');
-  assert.equal(result.audit.find(item => item.id === 'purchases.net')?.status, 'OK');
+  assert.equal(result.audit.find(item => item.id === 'history.net')?.status, 'OK');
 });
