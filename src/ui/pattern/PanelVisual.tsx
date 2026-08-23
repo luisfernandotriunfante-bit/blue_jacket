@@ -36,10 +36,13 @@ export function PanelPage({
 type PanelCardProps = PropsWithChildren<{
   className?: string
   style?: CSSProperties
+  compact?: boolean
+  flush?: boolean
 }>
 
-export function PanelCard({ className = '', style, children }: PanelCardProps) {
-  return <section className={`panel-card ${className}`.trim()} style={style}>{children}</section>
+export function PanelCard({ className = '', style, compact = false, flush = false, children }: PanelCardProps) {
+  const classes = ['panel-card', compact ? 'panel-card-compact' : '', flush ? 'panel-card-flush' : '', className].filter(Boolean).join(' ')
+  return <section className={classes} style={style}>{children}</section>
 }
 
 type PanelKpiTone = 'red' | 'blue' | 'green' | 'purple' | 'amber' | 'default'
@@ -51,22 +54,9 @@ type PanelKpiProps = {
   detail?: ReactNode
 }
 
-const RED_SELL_OUT_KPIS = new Set([
-  'Sell Out Total',
-  'Faturado',
-  'A Faturar',
-  'Positivação Total',
-  'Meta Sell Out T&C',
-  'Tendência',
-  'Necessário / dia',
-  'Meta Positivação',
-])
-
 export function PanelKpi({ label, value, tone = 'default', detail }: PanelKpiProps) {
-  const effectiveTone: PanelKpiTone = RED_SELL_OUT_KPIS.has(label) ? 'red' : tone
-
   return (
-    <div className={`panel-kpi panel-kpi-${effectiveTone}`}>
+    <div className={`panel-kpi panel-kpi-${tone}`}>
       <div className="panel-kpi-glow" aria-hidden="true" />
       <div className="panel-kpi-label">{label}</div>
       <div className="panel-kpi-value">{value}</div>
@@ -95,18 +85,74 @@ export function PanelSectionHeader({ eyebrow, title, description, action }: Pane
   )
 }
 
+type EmptyStateVariant = 'page' | 'section' | 'compact'
+
 type PanelEmptyStateProps = {
   icon?: ReactNode
   title: string
   description: ReactNode
+  variant?: EmptyStateVariant
 }
 
-export function PanelEmptyState({ icon = '◇', title, description }: PanelEmptyStateProps) {
+export function PanelEmptyState({ icon = '◇', title, description, variant = 'section' }: PanelEmptyStateProps) {
   return (
-    <div className="panel-empty-state">
+    <div className={`panel-empty-state panel-empty-state-${variant}`}>
       <div className="panel-empty-icon" aria-hidden="true">{icon}</div>
       <h2>{title}</h2>
       <p>{description}</p>
+    </div>
+  )
+}
+
+type AlertTone = 'info' | 'success' | 'warning' | 'error'
+
+export function PanelAlert({ tone = 'info', children }: PropsWithChildren<{ tone?: AlertTone }>) {
+  return <div className={`panel-alert panel-alert-${tone}`}>{children}</div>
+}
+
+type PanelTabsProps<T extends string> = {
+  tabs: Array<{ id: T; label: string; disabled?: boolean }>
+  activeId: T
+  onChange: (id: T) => void
+  ariaLabel?: string
+}
+
+export function PanelTabs<T extends string>({ tabs, activeId, onChange, ariaLabel = 'Navegação da seção' }: PanelTabsProps<T>) {
+  return (
+    <div className="panel-tabs" role="tablist" aria-label={ariaLabel}>
+      {tabs.map(tab => (
+        <button
+          key={tab.id}
+          className="panel-tab"
+          type="button"
+          role="tab"
+          aria-selected={tab.id === activeId}
+          disabled={tab.disabled}
+          onClick={() => onChange(tab.id)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export function PanelStat({ label, value, note, tone = 'default' }: { label: ReactNode; value: ReactNode; note?: ReactNode; tone?: PanelKpiTone }) {
+  const toneClass = tone === 'default' ? '' : ` panel-stat-${tone}`
+  return (
+    <div className={`panel-stat${toneClass}`}>
+      <div className="panel-mini-label">{label}</div>
+      <div className="panel-stat-value">{value}</div>
+      {note ? <div className="panel-stat-note">{note}</div> : null}
+    </div>
+  )
+}
+
+export function PanelInfoRow({ label, value }: { label: ReactNode; value: ReactNode }) {
+  return (
+    <div className="panel-info-row">
+      <span className="panel-info-label">{label}</span>
+      <strong className="panel-info-value">{value}</strong>
     </div>
   )
 }
