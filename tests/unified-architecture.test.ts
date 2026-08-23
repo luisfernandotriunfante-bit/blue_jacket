@@ -10,6 +10,21 @@ test('Configurações possui um único orquestrador canônico e não reaplica ov
   assert.doesNotMatch(source, /processCanonicalFiles/);
   assert.doesNotMatch(source, /applyOperationalOverrides/);
   assert.doesNotMatch(source, /applyReceiptReconciliation/);
+  assert.doesNotMatch(source, /operationalLegacyData/);
+  assert.doesNotMatch(source, /setProdutos\s*\(/);
+  assert.doesNotMatch(source, /setMetricas\s*\(/);
+  assert.doesNotMatch(source, /setSellOut\s*\(/);
+});
+
+test('base unificada remove projeções locais legadas sem impedir hidratação de snapshots antigos', () => {
+  const source = read('src/store/DataContext.tsx');
+  assert.match(source, /clearLegacyProjectionCache/);
+  assert.match(source, /removeItem\('bj_produtos'\)/);
+  assert.match(source, /removeItem\('bj_metricas'\)/);
+  assert.match(source, /removeItem\('bj_sellout'\)/);
+  assert.match(source, /unifiedStored\?\[\]:readStored<ProdutoEstoque\[]>\('bj_produtos'/);
+  assert.match(source, /if\(isUnifiedCanonicalState\(data\)\)\{clearLegacyProjectionCache/);
+  assert.match(source, /if\(storedCanonical&&!isUnifiedCanonicalState\(storedCanonical\)\)/);
 });
 
 test('rota ativa de Clientes & Sortimento é consumidora da base unificada e não possui uploader próprio', () => {
