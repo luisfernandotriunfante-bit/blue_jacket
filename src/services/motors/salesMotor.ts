@@ -184,18 +184,24 @@ export function buildTargets(workbook: XLSX.WorkBook | null, rcas: RcaMasterReco
   return { targets, qualityIssues };
 }
 
-function receiptSource(entry218Rows: Row[], operational?: OperationalSourceState) {
+function isOperationalSourceState(value: Row[] | OperationalSourceState): value is OperationalSourceState {
+  return !Array.isArray(value);
+}
+
+function receiptSource(entry218OrOperational: Row[] | OperationalSourceState, operational?: OperationalSourceState) {
+  const compatibilityOperational = isOperationalSourceState(entry218OrOperational) ? entry218OrOperational : operational;
+  const entry218Rows = Array.isArray(entry218OrOperational) ? entry218OrOperational : [];
   if (entry218Rows.length) return parseEntryNotes218(entry218Rows);
   return {
-    invoices: operational?.currentInvoices || [],
-    items: operational?.receiptItems || [],
+    invoices: compatibilityOperational?.currentInvoices || [],
+    items: compatibilityOperational?.receiptItems || [],
   };
 }
 
 export function buildInboundFacts(
   rows: Row[],
   items: ItemMasterRecord[],
-  entry218Rows: Row[] = [],
+  entry218OrOperational: Row[] | OperationalSourceState = [],
   allowedSourceRows?: number[],
   operational?: OperationalSourceState,
 ) {
@@ -207,7 +213,8 @@ export function buildInboundFacts(
     return values.includes('ORDER DATE') && values.includes('MATERIAL') && values.includes('ORDER QTY') && values.includes('BILL QTY');
   });
 
-  const parsed218 = receiptSource(entry218Rows, operational);
+  const compatibilityOperational = isOperationalSourceState(entry218OrOperational) ? entry218OrOperational : operational;
+  const parsed218 = receiptSource(entry218OrOperational, operational);
   const receiptHeaders: ReceiptHeaderRecord[] = parsed218.invoices.map((invoice, index) => ({
     receiptId: `218:${invoice.invoiceNormalized || invoice.invoice}:${index}`,
     receiptDate: invoice.entryDate,
@@ -253,7 +260,7 @@ export function buildInboundFacts(
     received.set(key, (received.get(key) || 0) + receipt.units);
   });
 
-  const continuityRows = allowedSourceRows ?? operational?.portfolioRows.map(row => row.sourceRow);
+  const continuityRows = allowedSourceRows ?? compatibilityOperational?.portfolioRows.map(row => row.sourceRow);
   const allowed = continuityRows?.length ? new Set(continuityRows) : null;
   if (headerIndex >= 0) {
     const header = headerMap(rows[headerIndex]);
@@ -361,7 +368,7 @@ export function runSalesMotor(input: {
   const inbound = buildInboundFacts(
     input.portfolioRows,
     input.items,
-    input.entry218Rows || [],
+    input.entry218Rows || input.operational || [],
     input.portfolioAllowedSourceRows,
     input.operational,
   );
