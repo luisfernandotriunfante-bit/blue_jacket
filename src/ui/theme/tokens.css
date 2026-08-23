@@ -1,32 +1,84 @@
 :root {
-  --bj-bg-top: #262633;
-  --bj-bg-mid: #0d0d12;
-  --bj-bg-bottom: #000000;
+  color-scheme: dark;
 
-  --bj-navy: #173a63;
-  --bj-navy-soft: #285786;
-  --bj-blood: #8f1029;
-  --bj-blood-soft: #b51d3a;
+  /* Base */
+  --panel-bg: #0d1117;
+  --panel-bg-elevated: #111824;
+  --panel-bg-soft: rgba(255, 255, 255, 0.025);
+  --panel-card: rgba(255, 255, 255, 0.05);
+  --panel-card-hover: rgba(255, 255, 255, 0.07);
+  --panel-card-border: rgba(255, 255, 255, 0.10);
+  --panel-separator: rgba(255, 255, 255, 0.07);
+  --panel-overlay: rgba(4, 8, 14, 0.68);
 
-  --bj-text: #f5f8fc;
-  --bj-muted: #98a9bd;
+  /* Brand + semantic colors */
+  --panel-red: #e31b2d;
+  --panel-red-dark: #b80f20;
+  --panel-red-soft: #fca5a5;
+  --panel-red-glow: rgba(227, 27, 45, 0.18);
+  --panel-blue: #60a5fa;
+  --panel-blue-soft: #93c5fd;
+  --panel-green: #22c55e;
+  --panel-green-soft: #86efac;
+  --panel-purple: #a78bfa;
+  --panel-purple-soft: #c4b5fd;
+  --panel-amber: #f59e0b;
+  --panel-amber-soft: #fcd34d;
 
-  --bj-border: rgba(191, 211, 234, 0.22);
-  --bj-border-soft: rgba(191, 211, 234, 0.12);
-  --bj-glass: rgba(20, 31, 45, 0.28);
-  --bj-glass-soft: rgba(13, 24, 38, 0.23);
-  --bj-glass-highlight: rgba(255, 255, 255, 0.045);
-  --bj-blur: 18px;
+  /* Text */
+  --panel-text: #e7ecf4;
+  --panel-text-strong: #ffffff;
+  --panel-text-dim: #c5cedd;
+  --panel-muted: #8b9ab0;
+  --panel-muted-light: #b0bdd1;
 
-  --bj-shadow: 0 20px 48px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  --bj-shadow-nav: 0 16px 38px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  /* Typography */
+  --panel-font: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --panel-font-caption: 0.68rem;
+  --panel-font-label: 0.74rem;
+  --panel-font-body-sm: 0.78rem;
+  --panel-font-body: 0.84rem;
+  --panel-font-subtitle: 1rem;
+  --panel-font-title: clamp(1.6rem, 3vw, 2.4rem);
+  --panel-font-kpi: clamp(1.3rem, 2.5vw, 2rem);
+  --panel-weight-regular: 400;
+  --panel-weight-medium: 500;
+  --panel-weight-semibold: 600;
+  --panel-weight-bold: 700;
+  --panel-weight-heavy: 800;
+  --panel-weight-black: 900;
 
-  --bj-radius-lg: 22px;
-  --bj-radius-md: 18px;
-  --bj-radius-sm: 12px;
+  /* Spacing */
+  --panel-space-1: 4px;
+  --panel-space-2: 8px;
+  --panel-space-3: 12px;
+  --panel-space-4: 16px;
+  --panel-space-5: 20px;
+  --panel-space-6: 24px;
+  --panel-space-7: 28px;
+  --panel-space-8: 32px;
+  --panel-space-10: 40px;
+  --panel-space-14: 56px;
 
-  --bj-layer-background: 0;
-  --bj-layer-content: 2;
-  --bj-layer-tabs: 30;
-  --bj-layer-sidebar: 1000;
+  /* Shape + effects */
+  --panel-radius-xs: 8px;
+  --panel-radius-sm: 10px;
+  --panel-radius-md: 14px;
+  --panel-radius-lg: 18px;
+  --panel-radius-xl: 22px;
+  --panel-shadow: 0 8px 32px rgba(0, 0, 0, 0.40), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --panel-shadow-raised: 0 14px 38px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  --panel-blur: 24px;
+  --panel-focus: 0 0 0 3px rgba(227, 27, 45, 0.18);
+
+  /* Layers */
+  --panel-layer-content: 2;
+  --panel-layer-tabs: 30;
+  --panel-layer-sidebar: 1000;
+  --panel-layer-trigger: 1010;
+  --panel-layer-overlay: 990;
+
+  /* Layout */
+  --panel-content-max: 1540px;
+  --panel-sidebar-width: 246px;
 }
