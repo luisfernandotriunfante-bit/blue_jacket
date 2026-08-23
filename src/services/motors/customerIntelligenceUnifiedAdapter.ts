@@ -1,10 +1,21 @@
 import type { CustomerIntelligenceSupport, CustomerCommercialProfile, HistoricalPurchaseRecord } from '../../domain/customerIntelligenceTypes';
 import type { UnifiedCanonicalState } from './unifiedEngine';
 import { channelFromTier } from '../customerIntelligenceSources';
+import { normalizeText } from '../canonical/utils';
 
 const unique = (values:string[]) => Array.from(new Set(values.filter(Boolean)));
 const digits = (value:unknown) => String(value ?? '').replace(/\D/g,'');
 const code = (value:unknown) => String(value ?? '').trim().replace(/^0+/,'');
+
+function premiseCompetenceRank(value:string) {
+  const normalized=normalizeText(value);
+  const semester=normalized.match(/([12])SEM(\d{2})/);
+  const year4=normalized.match(/\b(20\d{2})\b/);
+  const quarter=normalized.match(/Q([1-4])/);
+  const year=year4?Number(year4[1]):semester?2000+Number(semester[2]):0;
+  const phase=quarter?Number(quarter[1]):semester?Number(semester[1])*2:0;
+  return year*10+phase;
+}
 
 export function customerIntelligenceFromUnified(state:UnifiedCanonicalState):CustomerIntelligenceSupport {
   const base=state.customerIntelligenceSupport;
@@ -54,7 +65,13 @@ export function customerIntelligenceFromUnified(state:UnifiedCanonicalState):Cus
   });
 
   const latestClassification=new Map<string,typeof state.unified.customerClassifications[number]>();
-  [...state.unified.customerClassifications].sort((a,b)=>a.competence.localeCompare(b.competence)).forEach(row=>latestClassification.set(row.cnpj,row));
+  state.unified.customerClassifications.forEach(row=>{
+    const current=latestClassification.get(row.cnpj);
+    if(!current){latestClassification.set(row.cnpj,row);return;}
+    const currentRank=premiseCompetenceRank(current.competence);
+    const rowRank=premiseCompetenceRank(row.competence);
+    if(rowRank>currentRank||(rowRank===currentRank&&row.competence.localeCompare(current.competence)>0)) latestClassification.set(row.cnpj,row);
+  });
   const customers:CustomerCommercialProfile[]=Array.from(latestClassification.values()).map(classification=>{
     const customer=customerByCnpj.get(classification.cnpj);const tier=classification.range;
     return{cnpj:classification.cnpj,cnpjRaw:customer?.cnpjRaw||classification.cnpj,name:customer?.customerName||'',clientCode:customer?.winthorCustomerCode||'',network:classification.premiseNetwork,environment:classification.environment,profile:classification.profile,tier,assortmentChannel:channelFromTier(tier)||'',city:customer?.city||classification.premiseCity,state:classification.premiseState,vendorCode:'',coordinatorCode:'',coordinatorName:'',source:'UNIFIED_CUSTOMER_CLASSIFICATION'};
