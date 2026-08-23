@@ -3,6 +3,8 @@ import type { UnifiedCanonicalState } from './unifiedEngine';
 import { channelFromTier } from '../customerIntelligenceSources';
 
 const unique = (values:string[]) => Array.from(new Set(values.filter(Boolean)));
+const digits = (value:unknown) => String(value ?? '').replace(/\D/g,'');
+const code = (value:unknown) => String(value ?? '').trim().replace(/^0+/,'');
 
 export function customerIntelligenceFromUnified(state:UnifiedCanonicalState):CustomerIntelligenceSupport {
   const base=state.customerIntelligenceSupport;
@@ -58,11 +60,38 @@ export function customerIntelligenceFromUnified(state:UnifiedCanonicalState):Cus
     return{cnpj:classification.cnpj,cnpjRaw:customer?.cnpjRaw||classification.cnpj,name:customer?.customerName||'',clientCode:customer?.winthorCustomerCode||'',network:classification.premiseNetwork,environment:classification.environment,profile:classification.profile,tier,assortmentChannel:channelFromTier(tier)||'',city:customer?.city||classification.premiseCity,state:classification.premiseState,vendorCode:'',coordinatorCode:'',coordinatorName:'',source:'UNIFIED_CUSTOMER_CLASSIFICATION'};
   });
 
+  // A Lista Oficial de Lançamentos já foi materializada no ITEM_MASTER por EAN. O rótulo
+  // existente no Sortimento Oficial é apenas informativo e não pode criar uma segunda autoridade.
+  const itemByEan=new Map<string,typeof state.unified.items[number]>();
+  const itemBySku=new Map<string,typeof state.unified.items[number]>();
+  const itemByWinthor=new Map<string,typeof state.unified.items[number]>();
+  state.unified.items.forEach(item=>{
+    [item.internalEan,item.industryEan].map(digits).filter(Boolean).forEach(ean=>itemByEan.set(ean,item));
+    [item.industrySku,item.manufacturerCode].map(code).filter(Boolean).forEach(sku=>itemBySku.set(sku,item));
+    if(code(item.winthorCode)) itemByWinthor.set(code(item.winthorCode),item);
+  });
+  let launchLabelOverrides=0;
+  const assortmentCompetences=base.assortmentCompetences.map(competence=>({
+    ...competence,
+    products:competence.products.map(product=>{
+      const item=(digits(product.ean)?itemByEan.get(digits(product.ean)):undefined)
+        ||(code(product.colgateSku)?itemBySku.get(code(product.colgateSku)):undefined)
+        ||(code(product.winthorCode)?itemByWinthor.get(code(product.winthorCode)):undefined);
+      const launchLabel=item?.isLaunch?'LANÇAMENTO':'';
+      if((product.launchLabel||'')!==launchLabel) launchLabelOverrides+=1;
+      return{...product,launchLabel};
+    }),
+  }));
+  const launchWarning=launchLabelOverrides
+    ? [`${launchLabelOverrides} rótulo(s) de lançamento do Sortimento Oficial foram normalizados pela Lista Oficial de Lançamentos materializada no ITEM_MASTER.`]
+    : [];
+
   return{
     ...base,
+    assortmentCompetences,
     historicalPurchases,
     customers,
     updatedAt:state.unified.generatedAt||base.updatedAt,
-    warnings:Array.from(new Set([...base.warnings,'Histórico comercial calculado exclusivamente pelo 379 canônico; o 310 permanece somente como reconciliação.'])),
+    warnings:Array.from(new Set([...base.warnings,...launchWarning,'Histórico comercial calculado exclusivamente pelo 379 canônico; o 310 permanece somente como reconciliação.'])),
   };
 }
