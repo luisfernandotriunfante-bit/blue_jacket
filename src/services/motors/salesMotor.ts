@@ -1,54 +1,377 @@
 import type * as XLSX from 'xlsx';
-import type { DataQualityIssue, InboundOrderFactRecord, ItemMasterRecord, ReceiptHeaderRecord, ReceiptItemRecord, RcaMasterRecord, SalesFactRecord, TargetFactRecord } from '../../domain/unified';
+import type {
+  DataQualityIssue,
+  InboundOrderFactRecord,
+  ItemMasterRecord,
+  ReceiptHeaderRecord,
+  ReceiptItemRecord,
+  RcaMasterRecord,
+  SalesFactRecord,
+  TargetFactRecord,
+} from '../../domain/unified';
 import type { Row } from '../canonical/runtime';
 import { cleanCode, cleanDigits, normalizeCnpj, normalizeText, parseNumber, toIsoDate } from '../canonical/utils';
 import { parseCompassTargets } from './sourceParsers';
 import { parseInvoiceIdentity } from '../../domain/invoiceIdentity';
-import { parseEntryNotes218 } from '../operationalSources';
+import { parseEntryNotes218, type OperationalSourceState } from '../operationalSources';
 
-const validCnpj=(v:string)=>/^\d{14}$/.test(v);
-const headerMap=(r:Row)=>new Map(r.map((v,i)=>[normalizeText(v),i]).filter(([k])=>Boolean(k)) as Array<[string,number]>);
-const idx=(m:Map<string,number>,...names:string[])=>{for(const n of names){const v=m.get(normalizeText(n));if(v!==undefined)return v}return-1};
-const cell=(r:Row,i:number)=>i>=0?r[i]:'';
-
-export interface SalesMotorResult { salesFacts:SalesFactRecord[]; inboundOrders:InboundOrderFactRecord[]; receiptHeaders:ReceiptHeaderRecord[]; receiptItems:ReceiptItemRecord[]; targets:TargetFactRecord[]; qualityIssues:DataQualityIssue[]; }
-
-function itemIndexes(items:ItemMasterRecord[]){return{byWinthor:new Map(items.filter(i=>i.winthorCode&&i.hasWinthor).map(i=>[i.winthorCode,i])),bySku:new Map(items.filter(i=>i.industrySku).map(i=>[i.industrySku,i])),byEan:new Map(items.flatMap(i=>[i.internalEan,i.industryEan].filter(Boolean).map(e=>[cleanDigits(e),i] as const)))};}
-
-export function parseSales8022(rows:Row[],items:ItemMasterRecord[],rcas:RcaMasterRecord[]){
-  const facts:SalesFactRecord[]=[];const qualityIssues:DataQualityIssue[]=[];if(!rows.length)return{facts,qualityIssues};
-  const hi=rows.findIndex(r=>{const v=r.map(normalizeText);return v.includes('DATA MOVIMENTO')&&v.includes('STATUS PEDIDO')&&v.includes('VALOR R$ NF')});
-  if(hi<0)return{facts,qualityIssues:[{id:'8022_SCHEMA',domain:'SALES',severity:'ERROR',code:'SALES_8022_SCHEMA_NOT_RECOGNIZED',message:'8022 sem cabeçalho transacional esperado.',source:'8022'} as DataQualityIssue]};
-  const h=headerMap(rows[hi]);const ix=itemIndexes(items);const rcaByCurrent=new Map(rcas.map(r=>[r.currentRcaCode,r]));
-  for(let i=hi+1;i<rows.length;i++){
-    const r=rows[i];const status=normalizeText(cell(r,idx(h,'STATUS PEDIDO')));if(status!=='FATURADO'&&status!=='A FATURAR')continue;const saleType=normalizeText(cell(r,idx(h,'TIPO VENDA')));if(saleType&&saleType!=='VENDA')continue;const value=parseNumber(cell(r,idx(h,'VALOR R$ NF')));if(!value)continue;
-    const rawCnpj=String(cell(r,idx(h,'CNPJ/CPF CLIENTE'))??'').trim();const nc=normalizeCnpj(rawCnpj,{declaredCnpj:rawCnpj.replace(/\D/g,'').length>=12});const cnpj=validCnpj(nc.canonical)?nc.canonical:'';const seller=cleanCode(cell(r,idx(h,'COD. VENDEDOR')));const rca=rcaByCurrent.get(seller);const winthor=cleanCode(cell(r,idx(h,'CODPROD. WINTHOR')));const sku=cleanCode(cell(r,idx(h,'CODIGO FABRICANTE')));const ean=cleanDigits(cell(r,idx(h,'EAN PRODUTO'))||cell(r,idx(h,'EAN CADASTRO')));const item=ix.byWinthor.get(winthor)||ix.bySku.get(sku)||ix.byEan.get(ean);const date=toIsoDate(cell(r,idx(h,'DATA MOVIMENTO')));
-    facts.push({salesFactId:`8022:${date}:${cleanCode(cell(r,idx(h,'NUMERO PED. WINTHOR')))}:${winthor}:${i}`,movementDate:date,customerCanonicalId:cnpj?`CNPJ:${cnpj}`:'',winthorCustomerCode:cleanCode(cell(r,idx(h,'COD. CLIENTE'))),cnpj,rcaCanonicalId:rca?.rcaCanonicalId||'',transactionRcaCode:seller,rcaAssignmentStatus:rca?'RESOLVED':seller?'NON_COLGATE':'UNRESOLVED',itemCanonicalId:item?.itemCanonicalId||'',winthorProductCode:winthor,industrySku:sku,orderWinthor:cleanCode(cell(r,idx(h,'NUMERO PED. WINTHOR'))),orderRca:cleanCode(cell(r,idx(h,'NUMERO PED. RCA'))),invoiceNumber:cleanCode(cell(r,idx(h,'NUMERO NOTA FISCAL'))),invoiceDate:toIsoDate(cell(r,idx(h,'DATA EMISSAO NF'))),rawOrderStatus:String(cell(r,idx(h,'STATUS PEDIDO'))??'').trim(),rawBlockStatus:String(cell(r,idx(h,'STATUS BLOQUEIO'))??'').trim(),salesStatus:status as SalesFactRecord['salesStatus'],units:parseNumber(cell(r,idx(h,'UNIDADES VENDIDAS'))),cases:parseNumber(cell(r,idx(h,'CAIXAS VENDIDAS'))),grossWeightKg:parseNumber(cell(r,idx(h,'PESO BRUTO KG'))),netWeightKg:parseNumber(cell(r,idx(h,'PESO LIQUIDO KG'))),weightTons:parseNumber(cell(r,idx(h,'PESO T'))),value,saleType:String(cell(r,idx(h,'TIPO VENDA'))??'').trim(),line:'',source:'8022'});
-    if(!cnpj)qualityIssues.push({id:`8022_CNPJ:${i}`,domain:'SALES',severity:'WARNING',code:'SALES_CUSTOMER_UNRESOLVED',message:'Venda preservada sem CNPJ canônico; não conta em positivação.',source:'8022',entityKey:rawCnpj});
-    if(!item)qualityIssues.push({id:`8022_ITEM:${i}`,domain:'SALES',severity:'WARNING',code:'SALES_ITEM_UNRESOLVED',message:'Venda preservada sem ITEM_MASTER resolvido.',source:'8022',entityKey:winthor||sku||ean});
-    if(seller&&!rca)qualityIssues.push({id:`8022_RCA:${i}`,domain:'RCA',severity:'WARNING',code:'SALES_RCA_NOT_OFFICIAL',message:'Venda preservada, mas o vendedor não está no RCA_MASTER oficial.',source:'8022',entityKey:seller});
+const validCnpj = (value: string) => /^\d{14}$/.test(value);
+const headerMap = (row: Row) => new Map(row.map((value, index) => [normalizeText(value), index]).filter(([key]) => Boolean(key)) as Array<[string, number]>);
+const idx = (map: Map<string, number>, ...names: string[]) => {
+  for (const name of names) {
+    const value = map.get(normalizeText(name));
+    if (value !== undefined) return value;
   }
-  return{facts,qualityIssues};
+  return -1;
+};
+const cell = (row: Row, index: number) => index >= 0 ? row[index] : '';
+
+export interface SalesMotorResult {
+  salesFacts: SalesFactRecord[];
+  inboundOrders: InboundOrderFactRecord[];
+  receiptHeaders: ReceiptHeaderRecord[];
+  receiptItems: ReceiptItemRecord[];
+  targets: TargetFactRecord[];
+  qualityIssues: DataQualityIssue[];
 }
 
-export function buildTargets(workbook:XLSX.WorkBook|null,rcas:RcaMasterRecord[],referenceDate:string){
-  const qualityIssues:DataQualityIssue[]=[];if(!workbook)return{targets:[] as TargetFactRecord[],qualityIssues};const byLegacy=new Map(rcas.filter(r=>r.legacyRcaCode).map(r=>[r.legacyRcaCode,r]));const competence=referenceDate.slice(0,7);
-  const targets=parseCompassTargets(workbook).map((raw,index)=>{const legacyRcaCode=cleanCode(raw.oldCode);const rca=byLegacy.get(legacyRcaCode);if(!rca)qualityIssues.push({id:`TARGET_RCA:${legacyRcaCode}:${index}`,domain:'TARGET',severity:'WARNING',code:'TARGET_UNASSIGNED_RCA',message:'Meta preservada no total da indústria sem RCA oficial resolvido.',source:'BUSSOLA',entityKey:legacyRcaCode});return{targetFactId:`BUSSOLA:${competence}:${legacyRcaCode}:${index}`,competence,industry:'COLGATE',legacyRcaCode,rcaCanonicalId:rca?.rcaCanonicalId||'',salesTarget:Number(raw.salesTarget)||0,positivityTarget:Number(raw.positivityTarget)||0,assignmentStatus:rca?'RESOLVED':'UNRESOLVED_RCA',source:'BUSSOLA'} as TargetFactRecord});
-  return{targets,qualityIssues};
+function itemIndexes(items: ItemMasterRecord[]) {
+  return {
+    byWinthor: new Map(items.filter(item => item.winthorCode && item.hasWinthor).map(item => [item.winthorCode, item])),
+    bySku: new Map(items.filter(item => item.industrySku).map(item => [item.industrySku, item])),
+    byEan: new Map(items.flatMap(item => [item.internalEan, item.industryEan].filter(Boolean).map(ean => [cleanDigits(ean), item] as const))),
+  };
 }
 
-export function buildInboundFacts(rows:Row[],items:ItemMasterRecord[],entry218Rows:Row[]=[],allowedSourceRows?:number[]){
-  const qualityIssues:DataQualityIssue[]=[];const ix=itemIndexes(items);const inboundOrders:InboundOrderFactRecord[]=[];const hi=rows.findIndex(r=>{const v=r.map(normalizeText);return v.includes('ORDER DATE')&&v.includes('MATERIAL')&&v.includes('ORDER QTY')&&v.includes('BILL QTY')});
-  const parsed218=parseEntryNotes218(entry218Rows);
-  const receiptHeaders:ReceiptHeaderRecord[]=parsed218.invoices.map((n,i)=>({receiptId:`218:${n.invoiceNormalized||n.invoice}:${i}`,receiptDate:n.entryDate,entryTransactionNumber:'',invoiceRaw:n.invoiceRaw||n.invoice,invoiceNormalized:n.invoiceNormalized||n.invoice,entryType:'',series:n.invoiceSeries||'',invoiceIssueDate:n.issueDate,branch:'',supplier:'COLGATE',supplierCnpj:'',uf:'',totalValue:n.totalValue,ipiValue:0,source:'218'}));
-  const receiptId=new Map(receiptHeaders.map(h=>[h.invoiceNormalized,h.receiptId]));const receiptItems:ReceiptItemRecord[]=parsed218.items.map((r,i)=>{const item=ix.byWinthor.get(cleanCode(r.sku));return{receiptId:receiptId.get(r.invoiceNormalized||r.invoice)||`218:${r.invoiceNormalized||r.invoice}:${i}`,itemCanonicalId:item?.itemCanonicalId||'',winthorProductCode:cleanCode(r.sku),description:r.product,branch:'',pack:'',unit:'UN',receivedUnits:r.units,unitPrice:r.unitPrice,previousFinancialCost:0,currentFinancialCost:0,fiscalCode:'',operationCode:'',inboundMatchStatus:'UNMATCHED'}});
-  const received=new Map<string,number>();parsed218.items.forEach(r=>{const item=ix.byWinthor.get(cleanCode(r.sku));const key=`${r.invoiceNormalized||r.invoice}|${item?.itemCanonicalId||cleanCode(r.sku)}`;received.set(key,(received.get(key)||0)+r.units)});
-  const allowed=allowedSourceRows?.length?new Set(allowedSourceRows):null;
-  if(hi>=0){const h=headerMap(rows[hi]);for(let i=hi+1;i<rows.length;i++){if(allowed&&!allowed.has(i+1))continue;const r=rows[i];const material=cleanCode(cell(r,idx(h,'Material')));const orderQty=Math.max(parseNumber(cell(r,idx(h,'Order Qty'))),0);const billQty=Math.max(parseNumber(cell(r,idx(h,'Bill Qty'))),0);const netValue=Math.max(parseNumber(cell(r,idx(h,'Net Value ( ZINV )'))),0);if(!material||(orderQty<=0&&billQty<=0&&netValue<=0))continue;const item=ix.bySku.get(material)||ix.byWinthor.get(material);const factor=item?.industryUnitsPerCase||null;const cases=orderQty+billQty;const units=factor?cases*factor:null;const invoiceRaw=String(cell(r,idx(h,'Nota Fiscal Number'))??'').trim();const invoiceNormalized=parseInvoiceIdentity(invoiceRaw).normalized;const receivedUnits=invoiceNormalized?(received.get(`${invoiceNormalized}|${item?.itemCanonicalId||material}`)||0):0;const remaining=units===null?null:Math.max(units-receivedUnits,0);let status:InboundOrderFactRecord['inboundStatus']='OPEN_INBOUND';if(billQty>0&&receivedUnits<=0)status='BILLED_BY_COLGATE_IN_TRANSIT';else if(receivedUnits>0&&units!==null&&receivedUnits<units)status='PARTIALLY_RECEIVED';else if(receivedUnits>0&&units!==null&&receivedUnits>=units)status='RECEIVED_BY_MILENIO';else if(orderQty>0&&billQty===0)status='ORDERED_FROM_COLGATE';inboundOrders.push({inboundFactId:`CARTEIRA:${cleanCode(cell(r,idx(h,'Order Number')))}:${material}:${i}`,orderDate:toIsoDate(cell(r,idx(h,'Order Date'))),colgateCustomerNumber:cleanCode(cell(r,idx(h,'Customer Number'))),orderNumber:cleanCode(cell(r,idx(h,'Order Number'))),itemCanonicalId:item?.itemCanonicalId||'',industrySku:material,orderQtyCases:orderQty,billQtyCases:billQty,pipelineQtyCases:cases,pipelineUnits:units,netValue,invoiceRaw,invoiceNormalized,billingType:String(cell(r,idx(h,'Billing Type'))??'').trim(),billingDate:toIsoDate(cell(r,idx(h,'Billing Date'))),grossWeight:parseNumber(cell(r,idx(h,'Gross Weight'))),receivedUnits,remainingInTransitUnits:remaining,inboundStatus:status,source:'CARTEIRA_COLGATE'});if(!item)qualityIssues.push({id:`INBOUND_ITEM:${i}`,domain:'INBOUND',severity:'WARNING',code:'INBOUND_ITEM_UNRESOLVED',message:'Linha da Carteira preservada sem ITEM_MASTER resolvido.',source:'CARTEIRA_COLGATE',entityKey:material});if(cases>0&&!factor)qualityIssues.push({id:`INBOUND_PACK:${i}`,domain:'INBOUND',severity:'WARNING',code:'INDUSTRIAL_PACK_MISSING',message:'Carteira em caixas preservada sem inventar unidades.',source:'CARTEIRA_COLGATE',entityKey:material})}}
-  const byInvoiceItem=new Map(inboundOrders.filter(r=>r.invoiceNormalized).map(r=>[`${r.invoiceNormalized}|${r.itemCanonicalId}`,r]));receiptItems.forEach(r=>{const h=receiptHeaders.find(x=>x.receiptId===r.receiptId);const inbound=h?byInvoiceItem.get(`${h.invoiceNormalized}|${r.itemCanonicalId}`):undefined;if(!inbound){r.inboundMatchStatus='UNMATCHED';return}if(inbound.pipelineUnits===null){r.inboundMatchStatus='MATCHED';return}r.inboundMatchStatus=r.receivedUnits>inbound.pipelineUnits?'OVERAGE':r.receivedUnits<inbound.pipelineUnits?'PARTIAL':'MATCHED'});
-  return{inboundOrders,receiptHeaders,receiptItems,qualityIssues};
+export function parseSales8022(rows: Row[], items: ItemMasterRecord[], rcas: RcaMasterRecord[]) {
+  const facts: SalesFactRecord[] = [];
+  const qualityIssues: DataQualityIssue[] = [];
+  if (!rows.length) return { facts, qualityIssues };
+
+  const headerIndex = rows.findIndex(row => {
+    const values = row.map(normalizeText);
+    return values.includes('DATA MOVIMENTO') && values.includes('STATUS PEDIDO') && values.includes('VALOR R$ NF');
+  });
+  if (headerIndex < 0) {
+    return {
+      facts,
+      qualityIssues: [{
+        id: '8022_SCHEMA',
+        domain: 'SALES',
+        severity: 'ERROR',
+        code: 'SALES_8022_SCHEMA_NOT_RECOGNIZED',
+        message: '8022 sem cabeçalho transacional esperado.',
+        source: '8022',
+      } as DataQualityIssue],
+    };
+  }
+
+  const header = headerMap(rows[headerIndex]);
+  const itemIndex = itemIndexes(items);
+  const rcaByCurrent = new Map(rcas.map(rca => [rca.currentRcaCode, rca]));
+
+  for (let rowIndex = headerIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    const status = normalizeText(cell(row, idx(header, 'STATUS PEDIDO')));
+    if (status !== 'FATURADO' && status !== 'A FATURAR') continue;
+    const saleType = normalizeText(cell(row, idx(header, 'TIPO VENDA')));
+    if (saleType && saleType !== 'VENDA') continue;
+    const value = parseNumber(cell(row, idx(header, 'VALOR R$ NF')));
+    if (!value) continue;
+
+    const rawCnpj = String(cell(row, idx(header, 'CNPJ/CPF CLIENTE')) ?? '').trim();
+    const normalizedCnpj = normalizeCnpj(rawCnpj, { declaredCnpj: rawCnpj.replace(/\D/g, '').length >= 12 });
+    const cnpj = validCnpj(normalizedCnpj.canonical) ? normalizedCnpj.canonical : '';
+    const seller = cleanCode(cell(row, idx(header, 'COD. VENDEDOR')));
+    const rca = rcaByCurrent.get(seller);
+    const winthor = cleanCode(cell(row, idx(header, 'CODPROD. WINTHOR')));
+    const sku = cleanCode(cell(row, idx(header, 'CODIGO FABRICANTE')));
+    const ean = cleanDigits(cell(row, idx(header, 'EAN PRODUTO')) || cell(row, idx(header, 'EAN CADASTRO')));
+    const item = itemIndex.byWinthor.get(winthor) || itemIndex.bySku.get(sku) || itemIndex.byEan.get(ean);
+    const date = toIsoDate(cell(row, idx(header, 'DATA MOVIMENTO')));
+
+    facts.push({
+      salesFactId: `8022:${date}:${cleanCode(cell(row, idx(header, 'NUMERO PED. WINTHOR')))}:${winthor}:${rowIndex}`,
+      movementDate: date,
+      customerCanonicalId: cnpj ? `CNPJ:${cnpj}` : '',
+      winthorCustomerCode: cleanCode(cell(row, idx(header, 'COD. CLIENTE'))),
+      cnpj,
+      rcaCanonicalId: rca?.rcaCanonicalId || '',
+      transactionRcaCode: seller,
+      rcaAssignmentStatus: rca ? 'RESOLVED' : seller ? 'NON_COLGATE' : 'UNRESOLVED',
+      itemCanonicalId: item?.itemCanonicalId || '',
+      winthorProductCode: winthor,
+      industrySku: sku,
+      orderWinthor: cleanCode(cell(row, idx(header, 'NUMERO PED. WINTHOR'))),
+      orderRca: cleanCode(cell(row, idx(header, 'NUMERO PED. RCA'))),
+      invoiceNumber: cleanCode(cell(row, idx(header, 'NUMERO NOTA FISCAL'))),
+      invoiceDate: toIsoDate(cell(row, idx(header, 'DATA EMISSAO NF'))),
+      rawOrderStatus: String(cell(row, idx(header, 'STATUS PEDIDO')) ?? '').trim(),
+      rawBlockStatus: String(cell(row, idx(header, 'STATUS BLOQUEIO')) ?? '').trim(),
+      salesStatus: status as SalesFactRecord['salesStatus'],
+      units: parseNumber(cell(row, idx(header, 'UNIDADES VENDIDAS'))),
+      cases: parseNumber(cell(row, idx(header, 'CAIXAS VENDIDAS'))),
+      grossWeightKg: parseNumber(cell(row, idx(header, 'PESO BRUTO KG'))),
+      netWeightKg: parseNumber(cell(row, idx(header, 'PESO LIQUIDO KG'))),
+      weightTons: parseNumber(cell(row, idx(header, 'PESO T'))),
+      value,
+      saleType: String(cell(row, idx(header, 'TIPO VENDA')) ?? '').trim(),
+      line: '',
+      source: '8022',
+    });
+
+    if (!cnpj) qualityIssues.push({
+      id: `8022_CNPJ:${rowIndex}`,
+      domain: 'SALES',
+      severity: 'WARNING',
+      code: 'SALES_CUSTOMER_UNRESOLVED',
+      message: 'Venda preservada sem CNPJ canônico; não conta em positivação.',
+      source: '8022',
+      entityKey: rawCnpj,
+    });
+    if (!item) qualityIssues.push({
+      id: `8022_ITEM:${rowIndex}`,
+      domain: 'SALES',
+      severity: 'WARNING',
+      code: 'SALES_ITEM_UNRESOLVED',
+      message: 'Venda preservada sem ITEM_MASTER resolvido.',
+      source: '8022',
+      entityKey: winthor || sku || ean,
+    });
+    if (seller && !rca) qualityIssues.push({
+      id: `8022_RCA:${rowIndex}`,
+      domain: 'RCA',
+      severity: 'WARNING',
+      code: 'SALES_RCA_NOT_OFFICIAL',
+      message: 'Venda preservada, mas o vendedor não está no RCA_MASTER oficial.',
+      source: '8022',
+      entityKey: seller,
+    });
+  }
+
+  return { facts, qualityIssues };
 }
 
-export function runSalesMotor(input:{salesRows:Row[];portfolioRows:Row[];entry218Rows?:Row[];portfolioAllowedSourceRows?:number[];items:ItemMasterRecord[];rcas:RcaMasterRecord[];compassWorkbook:XLSX.WorkBook|null;referenceDate:string}):SalesMotorResult{
-  const sales=parseSales8022(input.salesRows,input.items,input.rcas);const inbound=buildInboundFacts(input.portfolioRows,input.items,input.entry218Rows||[],input.portfolioAllowedSourceRows);const targets=buildTargets(input.compassWorkbook,input.rcas,input.referenceDate);return{salesFacts:sales.facts,inboundOrders:inbound.inboundOrders,receiptHeaders:inbound.receiptHeaders,receiptItems:inbound.receiptItems,targets:targets.targets,qualityIssues:[...sales.qualityIssues,...inbound.qualityIssues,...targets.qualityIssues]};
+export function buildTargets(workbook: XLSX.WorkBook | null, rcas: RcaMasterRecord[], referenceDate: string) {
+  const qualityIssues: DataQualityIssue[] = [];
+  if (!workbook) return { targets: [] as TargetFactRecord[], qualityIssues };
+  const byLegacy = new Map(rcas.filter(rca => rca.legacyRcaCode).map(rca => [rca.legacyRcaCode, rca]));
+  const competence = referenceDate.slice(0, 7);
+  const targets = parseCompassTargets(workbook).map((raw, index) => {
+    const legacyRcaCode = cleanCode(raw.oldCode);
+    const rca = byLegacy.get(legacyRcaCode);
+    if (!rca) qualityIssues.push({
+      id: `TARGET_RCA:${legacyRcaCode}:${index}`,
+      domain: 'TARGET',
+      severity: 'WARNING',
+      code: 'TARGET_UNASSIGNED_RCA',
+      message: 'Meta preservada no total da indústria sem RCA oficial resolvido.',
+      source: 'BUSSOLA',
+      entityKey: legacyRcaCode,
+    });
+    return {
+      targetFactId: `BUSSOLA:${competence}:${legacyRcaCode}:${index}`,
+      competence,
+      industry: 'COLGATE',
+      legacyRcaCode,
+      rcaCanonicalId: rca?.rcaCanonicalId || '',
+      salesTarget: Number(raw.salesTarget) || 0,
+      positivityTarget: Number(raw.positivityTarget) || 0,
+      assignmentStatus: rca ? 'RESOLVED' : 'UNRESOLVED_RCA',
+      source: 'BUSSOLA',
+    } as TargetFactRecord;
+  });
+  return { targets, qualityIssues };
+}
+
+function receiptSource(entry218Rows: Row[], operational?: OperationalSourceState) {
+  if (entry218Rows.length) return parseEntryNotes218(entry218Rows);
+  return {
+    invoices: operational?.currentInvoices || [],
+    items: operational?.receiptItems || [],
+  };
+}
+
+export function buildInboundFacts(
+  rows: Row[],
+  items: ItemMasterRecord[],
+  entry218Rows: Row[] = [],
+  allowedSourceRows?: number[],
+  operational?: OperationalSourceState,
+) {
+  const qualityIssues: DataQualityIssue[] = [];
+  const itemIndex = itemIndexes(items);
+  const inboundOrders: InboundOrderFactRecord[] = [];
+  const headerIndex = rows.findIndex(row => {
+    const values = row.map(normalizeText);
+    return values.includes('ORDER DATE') && values.includes('MATERIAL') && values.includes('ORDER QTY') && values.includes('BILL QTY');
+  });
+
+  const parsed218 = receiptSource(entry218Rows, operational);
+  const receiptHeaders: ReceiptHeaderRecord[] = parsed218.invoices.map((invoice, index) => ({
+    receiptId: `218:${invoice.invoiceNormalized || invoice.invoice}:${index}`,
+    receiptDate: invoice.entryDate,
+    entryTransactionNumber: '',
+    invoiceRaw: invoice.invoiceRaw || invoice.invoice,
+    invoiceNormalized: invoice.invoiceNormalized || invoice.invoice,
+    entryType: '',
+    series: invoice.invoiceSeries || '',
+    invoiceIssueDate: invoice.issueDate,
+    branch: '',
+    supplier: 'COLGATE',
+    supplierCnpj: '',
+    uf: '',
+    totalValue: invoice.totalValue,
+    ipiValue: 0,
+    source: '218',
+  }));
+  const receiptIdByInvoice = new Map(receiptHeaders.map(header => [header.invoiceNormalized, header.receiptId]));
+  const receiptItems: ReceiptItemRecord[] = parsed218.items.map((receipt, index) => {
+    const item = itemIndex.byWinthor.get(cleanCode(receipt.sku));
+    return {
+      receiptId: receiptIdByInvoice.get(receipt.invoiceNormalized || receipt.invoice) || `218:${receipt.invoiceNormalized || receipt.invoice}:${index}`,
+      itemCanonicalId: item?.itemCanonicalId || '',
+      winthorProductCode: cleanCode(receipt.sku),
+      description: receipt.product,
+      branch: '',
+      pack: '',
+      unit: 'UN',
+      receivedUnits: receipt.units,
+      unitPrice: receipt.unitPrice,
+      previousFinancialCost: 0,
+      currentFinancialCost: 0,
+      fiscalCode: '',
+      operationCode: '',
+      inboundMatchStatus: 'UNMATCHED',
+    };
+  });
+
+  const received = new Map<string, number>();
+  parsed218.items.forEach(receipt => {
+    const item = itemIndex.byWinthor.get(cleanCode(receipt.sku));
+    const key = `${receipt.invoiceNormalized || receipt.invoice}|${item?.itemCanonicalId || cleanCode(receipt.sku)}`;
+    received.set(key, (received.get(key) || 0) + receipt.units);
+  });
+
+  const continuityRows = allowedSourceRows ?? operational?.portfolioRows.map(row => row.sourceRow);
+  const allowed = continuityRows?.length ? new Set(continuityRows) : null;
+  if (headerIndex >= 0) {
+    const header = headerMap(rows[headerIndex]);
+    for (let rowIndex = headerIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+      if (allowed && !allowed.has(rowIndex + 1)) continue;
+      const row = rows[rowIndex];
+      const material = cleanCode(cell(row, idx(header, 'Material')));
+      const orderQty = Math.max(parseNumber(cell(row, idx(header, 'Order Qty'))), 0);
+      const billQty = Math.max(parseNumber(cell(row, idx(header, 'Bill Qty'))), 0);
+      const netValue = Math.max(parseNumber(cell(row, idx(header, 'Net Value ( ZINV )'))), 0);
+      if (!material || (orderQty <= 0 && billQty <= 0 && netValue <= 0)) continue;
+
+      const item = itemIndex.bySku.get(material) || itemIndex.byWinthor.get(material);
+      const factor = item?.industryUnitsPerCase || null;
+      const cases = orderQty + billQty;
+      const units = factor ? cases * factor : null;
+      const invoiceRaw = String(cell(row, idx(header, 'Nota Fiscal Number')) ?? '').trim();
+      const invoiceNormalized = parseInvoiceIdentity(invoiceRaw).normalized;
+      const receivedUnits = invoiceNormalized ? (received.get(`${invoiceNormalized}|${item?.itemCanonicalId || material}`) || 0) : 0;
+      const remaining = units === null ? null : Math.max(units - receivedUnits, 0);
+      let status: InboundOrderFactRecord['inboundStatus'] = 'OPEN_INBOUND';
+      if (billQty > 0 && receivedUnits <= 0) status = 'BILLED_BY_COLGATE_IN_TRANSIT';
+      else if (receivedUnits > 0 && units !== null && receivedUnits < units) status = 'PARTIALLY_RECEIVED';
+      else if (receivedUnits > 0 && units !== null && receivedUnits >= units) status = 'RECEIVED_BY_MILENIO';
+      else if (orderQty > 0 && billQty === 0) status = 'ORDERED_FROM_COLGATE';
+
+      inboundOrders.push({
+        inboundFactId: `CARTEIRA:${cleanCode(cell(row, idx(header, 'Order Number')))}:${material}:${rowIndex}`,
+        orderDate: toIsoDate(cell(row, idx(header, 'Order Date'))),
+        colgateCustomerNumber: cleanCode(cell(row, idx(header, 'Customer Number'))),
+        orderNumber: cleanCode(cell(row, idx(header, 'Order Number'))),
+        itemCanonicalId: item?.itemCanonicalId || '',
+        industrySku: material,
+        orderQtyCases: orderQty,
+        billQtyCases: billQty,
+        pipelineQtyCases: cases,
+        pipelineUnits: units,
+        netValue,
+        invoiceRaw,
+        invoiceNormalized,
+        billingType: String(cell(row, idx(header, 'Billing Type')) ?? '').trim(),
+        billingDate: toIsoDate(cell(row, idx(header, 'Billing Date'))),
+        grossWeight: parseNumber(cell(row, idx(header, 'Gross Weight'))),
+        receivedUnits,
+        remainingInTransitUnits: remaining,
+        inboundStatus: status,
+        source: 'CARTEIRA_COLGATE',
+      });
+
+      if (!item) qualityIssues.push({
+        id: `INBOUND_ITEM:${rowIndex}`,
+        domain: 'INBOUND',
+        severity: 'WARNING',
+        code: 'INBOUND_ITEM_UNRESOLVED',
+        message: 'Linha da Carteira preservada sem ITEM_MASTER resolvido.',
+        source: 'CARTEIRA_COLGATE',
+        entityKey: material,
+      });
+      if (cases > 0 && !factor) qualityIssues.push({
+        id: `INBOUND_PACK:${rowIndex}`,
+        domain: 'INBOUND',
+        severity: 'WARNING',
+        code: 'INDUSTRIAL_PACK_MISSING',
+        message: 'Carteira em caixas preservada sem inventar unidades.',
+        source: 'CARTEIRA_COLGATE',
+        entityKey: material,
+      });
+    }
+  }
+
+  const inboundByInvoiceItem = new Map(inboundOrders.filter(row => row.invoiceNormalized).map(row => [`${row.invoiceNormalized}|${row.itemCanonicalId}`, row]));
+  receiptItems.forEach(receipt => {
+    const header = receiptHeaders.find(candidate => candidate.receiptId === receipt.receiptId);
+    const inbound = header ? inboundByInvoiceItem.get(`${header.invoiceNormalized}|${receipt.itemCanonicalId}`) : undefined;
+    if (!inbound) {
+      receipt.inboundMatchStatus = 'UNMATCHED';
+      return;
+    }
+    if (inbound.pipelineUnits === null) {
+      receipt.inboundMatchStatus = 'MATCHED';
+      return;
+    }
+    receipt.inboundMatchStatus = receipt.receivedUnits > inbound.pipelineUnits
+      ? 'OVERAGE'
+      : receipt.receivedUnits < inbound.pipelineUnits
+        ? 'PARTIAL'
+        : 'MATCHED';
+  });
+
+  return { inboundOrders, receiptHeaders, receiptItems, qualityIssues };
+}
+
+export function runSalesMotor(input: {
+  salesRows: Row[];
+  portfolioRows: Row[];
+  entry218Rows?: Row[];
+  portfolioAllowedSourceRows?: number[];
+  items: ItemMasterRecord[];
+  rcas: RcaMasterRecord[];
+  compassWorkbook: XLSX.WorkBook | null;
+  operational?: OperationalSourceState;
+  referenceDate: string;
+}): SalesMotorResult {
+  const sales = parseSales8022(input.salesRows, input.items, input.rcas);
+  const inbound = buildInboundFacts(
+    input.portfolioRows,
+    input.items,
+    input.entry218Rows || [],
+    input.portfolioAllowedSourceRows,
+    input.operational,
+  );
+  const targets = buildTargets(input.compassWorkbook, input.rcas, input.referenceDate);
+  return {
+    salesFacts: sales.facts,
+    inboundOrders: inbound.inboundOrders,
+    receiptHeaders: inbound.receiptHeaders,
+    receiptItems: inbound.receiptItems,
+    targets: targets.targets,
+    qualityIssues: [...sales.qualityIssues, ...inbound.qualityIssues, ...targets.qualityIssues],
+  };
 }
