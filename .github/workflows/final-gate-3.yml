@@ -1,0 +1,55 @@
+name: final-gate-3
+on:
+  push:
+    branches: [feat/limpeza-padronizacao-visual]
+    paths: ['.github/workflows/final-gate-3.yml']
+permissions:
+  contents: write
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: feat/limpeza-padronizacao-visual, fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: 24}
+      - run: npm ci
+      - name: Validate
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck > /tmp/tc 2>&1; TC=$?
+          npm run test:run > /tmp/ts 2>&1; TS=$?
+          npm run build > /tmp/bd 2>&1; BD=$?
+          FAILS=$(grep '^# fail ' /tmp/ts | tail -1 | awk '{print $3}')
+          PASSES=$(grep '^# pass ' /tmp/ts | tail -1 | awk '{print $3}')
+          TESTS=$(grep '^# tests ' /tmp/ts | tail -1 | awk '{print $3}')
+          grep -E '^(not ok|# fail|# pass|# tests|# todo)|ERR_MODULE_NOT_FOUND|AssertionError' /tmp/ts > /tmp/test-summary || true
+          grep -RInE "canonicalEngine|supportCore|canonical/(aggregate|history|networkResolution|operations|reconciliation|relationships|support)|legacyStock|comboClientPortfolio|detectedNetworkTarget|legacyNetwork|bj_produtos|bj_metricas|bj_sellout|GlassSurface|--bj-|applyOperationalOverrides|applyReceiptReconciliation" src package.json 2>/dev/null > /tmp/residuals || true
+          {
+            echo '# Gate final 3'
+            echo "TYPECHECK=$TC"
+            echo "TEST_COMMAND=$TS"
+            echo "BUILD=$BD"
+            echo "TESTS_TOTAL=${TESTS:-unknown}"
+            echo "TESTS_PASS=${PASSES:-unknown}"
+            echo "TESTS_FAIL=${FAILS:-unknown}"
+            echo
+            echo '## Falhas / resumo de testes'
+            cat /tmp/test-summary
+            echo
+            echo '## Resíduos proibidos no runtime'
+            cat /tmp/residuals
+            echo
+            echo '## Typecheck output'
+            cat /tmp/tc
+            echo
+            echo '## Build output'
+            cat /tmp/bd
+          } > docs/FINAL_GATE_3_TEMP.md
+          rm .github/workflows/final-gate-3.yml
+      - name: Commit report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -m "Registra terceiro gate final" && git push origin HEAD:feat/limpeza-padronizacao-visual
