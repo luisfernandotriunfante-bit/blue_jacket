@@ -73,6 +73,9 @@ export interface CustomerCommercialProfile {
 export interface PurchaseHistory310 {
   cnpj: string;
   cnpjRaw: string;
+  /** Código de produto do sistema anterior. Nunca deve ser interpretado como Código Winthor atual. */
+  legacyProductCode: string;
+  /** @deprecated Alias temporário para consumidores legados. O conteúdo continua sendo código histórico. */
   winthorCode: string;
   description: string;
   volumes: number;
@@ -80,6 +83,7 @@ export interface PurchaseHistory310 {
   purchaseValue: number;
   returnVolume: number;
   returnValue: number;
+  /** Valor Compras já líquido das devoluções na estrutura validada do relatório 310. */
   netValue: number;
   vendorCode: string;
   groupingCode: string;
@@ -219,22 +223,11 @@ export interface CustomerIntelligenceResult {
   mandatoryBought: number;
   importantRecommended: number;
   importantBought: number;
-  recommendedMissing: number;
-  boughtOutside: number;
-  boughtUnresolved: number;
-  ytdNetValue: number;
-  opportunitiesAvailableNow: number;
-  opportunitiesPortfolioOnly: number;
-  blockedByStock: number;
-  blockedByRegistration: number;
-  launches: LaunchAdoptionSummary;
+  missingRecommended: number;
+  launchAdoption: LaunchAdoptionSummary;
   products: ProductCommercialView[];
-  opportunities: ProductCommercialView[];
-  launchesProducts: ProductCommercialView[];
-  boughtOutsideProducts: ProductCommercialView[];
-  promotions: PromotionRule[];
-  audit: CustomerIntelligenceAuditCheck[];
-  limitations: string[];
+  audits: CustomerIntelligenceAuditCheck[];
+  warnings: string[];
 }
 
 export const EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT: CustomerIntelligenceSupport = {
