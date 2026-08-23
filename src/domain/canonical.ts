@@ -49,7 +49,6 @@ export type SourceKind =
   | 'premises'
   | 'compassTargets'
   | 'activeRoute'
-  | 'legacyTopNetworks'
   | 'history379_2025'
   | 'history379_2026'
   | 'unknown';

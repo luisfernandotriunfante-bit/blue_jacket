@@ -37,7 +37,6 @@ const SOURCES: SourceUi[] = [
 
   { id: 'compassTargets', kind: 'compassTargets', unifiedSourceType: 'BUSSOLA', label: 'Bússola de Metas', description: 'Meta PNA e Meta. Pos. Ind. Colgate. O realizado continua vindo do 8022.', frequency: 'Nova competência / mês', group: 'Mensal / competência' },
   { id: 'activeRoute', kind: 'activeRoute', unifiedSourceType: 'ROTEIRO_TOP', label: 'Roteiro Ativo Top Varejistas', description: 'Snapshot mensal dos Top Varejistas, rede/bandeira/gestor/categoria e meta Top. Não define RCA.', frequency: 'Nova competência / mês', group: 'Mensal / competência' },
-  { id: 'legacyTopNetworks', kind: 'legacyTopNetworks', label: 'TOP REDES · Referência legada', description: 'Mantido somente para comparação durante a migração. Não é proprietário de cálculo na base unificada.', frequency: 'Somente quando precisar comparar', group: 'Mensal / competência' },
 
   { id: 'winthorTablePrices', supplementalKind: 'winthorTablePrices', unifiedSourceType: 'PCTABPR', label: 'Tabela de Preços Winthor · PCTABPR', description: 'Lê obrigatoriamente a aba bruta pctabpr, filtra NUMREGIAO=11 e usa PVENDA1 como preço de referência.', frequency: 'Quando houver alteração de preços', group: 'Apoio / quando mudar', required: true },
   { id: 'items286', kind: 'items286', unifiedSourceType: '286', label: 'Cadastro de Itens 286', description: 'Autoridade do Código Winthor atual, EAN interno e relações cadastrais do item.', frequency: 'Quando o cadastro mudar', group: 'Apoio / quando mudar' },

@@ -85,7 +85,6 @@ export function detectSource(fileName: string): SourceKind {
   if (n.includes('PREMISSAS')) return 'premises';
   if (n.includes('BUSSOLA')) return 'compassTargets';
   if (n.includes('ROTEIRO ATIVO')) return 'activeRoute';
-  if (n.includes('TOP REDES')) return 'legacyTopNetworks';
   return 'unknown';
 }
 
@@ -202,7 +201,7 @@ function normalizeCompactCadastro286(workbook: XLSX.WorkBook): XLSX.WorkBook {
 
 export async function readWorkbook(file: File, kind: SourceKind): Promise<XLSX.WorkBook> {
   const data = await file.arrayBuffer();
-  const preferredSheets: Partial<Record<SourceKind, string[]>> = { compassTargets: ['Metas'], activeRoute: ['Roteiro Ativo'], legacyTopNetworks: ['Top Redes', 'redes', '319', 'Equipe'] };
+  const preferredSheets: Partial<Record<SourceKind, string[]>> = { compassTargets: ['Metas'], activeRoute: ['Roteiro Ativo'] };
   const sheets = preferredSheets[kind];
   let workbook = XLSX.read(data, { type: 'array', cellDates: false, ...(sheets ? { sheets } : {}) });
   if (kind === 'stock105') workbook = normalizeCompactStock105(workbook);

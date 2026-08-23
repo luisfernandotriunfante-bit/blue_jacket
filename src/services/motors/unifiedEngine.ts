@@ -18,12 +18,6 @@ import {
   type UnifiedSalesRecord,
 } from '../../domain/unified';
 import { classifyLine, normalizeText, sheetRows, toIsoDate } from '../canonical/utils';
-import {
-  parseLegacyClientNetworks,
-  parseLegacyClientOwners,
-  parseLegacyNetworkOwners,
-  parseLegacyNetworkTargets,
-} from '../canonical/supportCore';
 import type { Row } from '../canonical/runtime';
 import type { OperationalSourceState } from '../operationalSources';
 import { processCustomerIntelligenceFiles } from '../customerIntelligenceRepository';
@@ -69,7 +63,6 @@ const is379 = (file: File) => has(file, '379');
 const is12322 = (file: File) => has(file, '12.322') || has(file, '12322');
 const is310 = (file: File) => /(^|\D)310(\D|$)/.test(name(file));
 const isAssortment = (file: File) => has(file, 'SORTIMENTO') && !has(file, '310');
-const isLegacyTopNetworks = (file: File) => has(file, 'TOP REDES');
 const isCustomerIntelligenceFile = (file: File) => is310(file) || isAssortment(file) || isPremises(file);
 
 function sourceType(file: File): string {
@@ -91,7 +84,6 @@ function sourceType(file: File): string {
   if (is12322(file)) return '12.322';
   if (is310(file)) return '310';
   if (isAssortment(file)) return 'SORTIMENTO_OFICIAL';
-  if (isLegacyTopNetworks(file)) return 'LEGACY_TOP_NETWORKS';
   return 'OUTRA';
 }
 
@@ -400,7 +392,6 @@ function sourceKind(metadata: SourceSnapshotMetadata): SourceKind | null {
     case 'PREMISSAS': return 'premises';
     case 'BUSSOLA': return 'compassTargets';
     case 'ROTEIRO_TOP': return 'activeRoute';
-    case 'LEGACY_TOP_NETWORKS': return 'legacyTopNetworks';
     case '379': return /2025|\b25\b/.test(metadata.sourceName) ? 'history379_2025' : 'history379_2026';
     default: return null;
   }
@@ -413,13 +404,14 @@ function sourceAudits(layer: UnifiedDataLayer): SourceAudit[] {
   });
 }
 
-function supportFromUnified(layer: UnifiedDataLayer, legacy: Pick<CanonicalSupportData, 'legacyNetworkTargets' | 'legacyNetworkOwners' | 'legacyClientNetworks' | 'legacyClientOwners'>): CanonicalSupportData {
+function supportFromUnified(layer: UnifiedDataLayer): CanonicalSupportData {
   const rcaById = new Map(layer.rcas.map(row => [row.rcaCanonicalId, row]));
   const customerByCnpj = new Map(layer.customers.map(row => [row.cnpj, row]));
   const topCnpjs = new Set(layer.topRetailerSnapshots.map(row => row.cnpj));
   const latestClassification = new Map<string, UnifiedDataLayer['customerClassifications'][number]>();
   [...layer.customerClassifications].sort((a, b) => a.competence.localeCompare(b.competence)).forEach(row => latestClassification.set(row.cnpj, row));
   return {
+    ...EMPTY_CANONICAL_SUPPORT,
     rcas: layer.rcas.map(row => ({ newCode: row.currentRcaCode, oldCode: row.legacyRcaCode, name: row.rcaName, coordinatorCode: row.coordinatorCode, coordinatorName: row.coordinatorName })),
     vendorTargets: layer.targets.map(row => {
       const rca = rcaById.get(row.rcaCanonicalId);
@@ -430,31 +422,9 @@ function supportFromUnified(layer: UnifiedDataLayer, legacy: Pick<CanonicalSuppo
       return { cnpj: row.cnpj, cnpjRaw: customer?.cnpjRaw || row.cnpj, cnpjNormalizationStatus: customer?.cnpjNormalizationStatus || undefined, name: customer?.customerName || '', city: customer?.city || row.premiseCity, network: row.premiseNetwork, profile: row.profile, isTop: topCnpjs.has(row.cnpj) };
     }),
     activeRoute: layer.topRetailerSnapshots.map(row => ({ cnpj: row.cnpj, cnpjRaw: customerByCnpj.get(row.cnpj)?.cnpjRaw || row.cnpj, name: row.storeName, fantasyName: row.topTradeName, city: row.topCity, networkRaw: row.topRetailerNetwork, managerCnpj: row.managerCnpj, groupingCode: row.groupCode, tier: '', storeType: row.storeType, target: row.target })),
-    legacyNetworkTargets: legacy.legacyNetworkTargets,
-    legacyNetworkOwners: legacy.legacyNetworkOwners,
-    legacyClientNetworks: legacy.legacyClientNetworks,
-    legacyClientOwners: legacy.legacyClientOwners,
     products: layer.items.map(item => ({ sku: item.industrySku || item.manufacturerCode, ean: item.industryEan || item.internalEan, description: item.industryDescription || item.internalDescription, category: '', subcategory: '', brand: '', isLaunch: item.isLaunch, boxPrice: 0, unitPrice: item.salePricePvenDa1 || 0, unitsPerCase: item.industryUnitsPerCase || item.internalUnitsPerCase || 0, line: classifyLine(item.internalDescription || item.industryDescription, item.manufacturerCode || item.industrySku) })),
     itemCodes: layer.items.filter(item => item.winthorCode).map(item => ({ internalCode: item.winthorCode, description: item.internalDescription || item.industryDescription, ean: item.internalEan || item.industryEan, factoryCode: item.manufacturerCode || item.industrySku })),
   };
-}
-
-async function legacyReference(files: File[], cache: FileCache, previous: CanonicalState | null) {
-  const previousSupport = previous?.support || EMPTY_CANONICAL_SUPPORT;
-  const result = {
-    legacyNetworkTargets: { ...previousSupport.legacyNetworkTargets },
-    legacyNetworkOwners: { ...previousSupport.legacyNetworkOwners },
-    legacyClientNetworks: { ...previousSupport.legacyClientNetworks },
-    legacyClientOwners: { ...previousSupport.legacyClientOwners },
-  };
-  const file = files.find(isLegacyTopNetworks);
-  if (!file) return result;
-  const workbook = await cache.workbook(file);
-  result.legacyNetworkTargets = Object.fromEntries(parseLegacyNetworkTargets(workbook));
-  result.legacyNetworkOwners = Object.fromEntries(parseLegacyNetworkOwners(workbook));
-  result.legacyClientNetworks = Object.fromEntries(parseLegacyClientNetworks(workbook));
-  result.legacyClientOwners = Object.fromEntries(parseLegacyClientOwners(workbook));
-  return result;
 }
 
 export async function processUnifiedFiles(input: {
@@ -582,10 +552,9 @@ export async function processUnifiedFiles(input: {
   layer.unifiedSales = unifiedSales(layer);
   layer.qualityIssues = [...itemResult.qualityIssues, ...customerResult.qualityIssues, ...salesResult.qualityIssues, ...historyIssues, ...reconcile310(layer, customerIntelligenceSupport)];
 
-  const legacy = await legacyReference(input.allFiles, cache, input.previous);
   const shell = blankCanonical(referenceDate, input.config, input.previous);
   shell.sources = sourceAudits(layer);
-  shell.support = supportFromUnified(layer, legacy);
+  shell.support = supportFromUnified(layer);
   let projected = projectCanonicalFromUnified(shell, layer, input.config);
   if (input.continuityWarning) projected = { ...projected, warnings: [...projected.warnings.filter(warning => !warning.startsWith('Carteira comparável:')), input.continuityWarning] };
   const canonical = { ...projected, unifiedSchemaVersion: 1 as const, unified: layer, customerIntelligenceSupport } as UnifiedCanonicalState;
