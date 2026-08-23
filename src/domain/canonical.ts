@@ -230,7 +230,7 @@ export interface CanonicalCoordinatorResult {
   attainment:number; invoicedPositivation:number; futurePositivation:number; totalPositivation:number; positivityAttainment:number; vendors:CanonicalVendorResult[];
 }
 
-export interface CanonicalNetworkStore { cnpj:string; name:string; fantasyName:string; city:string; managerCnpj:string; groupingCode:string; tier:string; storeType:string; topTarget:number; invoiced:number; toInvoice:number; total:number; }
+export interface CanonicalNetworkStore { cnpj:string; name:string; fantasyName:string; city:string; managerCnpj:string; groupingCode:string; tier:string; storeType:string; routeNetwork?:string; topTarget:number; invoiced:number; toInvoice:number; total:number; }
 export interface CanonicalNetworkResult { key:string; name:string; networkTarget:number; topTarget:number; invoiced:number; toInvoice:number; total:number; networkAttainment:number; topAttainment:number; gapToNetworkTarget:number; gapToTopTarget:number; clients:number; stores:CanonicalNetworkStore[]; }
 export interface CanonicalLineResult { name:LineName; share:number; target:number; invoiced:number; toInvoice:number; total:number; attainment:number; }
 
@@ -303,7 +303,10 @@ export function applyManualConfiguration(base:CanonicalState|null,config:ManualC
     return{...item,pendingSale};
   });
   const pendingPurchaseSale=inventory.reduce((sum,item)=>sum+item.pendingSale,0);
-  const projectedSaleValue=base.stock.saleValue+pendingPurchaseSale;
+  // A configuração manual pode alterar somente a valorização da Carteira. A parcela disponível
+  // já foi materializada pelo Motor de Estoque depois da reserva 8022 e não pode voltar a físico.
+  const availableSaleValue=Math.max(base.stock.projectedSaleValue-base.stock.pendingPurchaseSale,0);
+  const projectedSaleValue=availableSaleValue+pendingPurchaseSale;
   const historyAverage=base.history.average3ClosedMonths||0;
   const coverageProjectedDays=historyAverage>0?Math.round(projectedSaleValue/historyAverage*30):0;
 
