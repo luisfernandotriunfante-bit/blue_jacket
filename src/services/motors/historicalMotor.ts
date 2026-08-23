@@ -92,11 +92,15 @@ export function applyHistoricalIdentity(facts:HistoricalSalesFactRecord[], legac
 }
 
 export function aggregateHistoricalCustomerProduct(facts:HistoricalSalesFactRecord[], period='YTD'):HistoricalCustomerProductAggregateRecord[]{
+  const eligible=facts.filter(f=>f.movementClass!=='OTHER'&&f.customerCnpj);
+  const latestYear=eligible.reduce((max,row)=>Math.max(max,row.sourceYear||0),0);
+  const scoped=period==='YTD'&&latestYear>0 ? eligible.filter(row=>row.sourceYear===latestYear) : eligible;
+  const resolvedPeriod=period==='YTD'&&latestYear>0 ? String(latestYear) : period;
   const grouped=new Map<string,HistoricalSalesFactRecord[]>();
-  facts.filter(f=>f.movementClass!=='OTHER'&&f.customerCnpj).forEach(f=>{const key=`${f.customerCnpj}:${f.legacyProductCode}`;const rows=grouped.get(key)||[];rows.push(f);grouped.set(key,rows)});
+  scoped.forEach(f=>{const key=`${f.customerCnpj}:${f.legacyProductCode}`;const rows=grouped.get(key)||[];rows.push(f);grouped.set(key,rows)});
   return Array.from(grouped.values()).map(rows=>{
     const first=rows[0]; const sales=rows.filter(r=>r.movementClass==='SALE'); const returns=rows.filter(r=>r.movementClass==='RETURN');
-    return {customerCanonicalId:first.customerCanonicalId,cnpj:first.customerCnpj,itemCanonicalId:first.itemCanonicalId,legacyProductCode:first.legacyProductCode,period,grossSaleUnits:sales.reduce((s,r)=>s+r.quantityRaw,0),returnUnits:returns.reduce((s,r)=>s+r.quantityRaw,0),netSignedUnits:rows.reduce((s,r)=>s+r.signedQuantity,0),grossSalesValue:sales.reduce((s,r)=>s+r.valueRaw,0),returnValue:returns.reduce((s,r)=>s+r.valueRaw,0),netSalesValue:rows.reduce((s,r)=>s+r.signedValue,0),netDiscount:rows.reduce((s,r)=>s+r.signedDiscount,0),purchaseInvoiceCount:new Set(sales.map(r=>`${r.invoiceNumber}:${r.invoiceSeries}`)).size,legacySellerContext:Array.from(new Set(rows.map(r=>r.legacyRcaCode).filter(Boolean))).join(',')};
+    return {customerCanonicalId:first.customerCanonicalId,cnpj:first.customerCnpj,itemCanonicalId:first.itemCanonicalId,legacyProductCode:first.legacyProductCode,period:resolvedPeriod,grossSaleUnits:sales.reduce((s,r)=>s+r.quantityRaw,0),returnUnits:returns.reduce((s,r)=>s+r.quantityRaw,0),netSignedUnits:rows.reduce((s,r)=>s+r.signedQuantity,0),grossSalesValue:sales.reduce((s,r)=>s+r.valueRaw,0),returnValue:returns.reduce((s,r)=>s+r.valueRaw,0),netSalesValue:rows.reduce((s,r)=>s+r.signedValue,0),netDiscount:rows.reduce((s,r)=>s+r.signedDiscount,0),purchaseInvoiceCount:new Set(sales.map(r=>`${r.invoiceNumber}:${r.invoiceSeries}`)).size,legacySellerContext:Array.from(new Set(rows.map(r=>r.legacyRcaCode).filter(Boolean))).join(',')};
   });
 }
 
