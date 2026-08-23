@@ -1,0 +1,61 @@
+name: audit-cleanup-state-2
+
+on:
+  push:
+    branches:
+      - feat/limpeza-padronizacao-visual
+    paths:
+      - '.github/workflows/audit-cleanup-state-2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/limpeza-padronizacao-visual
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Run gates
+        shell: bash
+        run: |
+          set +e
+          mkdir -p .tmp-cleanup
+          npm run typecheck > .tmp-cleanup/typecheck.txt 2>&1; TYPECHECK=$?
+          npm run test:run > .tmp-cleanup/tests.txt 2>&1; TESTS=$?
+          npm run build > .tmp-cleanup/build.txt 2>&1; BUILD=$?
+          grep -RInE "canonicalEngine|supportCore|canonical/(aggregate|history|networkResolution|operations|reconciliation|relationships|support)|legacyStock|comboClientPortfolio|detectedNetworkTarget|legacyNetwork|TOP REDES|12\\.326|(^|[^0-9])319([^0-9]|$)|bj_produtos|bj_metricas|bj_sellout|GlassSurface|--bj-" src tests scripts package.json docs 2>/dev/null > .tmp-cleanup/residuals.txt || true
+          {
+            echo '# Auditoria de fechamento da limpeza · rodada 2'
+            echo
+            echo "- Typecheck exit: $TYPECHECK"
+            echo "- Tests exit: $TESTS"
+            echo "- Build exit: $BUILD"
+            echo
+            echo '## Typecheck'
+            cat .tmp-cleanup/typecheck.txt
+            echo
+            echo '## Test failures / summary'
+            grep -E "^(not ok|# fail|# pass|# tests|# suites|# todo)|ERR_|Cannot find module|AssertionError|error TS" .tmp-cleanup/tests.txt | tail -n 500 || true
+            echo
+            echo '## Residuals'
+            cat .tmp-cleanup/residuals.txt
+            echo
+            echo '## Build'
+            cat .tmp-cleanup/build.txt
+          } > docs/CLEANUP_GATE_REPORT_2_TEMP.md
+          rm -rf .tmp-cleanup
+          rm .github/workflows/audit-cleanup-state-2.yml
+      - name: Commit report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Registra segunda rodada de gates da limpeza"
+          git push origin HEAD:feat/limpeza-padronizacao-visual
