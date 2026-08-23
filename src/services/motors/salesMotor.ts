@@ -1,4 +1,4 @@
-import type { CanonicalSupportData } from '../../domain/canonical';
+import type * as XLSX from 'xlsx';
 import type {
   DataQualityIssue,
   InboundOrderFactRecord,
@@ -12,6 +12,7 @@ import type {
 import type { OperationalSourceState } from '../operationalSources';
 import type { Row } from '../canonical/runtime';
 import { cleanCode, cleanDigits, normalizeCnpj, normalizeText, parseNumber, toIsoDate } from '../canonical/utils';
+import { parseCompassTargets } from '../canonical/support';
 import { parseInvoiceIdentity } from '../../domain/invoiceIdentity';
 
 const validCnpj=(value:string)=>/^\d{14}$/.test(value);
@@ -22,11 +23,11 @@ const cell=(row:Row,index:number)=>index>=0?row[index]:'';
 export interface SalesMotorResult { salesFacts:SalesFactRecord[]; inboundOrders:InboundOrderFactRecord[]; receiptHeaders:ReceiptHeaderRecord[]; receiptItems:ReceiptItemRecord[]; targets:TargetFactRecord[]; qualityIssues:DataQualityIssue[]; }
 
 function itemIndexes(items:ItemMasterRecord[]){
-  return {byWinthor:new Map(items.filter(i=>i.winthorCode).map(i=>[i.winthorCode,i])),bySku:new Map(items.filter(i=>i.industrySku).map(i=>[i.industrySku,i])),byEan:new Map(items.flatMap(i=>[i.internalEan,i.industryEan].filter(Boolean).map(e=>[cleanDigits(e),i] as const)))};
+  return {byWinthor:new Map(items.filter(i=>i.winthorCode&&i.hasWinthor).map(i=>[i.winthorCode,i])),bySku:new Map(items.filter(i=>i.industrySku).map(i=>[i.industrySku,i])),byEan:new Map(items.flatMap(i=>[i.internalEan,i.industryEan].filter(Boolean).map(e=>[cleanDigits(e),i] as const)))};
 }
 
 export function parseSales8022(rows:Row[],items:ItemMasterRecord[],rcas:RcaMasterRecord[]):{facts:SalesFactRecord[];qualityIssues:DataQualityIssue[]}{
-  const facts:SalesFactRecord[]=[];const qualityIssues:DataQualityIssue[]=[];const headerIndex=rows.findIndex(row=>{const v=row.map(normalizeText);return v.includes('DATA MOVIMENTO')&&v.includes('STATUS PEDIDO')&&v.includes('VALOR R$ NF')});if(headerIndex<0)return{facts,qualityIssues:[{id:'8022_SCHEMA',domain:'SALES',severity:'ERROR',code:'SALES_8022_SCHEMA_NOT_RECOGNIZED',message:'8022 sem cabeçalho transacional esperado.',source:'8022'}]};
+  const facts:SalesFactRecord[]=[];const qualityIssues:DataQualityIssue[]=[];if(!rows.length)return{facts,qualityIssues};const headerIndex=rows.findIndex(row=>{const v=row.map(normalizeText);return v.includes('DATA MOVIMENTO')&&v.includes('STATUS PEDIDO')&&v.includes('VALOR R$ NF')});if(headerIndex<0)return{facts,qualityIssues:[{id:'8022_SCHEMA',domain:'SALES',severity:'ERROR',code:'SALES_8022_SCHEMA_NOT_RECOGNIZED',message:'8022 sem cabeçalho transacional esperado.',source:'8022'}]};
   const h=headerMap(rows[headerIndex]);const itemIndex=itemIndexes(items);const rcaByCurrent=new Map(rcas.map(r=>[r.currentRcaCode,r]));
   for(let i=headerIndex+1;i<rows.length;i++){const row=rows[i];const statusRaw=normalizeText(cell(row,idx(h,'STATUS PEDIDO')));if(statusRaw!=='FATURADO'&&statusRaw!=='A FATURAR')continue;const saleType=normalizeText(cell(row,idx(h,'TIPO VENDA')));if(saleType&&saleType!=='VENDA')continue;const value=parseNumber(cell(row,idx(h,'VALOR R$ NF')));if(!value)continue;
     const rawCnpj=String(cell(row,idx(h,'CNPJ/CPF CLIENTE'))??'').trim();const normalized=normalizeCnpj(rawCnpj,{declaredCnpj:rawCnpj.replace(/\D/g,'').length>=12});const cnpj=validCnpj(normalized.canonical)?normalized.canonical:'';const transactionRcaCode=cleanCode(cell(row,idx(h,'COD. VENDEDOR')));const rca=rcaByCurrent.get(transactionRcaCode);const winthor=cleanCode(cell(row,idx(h,'CODPROD. WINTHOR')));const manufacturer=cleanCode(cell(row,idx(h,'CODIGO FABRICANTE')));const ean=cleanDigits(cell(row,idx(h,'EAN PRODUTO'))||cell(row,idx(h,'EAN CADASTRO')));const item=itemIndex.byWinthor.get(winthor)||itemIndex.bySku.get(manufacturer)||itemIndex.byEan.get(ean);const movementDate=toIsoDate(cell(row,idx(h,'DATA MOVIMENTO')));const invoice=cleanCode(cell(row,idx(h,'NUMERO NOTA FISCAL')));
@@ -36,8 +37,8 @@ export function parseSales8022(rows:Row[],items:ItemMasterRecord[],rcas:RcaMaste
   return{facts,qualityIssues};
 }
 
-export function buildTargets(support:CanonicalSupportData,rcas:RcaMasterRecord[],referenceDate:string):{targets:TargetFactRecord[];qualityIssues:DataQualityIssue[]}{
-  const qualityIssues:DataQualityIssue[]=[];const rcaByLegacy=new Map(rcas.filter(r=>r.legacyRcaCode).map(r=>[r.legacyRcaCode,r]));const competence=referenceDate.slice(0,7);const targets=(support.vendorTargets||[]).map((raw,index)=>{const legacyRcaCode=cleanCode(raw.oldCode);const rca=rcaByLegacy.get(legacyRcaCode);if(!rca)qualityIssues.push({id:`TARGET_RCA:${legacyRcaCode}:${index}`,domain:'TARGET',severity:'WARNING',code:'TARGET_UNASSIGNED_RCA',message:'Meta Colgate preservada no total da indústria, mas sem RCA oficial resolvido nesta fotografia.',source:'BUSSOLA',entityKey:legacyRcaCode});return{targetFactId:`BUSSOLA:${competence}:${legacyRcaCode}:${index}`,competence,industry:'COLGATE',legacyRcaCode,rcaCanonicalId:rca?.rcaCanonicalId||'',salesTarget:Number(raw.salesTarget)||0,positivityTarget:Number(raw.positivityTarget)||0,assignmentStatus:rca?'RESOLVED':'UNRESOLVED_RCA',source:'BUSSOLA'} as TargetFactRecord});return{targets,qualityIssues};
+export function buildTargets(workbook:XLSX.WorkBook|null,rcas:RcaMasterRecord[],referenceDate:string):{targets:TargetFactRecord[];qualityIssues:DataQualityIssue[]}{
+  const qualityIssues:DataQualityIssue[]=[];if(!workbook)return{targets:[],qualityIssues};const rcaByLegacy=new Map(rcas.filter(r=>r.legacyRcaCode).map(r=>[r.legacyRcaCode,r]));const competence=referenceDate.slice(0,7);const rawTargets=parseCompassTargets(workbook);const targets=rawTargets.map((raw,index)=>{const legacyRcaCode=cleanCode(raw.oldCode);const rca=rcaByLegacy.get(legacyRcaCode);if(!rca)qualityIssues.push({id:`TARGET_RCA:${legacyRcaCode}:${index}`,domain:'TARGET',severity:'WARNING',code:'TARGET_UNASSIGNED_RCA',message:'Meta Colgate preservada no total da indústria, mas sem RCA oficial resolvido nesta fotografia.',source:'BUSSOLA',entityKey:legacyRcaCode});return{targetFactId:`BUSSOLA:${competence}:${legacyRcaCode}:${index}`,competence,industry:'COLGATE',legacyRcaCode,rcaCanonicalId:rca?.rcaCanonicalId||'',salesTarget:Number(raw.salesTarget)||0,positivityTarget:Number(raw.positivityTarget)||0,assignmentStatus:rca?'RESOLVED':'UNRESOLVED_RCA',source:'BUSSOLA'} as TargetFactRecord});return{targets,qualityIssues};
 }
 
 export function buildInboundFacts(rows:Row[],items:ItemMasterRecord[],operational:OperationalSourceState):{inboundOrders:InboundOrderFactRecord[];receiptHeaders:ReceiptHeaderRecord[];receiptItems:ReceiptItemRecord[];qualityIssues:DataQualityIssue[]}{
@@ -50,6 +51,6 @@ export function buildInboundFacts(rows:Row[],items:ItemMasterRecord[],operationa
   return{inboundOrders,receiptHeaders,receiptItems,qualityIssues};
 }
 
-export function runSalesMotor(input:{salesRows:Row[];portfolioRows:Row[];items:ItemMasterRecord[];rcas:RcaMasterRecord[];support:CanonicalSupportData;operational:OperationalSourceState;referenceDate:string}):SalesMotorResult{
-  const sales=parseSales8022(input.salesRows,input.items,input.rcas);const inbound=buildInboundFacts(input.portfolioRows,input.items,input.operational);const targets=buildTargets(input.support,input.rcas,input.referenceDate);return{salesFacts:sales.facts,inboundOrders:inbound.inboundOrders,receiptHeaders:inbound.receiptHeaders,receiptItems:inbound.receiptItems,targets:targets.targets,qualityIssues:[...sales.qualityIssues,...inbound.qualityIssues,...targets.qualityIssues]};
+export function runSalesMotor(input:{salesRows:Row[];portfolioRows:Row[];items:ItemMasterRecord[];rcas:RcaMasterRecord[];compassWorkbook:XLSX.WorkBook|null;operational:OperationalSourceState;referenceDate:string}):SalesMotorResult{
+  const sales=parseSales8022(input.salesRows,input.items,input.rcas);const inbound=buildInboundFacts(input.portfolioRows,input.items,input.operational);const targets=buildTargets(input.compassWorkbook,input.rcas,input.referenceDate);return{salesFacts:sales.facts,inboundOrders:inbound.inboundOrders,receiptHeaders:inbound.receiptHeaders,receiptItems:inbound.receiptItems,targets:targets.targets,qualityIssues:[...sales.qualityIssues,...inbound.qualityIssues,...targets.qualityIssues]};
 }
