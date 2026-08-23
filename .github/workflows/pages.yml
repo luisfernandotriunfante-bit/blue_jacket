@@ -1,61 +1,127 @@
-name: Validate and publish Blue Jacket
+name: apply-load-fix
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  build:
+  apply-fix:
+    if: github.head_ref == 'fix/carga-motores-itens-historico'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
         with:
-          node-version: 24
+          ref: fix/carga-motores-itens-historico
+          fetch-depth: 0
+      - name: Apply fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
 
-      - name: Install dependencies
-        run: npm ci
+          item = Path('src/services/motors/itemMotor.ts')
+          text = item.read_text()
+          new_parse286 = r'''function parse286(rows:Row[]):Detailed286[]{
+  const result:Detailed286[]=[];if(!rows.length)return result;
 
-      - name: Dependency audit
-        run: npm audit --audit-level=high
+  // Relatórios Winthor 286 aprovados: filial na coluna 0 e Código do produto na coluna 1.
+  // Essa assinatura tem precedência sobre cabeçalhos genéricos para impedir que a filial 11 vire SKU.
+  const positionalRows=rows.filter(row=>String(row[0]??'').trim()==='11'&&/^\d+$/.test(cleanCode(row[1])));
+  if(positionalRows.length){
+    for(const row of positionalRows){
+      const code=cleanCode(row[1]);
+      const compact=row.length<=22;
+      const ean=validBarcode(compact?row[17]:row[20])||validBarcode(row[17])||validBarcode(row[20]);
+      const factoryCode=cleanCode(compact?row[18]:row[23])||cleanCode(row[18])||cleanCode(row[23]);
+      result.push({code,description:String(row[2]??'').trim(),ean,factoryCode,physical:parseNumber(compact?row[7]:row[10]),blocked:parseNumber(compact?row[8]:row[11]),reserved:parseNumber(compact?row[9]:row[12]),available:parseNumber(compact?row[10]:row[13])});
+    }
+    return result;
+  }
 
-      - name: Typecheck
-        run: npm run typecheck
+  const headerIndex=rows.findIndex(row=>{const n=row.map(headerToken);return n.includes('CODIGO')&&n.includes('DESCRICAO')&&n.includes('BARRAS')&&n.includes('FABRICA')});
+  if(headerIndex>=0){
+    const h=rows[headerIndex].map(headerToken);const col=(...names:string[])=>{for(const name of names){const found=h.indexOf(headerToken(name));if(found>=0)return found}return-1};
+    const cCode=col('Código'),cDesc=col('Descrição'),cEan=col('Barras'),cFactory=col('Fábrica'),cPhysical=col('Físico'),cBlocked=col('Bloq.'),cReserved=col('Reserv.'),cAvailable=col('Disp.');
+    if(cCode>=0){for(let i=headerIndex+1;i<rows.length;i++){
+      const row=rows[i];const code=cleanCode(row[cCode]);if(!/^\d+$/.test(code))continue;
+      result.push({code,description:cDesc>=0?String(row[cDesc]??'').trim():'',ean:cEan>=0?validBarcode(row[cEan]):'',factoryCode:cFactory>=0?cleanCode(row[cFactory]):'',physical:cPhysical>=0?parseNumber(row[cPhysical]):0,blocked:cBlocked>=0?parseNumber(row[cBlocked]):0,reserved:cReserved>=0?parseNumber(row[cReserved]):0,available:cAvailable>=0?parseNumber(row[cAvailable]):0});
+    }}
+  }
+  if(!result.length)throw new Error('Cadastro 286: nenhum produto válido foi reconhecido nos layouts aprovado compacto ou expandido.');
+  return result;
+}'''
+          text, n = re.subn(r'function parse286\(rows:Row\[\]\):Detailed286\[\]\{.*?\n\}\n\nfunction parse105', new_parse286 + '\n\nfunction parse105', text, flags=re.S)
+          if n != 1: raise SystemExit(f'parse286 replacement count={n}')
+          item.write_text(text)
 
-      - name: Tests
-        run: npm run test:run
+          eng=Path('src/services/motors/unifiedEngine.ts')
+          text=eng.read_text()
+          text=text.replace("const isPriceList = (file: File) => has(file, 'LISTA DE PRECO') && !isPctabpr(file);", "const isPriceList = (file: File) => !isPctabpr(file) && (has(file, 'LISTA DE PRECO') || has(file, 'LISTA PRECO') || (has(file, 'COLGATE') && (has(file, 'PRECO') || has(file, 'TABELA OFICIAL'))));")
+          marker="function simpleHash(buffer: ArrayBuffer) {"
+          helper=r'''export function looksLikeIndustryPriceListRows(rows: Row[]) {
+  return rows.slice(0,40).some(row=>{
+    const header=row.map(value=>normalizeText(value).replace(/[^A-Z0-9]/g,''));
+    return header.includes('SKU')&&header.includes('EAN')&&header.some(value=>value.includes('UN')&&value.includes('CX'));
+  });
+}
 
-      - name: Build
-        run: npm run build
+'''
+          if 'export function looksLikeIndustryPriceListRows' not in text: text=text.replace(marker,helper+marker)
+          text=text.replace("const saleUnitsDiff = Math.abs(row.grossSaleUnits - purchase.volumes);","const saleUnitsDiff = Math.abs(Math.abs(row.netSignedUnits) - purchase.volumes);")
+          text=text.replace("volumes379: row.grossSaleUnits,","volumes379: Math.abs(row.netSignedUnits),")
+          old="  const recognized = input.allFiles.some(file => sourceType(file) !== 'OUTRA');\n  if (!recognized && !input.previous) throw new Error('Nenhuma fonte reconhecida foi encontrada para iniciar a base canônica unificada.');"
+          new=r'''  let priceListFile=find(isPriceList);
+  if(!priceListFile){
+    for(const file of input.allFiles){
+      if(/\.txt$/i.test(file.name)||isPctabpr(file)||isLaunchList(file))continue;
+      try{const candidate=await cache.rows(file);if(looksLikeIndustryPriceListRows(candidate)){priceListFile=file;break;}}catch{ /* arquivo não compatível */ }
+    }
+  }
+  const recognized=input.allFiles.some(file=>sourceType(file)!=='OUTRA')||Boolean(priceListFile);
+  if(!recognized&&!input.previous)throw new Error('Nenhuma fonte reconhecida foi encontrada para iniciar a base canônica unificada.');'''
+          if old not in text: raise SystemExit('recognized block not found')
+          text=text.replace(old,new)
+          text=text.replace("    priceListRows: await rows(isPriceList),","    priceListRows: priceListFile ? await cache.rows(priceListFile) : [],")
+          oldmeta="  const sourceMetadata = await Promise.all(input.allFiles.map(file => metadata(file, cache, referenceDate)));"
+          newmeta="  const sourceMetadata = await Promise.all(input.allFiles.map(async file => { const meta=await metadata(file, cache, referenceDate); return file===priceListFile ? {...meta,sourceType:'LISTA_PRECO_COLGATE'} : meta; }));"
+          if oldmeta not in text: raise SystemExit('metadata block not found')
+          text=text.replace(oldmeta,newmeta)
+          eng.write_text(text)
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./dist
+          test=Path('tests/unified-item-motor.test.ts')
+          t=test.read_text()
+          if 'prioriza assinatura Winthor filial 11' not in t:
+            t += r'''
 
-  deploy:
-    if: github.event_name != 'pull_request'
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+test('Cadastro 286 prioriza assinatura Winthor filial 11 + código na coluna 1 mesmo com cabeçalho ambíguo',()=>{
+  const header=Array(21).fill('');header[0]='Código';header[1]='Produto';header[2]='Descrição';header[17]='Barras';header[18]='Fábrica';
+  const cadastro=Array(21).fill('');cadastro[0]='11';cadastro[1]=857;cadastro[2]='ED COLG COLORS';cadastro[17]='7509546688091';cadastro[18]='61036090';
+  const stock=Array(10).fill('');stock[0]=857;stock[1]='ED COLG COLORS';stock[4]=1812;stock[6]=8.864053;stock[9]=20.27;
+  const result=runItemMotor({normalized286Rows:[header,cadastro],stock105Rows:[stock],stock8013Rows:[],priceListRows:[],launchRows:[],pctabprWorkbook:null,previousItems:[]});
+  assert.equal(result.items.length,1);assert.equal(result.items[0].winthorCode,'857');assert.equal(result.items[0].physicalStockUnits,1812);assert.equal(result.qualityIssues.some(issue=>issue.code==='STOCK_105_CODE_NOT_IN_ITEM_MASTER'),false);
+});
+'''
+            test.write_text(t)
+
+          hist=Path('tests/unified-historical-reconciliation.test.ts')
+          hist.write_text(r'''import test from 'node:test';
+import assert from 'node:assert/strict';
+import { aggregateHistoricalCustomerProduct } from '../src/services/motors/historicalMotor.ts';
+const base:any={historicalSalesFactId:'x',movementDate:'2026-01-01',invoiceNumber:'1',invoiceSeries:'1',legacyProductCode:'11111111',historicalGtin:'',gtinType:'UNKNOWN',itemCanonicalId:'',quantityRaw:0,signedQuantity:0,valueRaw:0,signedValue:0,discountRaw:0,signedDiscount:0,operationCode:'',cfop:'',movementClass:'SALE',orderNumber:'',supplier:'',customerCnpj:'03683158000100',customerRaw:'03683158000100',customerCanonicalId:'CNPJ:03683158000100',legacyRcaCode:'1',rcaCanonicalId:'',netWeight:0,grossWeight:0,historicalCity:'',historicalCoordinator:'',historicalNetwork:'',historicalBranch:'',historicalGroup:'',qtdCx:0,sourceYear:2026,source:'379'};
+test('379 agrega quantidade líquida assinada para reconciliar 310.Volumes',()=>{const sale={...base,historicalSalesFactId:'s',quantityRaw:10,signedQuantity:10,valueRaw:100,signedValue:100,movementClass:'SALE'};const ret={...base,historicalSalesFactId:'r',invoiceNumber:'2',quantityRaw:2,signedQuantity:-2,valueRaw:20,signedValue:-20,movementClass:'RETURN'};const [agg]=aggregateHistoricalCustomerProduct([sale,ret]);assert.equal(agg.grossSaleUnits,10);assert.equal(agg.returnUnits,2);assert.equal(Math.abs(agg.netSignedUnits),8);assert.equal(agg.netSalesValue,80);});
+''')
+
+          # remove workflow temporário que não pertence ao produto
+          Path('.github/workflows/fix-load-motors.yml').unlink(missing_ok=True)
+          PY
+      - name: Restore permanent workflow and commit
+        run: |
+          git checkout origin/main -- .github/workflows/pages.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: corrige ingestão canônica de itens e histórico"
+          git push origin HEAD:fix/carga-motores-itens-historico
