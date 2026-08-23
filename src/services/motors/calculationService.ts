@@ -1,0 +1,120 @@
+import type {
+  CanonicalClientResult,
+  CanonicalCoordinatorResult,
+  CanonicalDailyMovement,
+  CanonicalHistorySummary,
+  CanonicalInventoryProduct,
+  CanonicalLineResult,
+  CanonicalNetworkResult,
+  CanonicalNetworkStore,
+  CanonicalSellOutSummary,
+  CanonicalState,
+  CanonicalStockSummary,
+  CanonicalVendorResult,
+  LineName,
+  ManualConfiguration,
+} from '../../domain/canonical';
+import type { InboundOrderFactRecord, ItemMasterRecord, SalesFactRecord, UnifiedDataLayer } from '../../domain/unified';
+import { classifyLine, normalizeText } from '../canonical/utils';
+
+const ratio=(value:number,target:number)=>target>0?value/target:0;
+const gap=(target:number,value:number)=>Math.max(target-value,0);
+const sum=<T>(rows:T[],value:(row:T)=>number)=>rows.reduce((total,row)=>total+(Number(value(row))||0),0);
+const distinct=(values:string[])=>new Set(values.filter(Boolean)).size;
+
+export interface UnifiedCalculationSummary {
+  invoiced:number;
+  toInvoice:number;
+  sellOut:number;
+  invoicedPositivation:number;
+  totalPositivation:number;
+  industryTarget:number;
+  industryPositivityTarget:number;
+  assignedTarget:number;
+  unassignedTarget:number;
+}
+
+export function calculateUnifiedSummary(unified:UnifiedDataLayer):UnifiedCalculationSummary {
+  const invoicedRows=unified.salesFacts.filter(row=>row.salesStatus==='FATURADO');
+  const toInvoiceRows=unified.salesFacts.filter(row=>row.salesStatus==='A FATURAR');
+  const industryTarget=sum(unified.targets,row=>row.salesTarget);
+  const industryPositivityTarget=sum(unified.targets,row=>row.positivityTarget);
+  const assignedTarget=sum(unified.targets.filter(row=>row.assignmentStatus==='RESOLVED'),row=>row.salesTarget);
+  return {
+    invoiced:sum(invoicedRows,row=>row.value),
+    toInvoice:sum(toInvoiceRows,row=>row.value),
+    sellOut:sum(unified.salesFacts,row=>row.value),
+    invoicedPositivation:distinct(invoicedRows.map(row=>row.cnpj)),
+    totalPositivation:distinct(unified.salesFacts.map(row=>row.cnpj)),
+    industryTarget,
+    industryPositivityTarget,
+    assignedTarget,
+    unassignedTarget:Math.max(industryTarget-assignedTarget,0),
+  };
+}
+
+function vendorPositivity(rows:SalesFactRecord[]){
+  const invoiced=new Set(rows.filter(row=>row.salesStatus==='FATURADO').map(row=>row.cnpj).filter(Boolean));
+  const total=new Set(rows.map(row=>row.cnpj).filter(Boolean));
+  let future=0;total.forEach(cnpj=>{if(!invoiced.has(cnpj))future+=1});
+  return {invoiced:invoiced.size,total:total.size,future};
+}
+
+function buildVendors(unified:UnifiedDataLayer,base:CanonicalState):CanonicalVendorResult[]{
+  const targetsByRca=new Map<string,{sales:number;positivity:number}>();
+  unified.targets.filter(row=>row.rcaCanonicalId).forEach(row=>{const current=targetsByRca.get(row.rcaCanonicalId)||{sales:0,positivity:0};current.sales+=row.salesTarget;current.positivity+=row.positivityTarget;targetsByRca.set(row.rcaCanonicalId,current)});
+  const salesByRca=new Map<string,SalesFactRecord[]>();unified.salesFacts.filter(row=>row.rcaCanonicalId).forEach(row=>{const current=salesByRca.get(row.rcaCanonicalId)||[];current.push(row);salesByRca.set(row.rcaCanonicalId,current)});
+  const businessTotal=Math.max(base.sellOut.businessDaysTotal,0);const elapsed=Math.max(base.sellOut.businessDaysElapsed,0);const remaining=Math.max(base.sellOut.businessDaysRemaining,0);
+  return unified.rcas.filter(rca=>rca.isColgate).map(rca=>{
+    const rows=salesByRca.get(rca.rcaCanonicalId)||[];const target=targetsByRca.get(rca.rcaCanonicalId)||{sales:0,positivity:0};const invoiced=sum(rows.filter(row=>row.salesStatus==='FATURADO'),row=>row.value);const total=sum(rows,row=>row.value);const toInvoice=total-invoiced;const pos=vendorPositivity(rows);const idealSalesToday=businessTotal>0?target.sales*(elapsed/businessTotal):0;const idealPositivityToday=businessTotal>0?target.positivity*(elapsed/businessTotal):0;
+    return {newCode:rca.currentRcaCode,oldCode:rca.legacyRcaCode,name:rca.rcaName,coordinatorCode:rca.coordinatorCode,coordinatorName:rca.coordinatorName,salesTarget:target.sales,positivityTarget:target.positivity,invoiced,toInvoice,total,attainment:ratio(total,target.sales),invoicedPositivation:pos.invoiced,futurePositivation:pos.future,totalPositivation:pos.total,positivityAttainment:ratio(pos.total,target.positivity),idealSalesToday,salesGapToIdeal:gap(idealSalesToday,total),salesGapToTarget:gap(target.sales,total),idealPositivationToday,positivityGapToIdeal:gap(idealPositivityToday,pos.total),positivityGapToTarget:gap(target.positivity,pos.total),positivityDailyTarget:remaining>0?gap(target.positivity,pos.total)/remaining:gap(target.positivity,pos.total)};
+  });
+}
+
+function buildCoordinators(vendors:CanonicalVendorResult[]):CanonicalCoordinatorResult[]{
+  const grouped=new Map<string,CanonicalVendorResult[]>();vendors.forEach(vendor=>{const key=vendor.coordinatorCode||vendor.coordinatorName||'SEM_COORDENADOR';const rows=grouped.get(key)||[];rows.push(vendor);grouped.set(key,rows)});
+  return Array.from(grouped.entries()).map(([code,rows])=>({code,name:rows[0]?.coordinatorName||code,salesTarget:sum(rows,row=>row.salesTarget),positivityTarget:sum(rows,row=>row.positivityTarget),invoiced:sum(rows,row=>row.invoiced),toInvoice:sum(rows,row=>row.toInvoice),total:sum(rows,row=>row.total),attainment:ratio(sum(rows,row=>row.total),sum(rows,row=>row.salesTarget)),invoicedPositivation:sum(rows,row=>row.invoicedPositivation),futurePositivation:sum(rows,row=>row.futurePositivation),totalPositivation:sum(rows,row=>row.totalPositivation),positivityAttainment:ratio(sum(rows,row=>row.totalPositivation),sum(rows,row=>row.positivityTarget)),vendors:rows}));
+}
+
+function buildClients(unified:UnifiedDataLayer):CanonicalClientResult[]{
+  const grouped=new Map<string,SalesFactRecord[]>();unified.salesFacts.filter(row=>row.cnpj).forEach(row=>{const rows=grouped.get(row.cnpj)||[];rows.push(row);grouped.set(row.cnpj,rows)});const customerByCnpj=new Map(unified.customers.map(row=>[row.cnpj,row]));const latestClass=new Map<string,string>();unified.customerClassifications.forEach(row=>{if(row.premiseNetwork)latestClass.set(row.cnpj,row.premiseNetwork)});
+  return Array.from(grouped.entries()).map(([cnpj,rows])=>({cnpj,name:customerByCnpj.get(cnpj)?.customerName||'',city:customerByCnpj.get(cnpj)?.city||'',network:latestClass.get(cnpj)||'',invoiced:sum(rows.filter(row=>row.salesStatus==='FATURADO'),row=>row.value),toInvoice:sum(rows.filter(row=>row.salesStatus==='A FATURAR'),row=>row.value),total:sum(rows,row=>row.value)}));
+}
+
+function buildDaily(unified:UnifiedDataLayer):CanonicalDailyMovement[]{
+  const grouped=new Map<string,SalesFactRecord[]>();unified.salesFacts.forEach(row=>{const rows=grouped.get(row.movementDate)||[];rows.push(row);grouped.set(row.movementDate,rows)});
+  return Array.from(grouped.entries()).map(([date,rows])=>{const invoicedRows=rows.filter(row=>row.salesStatus==='FATURADO');return{date,invoiced:sum(invoicedRows,row=>row.value),toInvoice:sum(rows.filter(row=>row.salesStatus==='A FATURAR'),row=>row.value),total:sum(rows,row=>row.value),invoicedPositivation:distinct(invoicedRows.map(row=>row.cnpj)),totalPositivation:distinct(rows.map(row=>row.cnpj))}}).sort((a,b)=>a.date.localeCompare(b.date));
+}
+
+function monthKey(date:string){return date.slice(0,7)}
+function shiftMonth(key:string,delta:number){const[y,m]=key.split('-').map(Number);const d=new Date(Date.UTC(y,m-1+delta,1));return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`}
+function buildHistory(unified:UnifiedDataLayer,referenceDate:string):CanonicalHistorySummary{
+  const grouped=new Map<string,{grossSales:number;returns:number;value:number}>();unified.historicalSalesFacts.filter(row=>row.movementClass!=='OTHER').forEach(row=>{const key=monthKey(row.movementDate);const current=grouped.get(key)||{grossSales:0,returns:0,value:0};if(row.movementClass==='SALE')current.grossSales+=row.valueRaw;else current.returns+=row.valueRaw;current.value+=row.signedValue;grouped.set(key,current)});
+  const months=Array.from(grouped.entries()).map(([key,row])=>({key,year:Number(key.slice(0,4)),month:Number(key.slice(5,7)),value:row.value,grossSales:row.grossSales,returns:row.returns})).sort((a,b)=>a.key.localeCompare(b.key));const currentKey=referenceDate.slice(0,7);const lastYear=`${Number(currentKey.slice(0,4))-1}-${currentKey.slice(5,7)}`;const averageKeys=[shiftMonth(currentKey,-3),shiftMonth(currentKey,-2),shiftMonth(currentKey,-1)];const values=averageKeys.map(key=>grouped.get(key)?.value).filter((value):value is number=>typeof value==='number');return{months,sameMonthLastYear:grouped.get(lastYear)?.value??null,sameMonthLastYearKey:lastYear,average3ClosedMonths:values.length===3?values.reduce((a,b)=>a+b,0)/3:null,average3MonthKeys:averageKeys};
+}
+
+function itemLine(item:ItemMasterRecord):LineName|''{return classifyLine(item.internalDescription||item.industryDescription,item.manufacturerCode||item.industrySku)}
+function buildLines(unified:UnifiedDataLayer,sellOutTarget:number,config:ManualConfiguration):CanonicalLineResult[]{
+  const itemById=new Map(unified.items.map(item=>[item.itemCanonicalId,item]));const totals=new Map<LineName,number>();unified.salesFacts.forEach(row=>{const item=itemById.get(row.itemCanonicalId);if(!item)return;const line=itemLine(item);if(!line)return;totals.set(line,(totals.get(line)||0)+row.value)});return (Object.keys(config.lineShares) as LineName[]).map(name=>{const share=config.lineShares[name]||0;const target=sellOutTarget*share;const total=totals.get(name)||0;const invoiced=unified.salesFacts.filter(row=>row.salesStatus==='FATURADO'&&itemLine(itemById.get(row.itemCanonicalId) as ItemMasterRecord)===name).reduce((s,row)=>s+row.value,0);return{name,share,target,invoiced,toInvoice:total-invoiced,total,attainment:ratio(total,target)}});
+}
+
+function openInbound(row:InboundOrderFactRecord){return row.inboundStatus!=='RECEIVED_BY_MILENIO'}
+function buildInventory(unified:UnifiedDataLayer,base:CanonicalState,config:ManualConfiguration):{inventory:CanonicalInventoryProduct[];stock:CanonicalStockSummary}{
+  const oldByCode=new Map(base.inventory.map(item=>[String(item.code),item]));const inboundByItem=new Map<string,InboundOrderFactRecord[]>();unified.inboundOrders.filter(openInbound).forEach(row=>{const rows=inboundByItem.get(row.itemCanonicalId)||[];rows.push(row);inboundByItem.set(row.itemCanonicalId,rows)});
+  const inventory=unified.items.map(item=>{const old=oldByCode.get(item.winthorCode);const inbound=inboundByItem.get(item.itemCanonicalId)||[];const factor=item.industryUnitsPerCase||0;let pendingQty=0,pendingCases=0,pendingCost=0,pendingSale=0;inbound.forEach(row=>{const remainingUnits=row.remainingInTransitUnits??row.pipelineUnits??0;const remainingCases=factor>0?remainingUnits/factor:row.pipelineQtyCases;const fraction=row.pipelineUnits&&row.pipelineUnits>0?Math.min(Math.max(remainingUnits/row.pipelineUnits,0),1):1;pendingQty+=remainingUnits;pendingCases+=remainingCases;pendingCost+=row.netValue*fraction;pendingSale+=remainingUnits>0&&item.salePricePvenDa1?remainingUnits*item.salePricePvenDa1:row.netValue*fraction*(1+Math.max(config.portfolioSaleMarkup,0))});const costUnit=old?.costUnit||0;const saleUnit=item.salePricePvenDa1??old?.saleUnit??0;return{code:item.winthorCode||item.itemCanonicalId,description:item.internalDescription||item.industryDescription,ean:item.internalEan||item.industryEan,quantity:item.physicalStockUnits,costUnit,saleUnit,pendingQty,pendingCases,pendingCost,pendingSale,isLaunch:item.isLaunch,hasWinthor:item.hasWinthor,factoryCode:item.manufacturerCode||item.industrySku,physicalCases:old?.physicalCases||0,physicalUnits:old?.physicalUnits||item.physicalStockUnits,grossKg:old?.grossKg||0} as CanonicalInventoryProduct});
+  const costValue=sum(inventory,row=>row.quantity*row.costUnit);const saleValue=sum(inventory,row=>row.quantity*row.saleUnit);const pendingPurchaseCost=sum(inventory,row=>row.pendingCost);const pendingPurchaseSale=sum(inventory,row=>row.pendingSale);const history=buildHistory(unified,base.referenceDate);const average=Math.max(history.average3ClosedMonths||0,0);const coverageCurrentDays=average>0?Math.round(saleValue/average*30):0;const coverageProjectedDays=average>0?Math.round((saleValue+pendingPurchaseSale)/average*30):0;const coverageCostCurrentDays=average>0?Math.round(costValue/average*30):0;const coverageCostProjectedDays=average>0?Math.round((costValue+pendingPurchaseCost)/average*30):0;return{inventory,stock:{costValue,saleValue,pendingPurchaseCost,pendingPurchaseSale,projectedCostValue:costValue+pendingPurchaseCost,projectedSaleValue:saleValue+pendingPurchaseSale,physicalUnits:sum(inventory,row=>row.physicalUnits||row.quantity),physicalCases:sum(inventory,row=>row.physicalCases||0),grossKg:sum(inventory,row=>row.grossKg||0),coverageCurrentDays,coverageProjectedDays,coverageCostCurrentDays,coverageCostProjectedDays,coverageTargetDays:config.coverageTargetDays}};
+}
+
+function buildNetworks(unified:UnifiedDataLayer,config:ManualConfiguration):CanonicalNetworkResult[]{
+  const latest=new Map<string,string>();unified.customerClassifications.forEach(row=>{if(row.premiseNetwork)latest.set(row.cnpj,row.premiseNetwork)});const salesByCnpj=new Map<string,SalesFactRecord[]>();unified.salesFacts.forEach(row=>{if(!row.cnpj)return;const rows=salesByCnpj.get(row.cnpj)||[];rows.push(row);salesByCnpj.set(row.cnpj,rows)});const topsByNetwork=new Map<string,typeof unified.topRetailerSnapshots>();unified.topRetailerSnapshots.forEach(row=>{const key=row.topRetailerNetwork||'SEM_REDE_TOP';const rows=topsByNetwork.get(key)||[];rows.push(row);topsByNetwork.set(key,rows)});const networks=new Map<string,string[]>();latest.forEach((network,cnpj)=>{const rows=networks.get(network)||[];rows.push(cnpj);networks.set(network,rows)});
+  return Array.from(networks.entries()).map(([name,cnpjs])=>{const rows=cnpjs.flatMap(cnpj=>salesByCnpj.get(cnpj)||[]);const invoiced=sum(rows.filter(row=>row.salesStatus==='FATURADO'),row=>row.value);const total=sum(rows,row=>row.value);const key=normalizeText(name)||name;const target=Math.max(config.networkTargets[key]??config.networkTargets[name]??0,0);const topRows=topsByNetwork.get(name)||[];const topTarget=sum(topRows,row=>row.target);const stores:CanonicalNetworkStore[]=topRows.map(store=>{const storeSales=salesByCnpj.get(store.cnpj)||[];const storeInvoiced=sum(storeSales.filter(row=>row.salesStatus==='FATURADO'),row=>row.value);return{cnpj:store.cnpj,name:store.storeName,fantasyName:store.topTradeName,city:store.topCity,managerCnpj:store.managerCnpj,groupingCode:store.groupCode,tier:store.topCategory,storeType:store.storeType,topTarget:store.target,invoiced:storeInvoiced,toInvoice:sum(storeSales,row=>row.value)-storeInvoiced,total:sum(storeSales,row=>row.value)}});return{key,name,teamCode:'',vendorCode:'',detectedNetworkTarget:0,networkTarget:target,topTarget,invoiced,toInvoice:total-invoiced,total,networkAttainment:ratio(total,target),topAttainment:ratio(total,topTarget),gapToNetworkTarget:gap(target,total),gapToTopTarget:gap(topTarget,total),clients:cnpjs.length,stores}});
+}
+
+function toTransactions(unified:UnifiedDataLayer):CanonicalState['transactions']{
+  const itemById=new Map(unified.items.map(item=>[item.itemCanonicalId,item]));const customerByCnpj=new Map(unified.customers.map(row=>[row.cnpj,row]));const rcaById=new Map(unified.rcas.map(row=>[row.rcaCanonicalId,row]));return unified.salesFacts.map(row=>{const item=itemById.get(row.itemCanonicalId);const customer=customerByCnpj.get(row.cnpj);const rca=rcaById.get(row.rcaCanonicalId);return{date:row.movementDate,status:row.salesStatus,clientCode:row.winthorCustomerCode,clientName:customer?.customerName||'',cnpj:row.cnpj,city:customer?.city||'',vendorCode:rca?.currentRcaCode||row.transactionRcaCode,vendorName:rca?.rcaName||'',supervisorCode:rca?.coordinatorCode||'',supervisorName:rca?.coordinatorName||'',manufacturerCode:item?.manufacturerCode||row.industrySku,ean:item?.internalEan||item?.industryEan||'',internalProductCode:item?.winthorCode||row.winthorProductCode,productDescription:item?.internalDescription||item?.industryDescription||'',cases:row.cases,units:row.units,value:row.value,saleType:row.saleType,line:item?itemLine(item):''}});
+}
+
+export function projectCanonicalFromUnified(base:CanonicalState,unified:UnifiedDataLayer,config:ManualConfiguration):CanonicalState {
+  const summary=calculateUnifiedSummary(unified);const sellOutTarget=config.sellOutTarget>0?config.sellOutTarget:base.sellOut.sellOutTarget;const remaining=Math.max(base.sellOut.businessDaysRemaining,0);const elapsed=Math.max(base.sellOut.businessDaysElapsed,0);const totalDays=Math.max(base.sellOut.businessDaysTotal,0);const actualTotal=summary.sellOut;const sellOut:CanonicalSellOutSummary={...base.sellOut,invoiced:summary.invoiced,toInvoice:summary.toInvoice,total:actualTotal,sellOutTarget,attainment:ratio(actualTotal,sellOutTarget),invoicedPositivation:summary.invoicedPositivation,futurePositivation:Math.max(summary.totalPositivation-summary.invoicedPositivation,0),totalPositivation:summary.totalPositivation,industryPositivityTarget:summary.industryPositivityTarget,positivityAttainment:ratio(summary.totalPositivation,summary.industryPositivityTarget),ticketAverage:summary.totalPositivation>0?actualTotal/summary.totalPositivation:0,invoicedDailyAverage:elapsed>0?summary.invoiced/elapsed:0,totalDailyAverage:elapsed>0?actualTotal/elapsed:0,neededDailyAverage:remaining>0?gap(sellOutTarget,actualTotal)/remaining:gap(sellOutTarget,actualTotal),invoicedTrend:elapsed>0?summary.invoiced/elapsed*totalDays:0,totalTrend:elapsed>0?actualTotal/elapsed*totalDays:0};const vendors=buildVendors(unified,base);const coordinators=buildCoordinators(vendors);const history=buildHistory(unified,base.referenceDate);const inventoryProjection=buildInventory(unified,base,config);const warnings=[...base.warnings.filter(w=>!w.startsWith('Motor unificado:'))];if(unified.qualityIssues.length)warnings.push(`Motor unificado: ${unified.qualityIssues.filter(i=>i.severity==='ERROR').length} erro(s), ${unified.qualityIssues.filter(i=>i.severity==='WARNING').length} alerta(s) e ${unified.qualityIssues.filter(i=>i.severity==='INFO').length} informação(ões) de qualidade; fatos não resolvidos foram preservados.`);
+  return {...base,transactions:toTransactions(unified),inventory:inventoryProjection.inventory,daily:buildDaily(unified),history,industryTarget:summary.industryTarget,industryPositivityTarget:summary.industryPositivityTarget,sellOut,stock:inventoryProjection.stock,vendors,coordinators,clients:buildClients(unified),networks:buildNetworks(unified,config),lines:buildLines(unified,sellOutTarget,config),warnings};
+}
