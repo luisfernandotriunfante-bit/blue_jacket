@@ -236,7 +236,7 @@ export function parseCustomerAndPurchaseWorkbook(workbook: XLSX.WorkBook) {
     if (!cnpj || cnpj.length !== 14 || !winthorCode) continue;
     const key = `${cnpj}:${winthorCode}`;
     const current = aggregate.get(key) || {
-      cnpj, cnpjRaw: normalized.raw, winthorCode, description: String(row[col('Descricao')] ?? '').trim(), volumes: 0, quantity: 0,
+      cnpj, cnpjRaw: normalized.raw, legacyProductCode: winthorCode, winthorCode, description: String(row[col('Descricao')] ?? '').trim(), volumes: 0, quantity: 0,
       purchaseValue: 0, returnVolume: 0, returnValue: 0, netValue: 0, vendorCode: cleanCode(row[col('Vendedor')]), groupingCode: cleanCode(row[col('Agrupamento')]), groupingDescription: String(row[col('DescricaoAgrupamento')] ?? '').trim(),
     };
     current.volumes += parseNumber(row[col('Volumes')]);
@@ -244,7 +244,7 @@ export function parseCustomerAndPurchaseWorkbook(workbook: XLSX.WorkBook) {
     current.purchaseValue += parseNumber(row[col('ValorCompras')]);
     current.returnVolume += parseNumber(row[col('VolumeDevolucao')]);
     current.returnValue += parseNumber(row[col('ValorDevolucoes')]);
-    current.netValue = current.purchaseValue - current.returnValue;
+    current.netValue = current.purchaseValue;
     aggregate.set(key, current);
   }
 
