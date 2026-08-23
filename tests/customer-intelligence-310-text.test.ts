@@ -18,7 +18,7 @@ function textFile(name: string, content: string) {
   return new File([content], name, { type: 'text/plain' });
 }
 
-test('310 TXT real é reconhecido pelo conteúdo e recompõe CNPJ de 13 para 14 dígitos', () => {
+test('310 TXT real é reconhecido pelo conteúdo, recompõe CNPJ e mantém Produto como código legado', () => {
   const text = `${HEADER}\n${REAL_LINE}`;
   assert.equal(isPurchase310Text(text, '310 total 2026.txt'), true);
   const parsed = parsePurchase310Text(text);
@@ -26,7 +26,8 @@ test('310 TXT real é reconhecido pelo conteúdo e recompõe CNPJ de 13 para 14 
   assert.equal(parsed.purchases.length, 1);
   const row = parsed.purchases[0];
   assert.equal(row.cnpj, '04594132000140');
-  assert.equal(row.winthorCode, '11100506');
+  assert.equal(row.legacyProductCode, '11100506');
+  assert.equal(row.winthorCode, '11100506', 'alias temporário de compatibilidade não muda a semântica legada');
   assert.equal(row.volumes, 3);
   assert.equal(row.quantity, 1);
   assert.equal(row.purchaseValue, 68.47);
@@ -36,12 +37,12 @@ test('310 TXT real é reconhecido pelo conteúdo e recompõe CNPJ de 13 para 14 
   assert.equal(row.groupingCode, '16');
 });
 
-test('310 TXT mantém regra Valor líquido = Compras - Devoluções e não subtrai desconto', () => {
+test('310 TXT mantém Valor Compras como líquido e V.Devoluções apenas para reconciliação', () => {
   const line = '        11100001 PRODUTO TESTE....................01X 01UN      2,0       1,0       1,0          100,00            0,00         30,00        1,0       0,0          10,00  12345678000199  721    2 COLGATE - TESTE';
   const row = parsePurchase310Text(`${HEADER}\n${line}`).purchases[0];
   assert.equal(row.purchaseValue, 100);
   assert.equal(row.returnValue, 10);
-  assert.equal(row.netValue, 90);
+  assert.equal(row.netValue, 100, 'V.Devoluções não pode ser abatido novamente de Valor Compras');
 });
 
 test('310 TXT não transforma identificador de 11 dígitos em CNPJ positivável', () => {
