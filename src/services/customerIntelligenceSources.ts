@@ -1,109 +1,287 @@
 import * as XLSX from 'xlsx';
-import { normalizeCnpj, normalizeText, parseNumber } from './canonical/utils';
-import type { AssortmentCompetence, CustomerCommercialProfile, CustomerIntelligenceSupport, OfficialAssortmentSku, PurchaseHistory310, SkuLineageRecord } from '../domain/customerIntelligenceTypes';
+import { cleanCode, cleanDigits, normalizeCnpj, normalizeText, parseNumber } from './canonical/utils';
+import type {
+  AssortmentCompetence,
+  CustomerCommercialProfile,
+  CustomerIntelligenceSupport,
+  OfficialAssortmentSku,
+  PurchaseHistory310,
+  SkuLineageRecord,
+} from '../domain/customerIntelligenceTypes';
 import { EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT } from '../domain/customerIntelligenceTypes';
 
-const cleanDigits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
-const cleanCode = (value: unknown) => String(value ?? '').trim().replace(/^0+/, '');
-const text = (value: unknown) => String(value ?? '').trim();
+type Row = unknown[];
 
-export function channelFromTier(value: string): string {
-  const tier = normalizeText(value).replace(/\s+/g, ' ');
-  if (tier.includes('FAIXA 1') || tier === '1') return 'Hiper';
-  if (tier.includes('FAIXA 2') || tier === '2') return 'Super G';
-  if (tier.includes('FAIXA 3') || tier === '3') return 'Super P';
-  if (tier.includes('FAIXA 4') || tier === '4') return 'Vizinhança GDE';
-  if (tier.includes('FAIXA 5') || tier === '5') return 'Vizinhança PEQ';
-  if (tier.includes('FAIXA 6') || tier === '6') return 'Tradicional Independente';
+const KNOWN_CHANNELS = new Map<string, string>([
+  ['HIPER', 'Hiper'],
+  ['SUPER G', 'Super G'],
+  ['SUPER P', 'Super P'],
+  ['CLUBS', 'Clubs'],
+  ['C&C', 'C&C'],
+  ['DROGARIA', 'Drogaria'],
+  ['FARMA BAIRRO 1 A 4', 'Farma Bairro 1 a 4'],
+  ['FARMA BAIRRO 5 A 8', 'Farma Bairro 5 a 8'],
+  ['VIZINHANCA GDE', 'Vizinhança GDE'],
+  ['VIZINHANCA PEQ', 'Vizinhança PEQ'],
+  ['TRADICIONAL INDEPENDENTE', 'Tradicional Independente'],
+  ['SORTIMENTO ATACADOS', 'Sortimento Atacados'],
+  ['SORTIMENTO DISTRIBUIDORES', 'Sortimento Distribuidores'],
+  ['E-COMMERCE PURE PLAYERS 1P + 3P', 'E-commerce Pure Players 1P + 3P'],
+  ['E-COMMERCE PURE PLAYERS INDIRETO', 'E-commerce Pure Players Indireto'],
+]);
+
+function rows(workbook: XLSX.WorkBook, sheetName: string): Row[] {
+  const sheet = workbook.Sheets[sheetName];
+  return sheet ? XLSX.utils.sheet_to_json<Row>(sheet, { header: 1, defval: '' }) : [];
+}
+
+function canonicalChannel(value: unknown): string {
+  const normalized = normalizeText(value).replace(/\s+/g, ' ').trim();
+  return KNOWN_CHANNELS.get(normalized) || '';
+}
+
+function findHeader(data: Row[], required: string[]): number {
+  return data.findIndex(row => {
+    const values = row.map(normalizeText);
+    return required.every(requiredValue => values.some(value => value === requiredValue || value.includes(requiredValue)));
+  });
+}
+
+function codeCandidates(row: Row, eanIndex: number): string[] {
+  return row.slice(0, Math.min(eanIndex, 6)).map(cleanCode).filter(value => value && value !== 'N/A');
+}
+
+function localWinthorCode(row: Row, eanIndex: number): string {
+  return codeCandidates(row, eanIndex).find(value => /^111\d{5}$/.test(value)) || '';
+}
+
+function colgateCode(row: Row, eanIndex: number): string {
+  const candidates = codeCandidates(row, eanIndex).filter(value => !/^111\d{5}$/.test(value));
+  return candidates.find(value => /^\d{8}$/.test(value)) || candidates[0] || '';
+}
+
+function parseAssortmentSheet(data: Row[], sheetName: string, key: string, label: string, validFrom: string, validTo: string): AssortmentCompetence {
+  const headerIndex = findHeader(data, ['EAN', 'DESCRI']);
+  if (headerIndex < 0) throw new Error(`${sheetName}: cabeçalho oficial de sortimento não reconhecido.`);
+  const header = data[headerIndex].map(value => String(value ?? ''));
+  const eanIndex = header.findIndex(value => normalizeText(value) === 'EAN');
+  const descriptionIndex = header.findIndex(value => normalizeText(value).includes('DESCRI'));
+  const fieldIndex = (name: string, fallback: number) => {
+    const index = header.findIndex(value => normalizeText(value) === normalizeText(name));
+    return index >= 0 ? index : fallback;
+  };
+  const channelColumns = header.map((value, index) => ({ index, channel: canonicalChannel(value) })).filter(item => item.channel);
+  const expectedTotalsByChannel: Record<string, { total: number; mandatory: number; important: number }> = {};
+  channelColumns.forEach(({ index, channel }) => {
+    expectedTotalsByChannel[channel] = {
+      total: parseNumber(data[Math.max(headerIndex - 3, 0)]?.[index]),
+      mandatory: parseNumber(data[Math.max(headerIndex - 2, 0)]?.[index]),
+      important: parseNumber(data[Math.max(headerIndex - 1, 0)]?.[index]),
+    };
+  });
+  const products: OfficialAssortmentSku[] = [];
+  for (let rowIndex = headerIndex + 1; rowIndex < data.length; rowIndex += 1) {
+    const row = data[rowIndex];
+    const ean = cleanDigits(row[eanIndex]);
+    if (!ean || ean.length < 8) continue;
+    const lifecycleStatus = String(row[0] ?? '').trim();
+    const launchCell = String(row[fieldIndex('LANÇAMENTO', 14)] ?? '').trim();
+    const launchLabel = normalizeText(lifecycleStatus).includes('LANCAMENTO') ? lifecycleStatus : normalizeText(launchCell).includes('LANCAMENTO') ? launchCell : '';
+    products.push({
+      ean,
+      colgateSku: colgateCode(row, eanIndex),
+      winthorCode: localWinthorCode(row, eanIndex),
+      description: String(row[descriptionIndex] ?? '').trim(),
+      categoryMaster: String(row[fieldIndex('CATEGORIA MASTER', 4)] ?? '').trim(),
+      category: String(row[fieldIndex('CATEGORIA', 5)] ?? '').trim(),
+      subcategory: String(row[fieldIndex('SUBCATEGORIA', 6)] ?? '').trim(),
+      brand: String(row[fieldIndex('MARCA', 7)] ?? '').trim(),
+      subbrand: String(row[fieldIndex('SUBMARCA', 8)] ?? '').trim(),
+      segment: String(row[fieldIndex('SEGMENTO', 9)] ?? '').trim(),
+      subsegment: String(row[fieldIndex('SUBSEGMENTO', 10)] ?? '').trim(),
+      contents: String(row[fieldIndex('CONTENTS', 11)] ?? '').trim(),
+      amount: String(row[fieldIndex('AMOUNT', 12)] ?? '').trim(),
+      promoPack: String(row[fieldIndex('PROMO', 13)] ?? '').trim(),
+      launchLabel,
+      lifecycleStatus,
+      recommendations: channelColumns.map(({ index, channel }) => ({ channel, value: parseNumber(row[index]) })),
+      sourceSheet: sheetName,
+    });
+  }
+  return { key, label, validFrom, validTo, sourceSheet: sheetName, products, expectedTotalsByChannel };
+}
+
+function parseHairOverride(data: Row[]): { products: OfficialAssortmentSku[]; lineage: SkuLineageRecord[] } {
+  const sheetName = 'SORTIMENTO HAIR CARE AGO26 &SET';
+  const headerIndex = findHeader(data, ['EAN ANTIGO', 'EAN NOVO', 'DESCRI']);
+  if (headerIndex < 0) return { products: [], lineage: [] };
+  const header = data[headerIndex].map(value => String(value ?? ''));
+  const indexOf = (name: string) => header.findIndex(value => normalizeText(value) === normalizeText(name));
+  const oldSkuIndex = indexOf('COD ANTIGO');
+  const oldEanIndex = indexOf('EAN ANTIGO');
+  const newSkuIndex = indexOf('COD NOVO');
+  const newEanIndex = indexOf('EAN NOVO');
+  const descriptionIndex = header.findIndex(value => normalizeText(value).includes('DESCRI'));
+  const channelColumns = header.map((value, index) => ({ index, channel: canonicalChannel(value) })).filter(item => item.channel);
+  const products: OfficialAssortmentSku[] = [];
+  const lineage: SkuLineageRecord[] = [];
+  for (let rowIndex = headerIndex + 1; rowIndex < data.length; rowIndex += 1) {
+    const row = data[rowIndex];
+    const statusRaw = String(row[0] ?? '').trim();
+    const status = normalizeText(statusRaw);
+    if (!status) continue;
+    const oldSku = cleanCode(row[oldSkuIndex]);
+    const oldEan = cleanDigits(row[oldEanIndex]);
+    const newSku = cleanCode(row[newSkuIndex]);
+    const newEan = cleanDigits(row[newEanIndex]);
+    const description = String(row[descriptionIndex] ?? '').trim();
+    if (status.includes('MUDANCA SKU AGO')) lineage.push({ oldSku, oldEan, newSku, newEan, description, status: 'MIGRACAO_VIGENTE', effectiveFrom: '2026-08-01', sourceSheet: sheetName });
+    else if (status.includes('MUDANCA OCORRERA EM Q4')) lineage.push({ oldSku, oldEan, newSku, newEan, description, status: 'MIGRACAO_FUTURA', effectiveFrom: '2026-10-01', sourceSheet: sheetName });
+    else if (status.includes('DESCONTINUADO')) lineage.push({ oldSku: oldSku || newSku, oldEan: oldEan || newEan, newSku: '', newEan: '', description, status: 'DESCONTINUADO', effectiveFrom: '2026-08-01', sourceSheet: sheetName });
+
+    const shouldApplyCurrent = !status.includes('MUDANCA OCORRERA EM Q4') && !status.includes('DESCONTINUADO');
+    if (!shouldApplyCurrent || !newEan) continue;
+    products.push({
+      ean: newEan,
+      colgateSku: newSku,
+      winthorCode: /^111\d{5}$/.test(newSku) ? newSku : '',
+      description,
+      categoryMaster: String(row[5] ?? '').trim(),
+      category: String(row[6] ?? '').trim(),
+      subcategory: String(row[7] ?? '').trim(),
+      brand: String(row[8] ?? '').trim(),
+      subbrand: String(row[9] ?? '').trim(),
+      segment: String(row[10] ?? '').trim(),
+      subsegment: String(row[11] ?? '').trim(),
+      contents: String(row[12] ?? '').trim(),
+      amount: String(row[13] ?? '').trim(),
+      promoPack: String(row[14] ?? '').trim(),
+      launchLabel: status.includes('LANCAMENTO') ? statusRaw : '',
+      lifecycleStatus: statusRaw,
+      recommendations: channelColumns.map(({ index, channel }) => ({ channel, value: parseNumber(row[index]) })),
+      sourceSheet: sheetName,
+    });
+  }
+  return { products, lineage };
+}
+
+function parseDiscontinued(data: Row[]): SkuLineageRecord[] {
+  const sheetName = 'Descontinuados Q326';
+  const headerIndex = findHeader(data, ['EAN', 'DESCRI']);
+  if (headerIndex < 0) return [];
+  const header = data[headerIndex].map(normalizeText);
+  const eanIndex = header.findIndex(value => value === 'EAN');
+  const skuIndex = header.findIndex(value => value === 'COD');
+  const descriptionIndex = header.findIndex(value => value.includes('DESCRI'));
+  return data.slice(headerIndex + 1).map(row => ({
+    oldSku: cleanCode(row[skuIndex]),
+    oldEan: cleanDigits(row[eanIndex]),
+    newSku: '',
+    newEan: '',
+    description: String(row[descriptionIndex] ?? '').trim(),
+    status: 'DESCONTINUADO' as const,
+    effectiveFrom: '2026-07-01',
+    sourceSheet: sheetName,
+  })).filter(item => item.oldEan);
+}
+
+function applyHairOverride(base: AssortmentCompetence, override: ReturnType<typeof parseHairOverride>): AssortmentCompetence {
+  const removeEans = new Set(override.lineage.filter(item => item.status === 'MIGRACAO_VIGENTE').map(item => item.oldEan).filter(Boolean));
+  const byEan = new Map(base.products.filter(product => !removeEans.has(product.ean)).map(product => [product.ean, product]));
+  override.products.forEach(product => byEan.set(product.ean, product));
+  return { ...base, products: Array.from(byEan.values()) };
+}
+
+export function parseOfficialAssortmentWorkbook(workbook: XLSX.WorkBook) {
+  const julySheet = workbook.SheetNames.find(name => normalizeText(name).includes('JUL26') && normalizeText(name).includes('SORTIMENTO'));
+  const augSepSheet = workbook.SheetNames.find(name => normalizeText(name).includes('AGO') && normalizeText(name).includes('SET26') && normalizeText(name).includes('BASE_SORTIMENTO'));
+  if (!julySheet || !augSepSheet) throw new Error('Sortimento Oficial: não encontrei simultaneamente as bases de Julho/26 e Agosto/Setembro/26.');
+  const july = parseAssortmentSheet(rows(workbook, julySheet), julySheet, '2026-07', 'Julho/26', '2026-07-01', '2026-07-31');
+  const augSepBase = parseAssortmentSheet(rows(workbook, augSepSheet), augSepSheet, '2026-08_09', 'Agosto/Setembro/26', '2026-08-01', '2026-09-30');
+  const hairSheet = workbook.SheetNames.find(name => normalizeText(name).includes('SORTIMENTO HAIR CARE'));
+  const hair = hairSheet ? parseHairOverride(rows(workbook, hairSheet)) : { products: [], lineage: [] };
+  const augSep = applyHairOverride(augSepBase, hair);
+  const discontinuedSheet = workbook.SheetNames.find(name => normalizeText(name).includes('DESCONTINUADOS Q326'));
+  const discontinued = discontinuedSheet ? parseDiscontinued(rows(workbook, discontinuedSheet)) : [];
+  const lineageMap = new Map<string, SkuLineageRecord>();
+  [...hair.lineage, ...discontinued].forEach(item => lineageMap.set(`${item.status}:${item.oldEan}:${item.newEan}`, item));
+  return { competences: [july, augSep], lineage: Array.from(lineageMap.values()) };
+}
+
+export function channelFromTier(tier: string): string {
+  const normalized = normalizeText(tier);
+  const match = normalized.match(/FAIXA\s*(\d)/);
+  const value = match?.[1] || '';
+  if (value === '1') return 'Hiper';
+  if (value === '2') return 'Super G';
+  if (value === '3') return 'Super P';
+  if (value === '4') return 'Vizinhança GDE';
+  if (value === '5') return 'Vizinhança PEQ';
+  if (value === '6') return 'Tradicional Independente';
+  if (normalized.includes('C&C') || normalized === 'CC') return 'C&C';
   return '';
 }
 
-function sheetRows(workbook: XLSX.WorkBook, name: string): unknown[][] {
-  const sheet = workbook.Sheets[name];
-  return sheet ? XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '', raw: true }) : [];
-}
-
-function findHeader(rows: unknown[][], required: string[]) {
-  return rows.findIndex(row => {
-    const normalized = row.map(normalizeText);
-    return required.every(item => normalized.some(value => value.includes(item)));
-  });
-}
-
-function parseControls(rows: unknown[][], headerIndex: number, channels: string[]) {
-  const result:Record<string,{total:number;mandatory:number;important:number}> = {};
-  const header = rows[headerIndex] || [];
-  channels.forEach(channel => result[channel] = { total: 0, mandatory: 0, important: 0 });
-  rows.slice(0, headerIndex).forEach(row => {
-    const label = normalizeText(row.find(value => normalizeText(value).includes('TOTAL SKUS')) || '');
-    if (!label) return;
-    channels.forEach(channel => {
-      const column = header.findIndex(value => normalizeText(value) === normalizeText(channel));
-      if (column < 0) return;
-      const value = Math.max(parseNumber(row[column]), 0);
-      if (label.includes('MANDATOR')) result[channel].mandatory = value;
-      else if (label.includes('IMPORTANTE')) result[channel].important = value;
-      else result[channel].total = value;
-    });
-  });
-  return result;
-}
-
-function parseStandardAssortmentSheet(workbook:XLSX.WorkBook, sheetName:string, key:string, label:string, validFrom:string, validTo:string):AssortmentCompetence|null {
-  const rows=sheetRows(workbook,sheetName); const headerIndex=findHeader(rows,['EAN','DESCR']);
-  if(headerIndex<0)return null;
-  const header=rows[headerIndex].map(normalizeText);
-  const col=(...names:string[])=>header.findIndex(value=>names.some(name=>value===normalizeText(name)||value.includes(normalizeText(name))));
-  const eanCol=col('EAN'); const skuCol=col('COD'); const descriptionCol=col('DESCRIÇÃO','DESCRICAO'); const statusCol=col('STATUS'); const launchCol=col('LANÇAMENTO','LANCAMENTO');
-  const fixed=new Set([statusCol,skuCol,eanCol,descriptionCol,launchCol,col('CATEGORIA MASTER'),col('CATEGORIA'),col('SUBCATEGORIA'),col('MARCA'),col('SUBMARCA'),col('SEGMENTO'),col('SUBSEGMENTO'),col('CONTENTS'),col('AMOUNT'),col('PROMO')].filter(index=>index>=0));
-  const channels=header.map((value,index)=>({value:String(rows[headerIndex][index]??'').trim(),index})).filter(item=>item.value&&!fixed.has(item.index)&&item.index>descriptionCol).map(item=>item.value);
-  const expectedTotalsByChannel=parseControls(rows,headerIndex,channels);
-  const products:OfficialAssortmentSku[]=[];
-  for(let r=headerIndex+1;r<rows.length;r++){
-    const row=rows[r]; const ean=cleanDigits(row[eanCol]); if(!ean)continue;
-    const recommendations=channels.map(channel=>({channel,value:parseNumber(row[header.findIndex(value=>normalizeText(value)===normalizeText(channel))])}));
-    products.push({ean,colgateSku:cleanCode(row[skuCol]),winthorCode:'',description:text(row[descriptionCol]),categoryMaster:text(row[col('CATEGORIA MASTER')]),category:text(row[col('CATEGORIA')]),subcategory:text(row[col('SUBCATEGORIA')]),brand:text(row[col('MARCA')]),subbrand:text(row[col('SUBMARCA')]),segment:text(row[col('SEGMENTO')]),subsegment:text(row[col('SUBSEGMENTO')]),contents:text(row[col('CONTENTS')]),amount:text(row[col('AMOUNT')]),promoPack:text(row[col('PROMO')]),launchLabel:text(row[launchCol]),lifecycleStatus:text(row[statusCol])||'ATIVO',recommendations,sourceSheet:sheetName});
+export function parseCustomerAndPurchaseWorkbook(workbook: XLSX.WorkBook) {
+  const purchaseSheet = workbook.SheetNames.find(name => normalizeText(name).includes('310 TOTAL 2026'));
+  if (!purchaseSheet) throw new Error('Compras 310: aba "310 total 2026" não encontrada.');
+  const purchaseRows = rows(workbook, purchaseSheet);
+  const purchaseHeader = purchaseRows[0]?.map(normalizeText) || [];
+  const col = (name: string) => purchaseHeader.findIndex(value => value === normalizeText(name));
+  const aggregate = new Map<string, PurchaseHistory310>();
+  for (const row of purchaseRows.slice(1)) {
+    const normalized = normalizeCnpj(row[col('CNPJ')], { declaredCnpj: true });
+    const cnpj = normalized.canonical;
+    const winthorCode = cleanCode(row[col('Codigo')]);
+    if (!cnpj || cnpj.length !== 14 || !winthorCode) continue;
+    const key = `${cnpj}:${winthorCode}`;
+    const current = aggregate.get(key) || {
+      cnpj, cnpjRaw: normalized.raw, winthorCode, description: String(row[col('Descricao')] ?? '').trim(), volumes: 0, quantity: 0,
+      purchaseValue: 0, returnVolume: 0, returnValue: 0, netValue: 0, vendorCode: cleanCode(row[col('Vendedor')]), groupingCode: cleanCode(row[col('Agrupamento')]), groupingDescription: String(row[col('DescricaoAgrupamento')] ?? '').trim(),
+    };
+    current.volumes += parseNumber(row[col('Volumes')]);
+    current.quantity += parseNumber(row[col('QtdCompra')]);
+    current.purchaseValue += parseNumber(row[col('ValorCompras')]);
+    current.returnVolume += parseNumber(row[col('VolumeDevolucao')]);
+    current.returnValue += parseNumber(row[col('ValorDevolucoes')]);
+    current.netValue = current.purchaseValue - current.returnValue;
+    aggregate.set(key, current);
   }
-  return{key,label,validFrom,validTo,sourceSheet:sheetName,products,expectedTotalsByChannel};
-}
 
-export function parseOfficialAssortmentWorkbook(workbook:XLSX.WorkBook):{competences:AssortmentCompetence[];lineage:SkuLineageRecord[];warnings:string[]} {
-  const competences:AssortmentCompetence[]=[];const lineage:SkuLineageRecord[]=[];const warnings:string[]=[];
-  const july=workbook.SheetNames.find(name=>{const n=normalizeText(name);return n.includes('JUL26')&&n.includes('SORTIMENTO')});
-  const aug=workbook.SheetNames.find(name=>{const n=normalizeText(name);return n.includes('AGO')&&n.includes('SET26')&&n.includes('SORTIMENTO')&&!n.includes('HAIR')});
-  if(july){const parsed=parseStandardAssortmentSheet(workbook,july,'2026-07','Julho/26','2026-07-01','2026-07-31');if(parsed)competences.push(parsed)}
-  if(aug){const parsed=parseStandardAssortmentSheet(workbook,aug,'2026-08_09','Agosto/Setembro/26','2026-08-01','2026-09-30');if(parsed)competences.push(parsed)}
-  const hair=workbook.SheetNames.find(name=>{const n=normalizeText(name);return n.includes('HAIR')&&n.includes('AGO')});
-  if(hair){
-    const rows=sheetRows(workbook,hair);const hi=findHeader(rows,['COD ANTIGO','EAN ANTIGO','COD NOVO','EAN NOVO']);
-    if(hi>=0){const h=rows[hi].map(normalizeText);const c=(v:string)=>h.findIndex(x=>x.includes(normalizeText(v)));
-      for(let r=hi+1;r<rows.length;r++){const row=rows[r];const oldSku=cleanCode(row[c('COD ANTIGO')]);const oldEan=cleanDigits(row[c('EAN ANTIGO')]);const newSku=cleanCode(row[c('COD NOVO')]);const newEan=cleanDigits(row[c('EAN NOVO')]);if(!oldSku&&!oldEan&&!newSku&&!newEan)continue;
-        lineage.push({oldSku,oldEan,newSku,newEan,description:text(row[c('DESCRIÇÃO')]),status:'MIGRACAO_VIGENTE',effectiveFrom:'2026-08-01',sourceSheet:hair});
-        const target=competences.find(item=>item.key==='2026-08_09');
-        if(target&&newEan){const product:OfficialAssortmentSku={ean:newEan,colgateSku:newSku,winthorCode:'',description:text(row[c('DESCRIÇÃO')]),categoryMaster:text(row[c('CATEGORIA MASTER')]),category:text(row[c('CATEGORIA')]),subcategory:text(row[c('SUBCATEGORIA')]),brand:text(row[c('MARCA')]),subbrand:text(row[c('SUBMARCA')]),segment:text(row[c('SEGMENTO')]),subsegment:text(row[c('SUBSEGMENTO')]),contents:text(row[c('CONTENTS')]),amount:text(row[c('AMOUNT')]),promoPack:text(row[c('PROMO')]),launchLabel:text(row[c('LANÇAMENTO')]),lifecycleStatus:text(row[c('STATUS')])||'ATIVO',recommendations:Object.keys(target.expectedTotalsByChannel).map(channel=>({channel,value:parseNumber(row[h.findIndex(x=>normalizeText(x)===normalizeText(channel))])})),sourceSheet:hair}; const index=target.products.findIndex(item=>item.ean===newEan);if(index>=0)target.products[index]=product;else target.products.push(product)}
-      }
+  const customerSheet = workbook.SheetNames.find(name => normalizeText(name).includes('EXPORTACAO PDVS'));
+  const customers: CustomerCommercialProfile[] = [];
+  if (customerSheet) {
+    const customerRows = rows(workbook, customerSheet);
+    const header = customerRows[0]?.map(normalizeText) || [];
+    const ci = (name: string) => header.findIndex(value => value === normalizeText(name));
+    for (const row of customerRows.slice(1)) {
+      const normalized = normalizeCnpj(row[ci('COD CLIENTE')], { declaredCnpj: true });
+      if (!normalized.canonical || normalized.canonical.length !== 14) continue;
+      const tier = String(row[ci('FAIXAS')] ?? '').trim();
+      customers.push({
+        cnpj: normalized.canonical,
+        cnpjRaw: normalized.raw,
+        name: String(row[ci('NOME_CLIENTE')] ?? '').trim(),
+        clientCode: '',
+        network: ci('REDE') >= 0 ? String(row[ci('REDE')] ?? '').trim() : '',
+        environment: String(row[ci('AMBIENTE')] ?? '').trim(),
+        profile: String(row[ci('PERFIL')] ?? '').trim(),
+        tier,
+        assortmentChannel: channelFromTier(tier),
+        city: String(row[ci('CIDADE')] ?? '').trim(),
+        state: String(row[ci('ESTADO')] ?? '').trim(),
+        vendorCode: '', coordinatorCode: '', coordinatorName: '',
+        source: customerSheet,
+      });
     }
   }
-  const discontinued=workbook.SheetNames.find(name=>normalizeText(name).includes('DESCONTINUADOS'));
-  if(discontinued){const rows=sheetRows(workbook,discontinued);const hi=findHeader(rows,['STATUS','EAN','DESCR']);if(hi>=0){const h=rows[hi].map(normalizeText);const c=(v:string)=>h.findIndex(x=>x.includes(normalizeText(v)));for(let r=hi+1;r<rows.length;r++){const row=rows[r];if(!normalizeText(row[c('STATUS')]).includes('DESCONTINU'))continue;const oldEan=cleanDigits(row[c('EAN')]);const oldSku=cleanCode(row[c('COD')]);if(oldEan||oldSku)lineage.push({oldSku,oldEan,newSku:'',newEan:'',description:text(row[c('DESCRIÇÃO')]),status:'DESCONTINUADO',effectiveFrom:'2026-08-01',sourceSheet:discontinued})}}}
-  if(!competences.length)warnings.push('Nenhuma competência oficial de sortimento reconhecida no arquivo.');
-  return{competences,lineage,warnings};
+  return { purchases: Array.from(aggregate.values()), customers };
 }
 
-function validCustomerCnpj(value:unknown){const normalized=normalizeCnpj(value,{declaredCnpj:true});return /^\d{14}$/.test(normalized.canonical)?normalized:null}
-
-export function parseCustomerAndPurchaseWorkbook(workbook:XLSX.WorkBook):{purchases:PurchaseHistory310[];customers:CustomerCommercialProfile[]} {
-  const purchases:PurchaseHistory310[]=[];const customers:CustomerCommercialProfile[]=[];const aggregate=new Map<string,PurchaseHistory310>();
-  const purchaseSheet=workbook.SheetNames.find(name=>normalizeText(name).includes('310 TOTAL 2026'));
-  if(purchaseSheet){const rows=sheetRows(workbook,purchaseSheet);const hi=findHeader(rows,['VALOR','DEVOL']);if(hi>=0){const h=rows[hi].map(normalizeText);const c=(...names:string[])=>h.findIndex(x=>names.some(v=>x===normalizeText(v)||x.includes(normalizeText(v))));
-    for(let r=hi+1;r<rows.length;r++){const row=rows[r];const normalized=validCustomerCnpj(row[c('CNPJ','CNPJ/CPF')]);if(!normalized)continue;const legacy=cleanCode(row[c('CODIGO','PRODUTO')]);if(!legacy)continue;const purchaseValue=parseNumber(row[c('VALOR COMPRAS','VALORCOMPRAS')]);const returnValue=parseNumber(row[c('VALOR DEVOLUCOES','V.DEVOLUCOES','DEVOLUCOES')]);const item:PurchaseHistory310={cnpj:normalized.canonical,cnpjRaw:normalized.raw,legacyProductCode:legacy,winthorCode:legacy,description:text(row[c('DESCRICAO','DESCRIÇÃO')]),volumes:parseNumber(row[c('VOLUMES')]),quantity:parseNumber(row[c('QTD CPA','QTDCOMPRA','QTD COMPRA')]),purchaseValue,returnVolume:parseNumber(row[c('VOL DEV','VOLUMEDEVOLUCAO')]),returnValue,netValue:purchaseValue,vendorCode:cleanCode(row[c('VEN.','VENDEDOR')]),groupingCode:cleanCode(row[c('AGP.','AGRUPAMENTO')]),groupingDescription:text(row[c('DESCRICAOAGRUPAMENTO','DESCRICAO AGRUPAMENTO')])};const key=`${item.cnpj}:${legacy}`;const current=aggregate.get(key);if(!current)aggregate.set(key,item);else{current.volumes+=item.volumes;current.quantity+=item.quantity;current.purchaseValue+=item.purchaseValue;current.returnVolume+=item.returnVolume;current.returnValue+=item.returnValue;current.netValue+=item.netValue}}
-  }}}
-  const customerSheet=workbook.SheetNames.find(name=>{const n=normalizeText(name);return n.includes('EXPORTACAO PDVS')||n.includes('PREMISSAS')});
-  if(customerSheet){const rows=sheetRows(workbook,customerSheet);const hi=findHeader(rows,['COD CLIENTE','TIPO']);if(hi>=0){const h=rows[hi].map(normalizeText);const ci=(v:string)=>h.findIndex(x=>x===normalizeText(v)||x.includes(normalizeText(v)));for(let r=hi+1;r<rows.length;r++){const row=rows[r];if(normalizeText(row[ci('TIPO')])!=='CNPJ')continue;const normalized=validCustomerCnpj(row[ci('COD CLIENTE')]);if(!normalized)continue;const tier=text(row[ci('FAIXAS')]);customers.push({cnpj:normalized.canonical,cnpjRaw:normalized.raw,name:text(row[ci('NOME_CLIENTE')]),clientCode:'',network:text(row[ci('REDE')]),environment:text(row[ci('AMBIENTE')]),profile:text(row[ci('PERFIL')]),tier,assortmentChannel:channelFromTier(tier),city:text(row[ci('CIDADE')]),state:text(row[ci('ESTADO')]),vendorCode:'',coordinatorCode:'',coordinatorName:'',source:customerSheet})}}}
-  return{purchases:Array.from(aggregate.values()),customers};
+export async function readCustomerIntelligenceWorkbook(file: File): Promise<XLSX.WorkBook> {
+  const data = await file.arrayBuffer();
+  return XLSX.read(data, { type: 'array', cellDates: false });
 }
-
-export async function readCustomerIntelligenceWorkbook(file: File): Promise<XLSX.WorkBook> { const data = await file.arrayBuffer(); return XLSX.read(data, { type: 'array', cellDates: false }); }
 
 export function detectCustomerIntelligenceSource(workbook: XLSX.WorkBook): 'OFFICIAL_ASSORTMENT' | 'PURCHASE_310' | 'PROTOTYPE' | 'UNKNOWN' {
   const sheets = workbook.SheetNames.map(normalizeText);
