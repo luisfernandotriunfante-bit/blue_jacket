@@ -10,11 +10,11 @@ import type {
   CustomerIntelligenceSupport,
   CustomerResolvedProfile,
   CustomerSourceTrace,
+  HistoricalPurchaseRecord,
   OfficialAssortmentSku,
   OpportunityPriority,
   ProductCommercialView,
   PromotionRule,
-  PurchaseHistory310,
   SkuLineageRecord,
 } from './customerIntelligenceTypes';
 import { normalizeCnpj, normalizeText } from '../services/canonical/utils';
@@ -23,6 +23,8 @@ import { channelFromTier } from '../services/customerIntelligenceSources';
 const cleanCode = (value: unknown) => String(value ?? '').trim().replace(/^0+/, '');
 const cleanDigits = (value: unknown) => String(value ?? '').replace(/\D/g, '').replace(/^0+/, '');
 const positive = (value: unknown) => Math.max(Number(value) || 0, 0);
+const unique = (values:string[]) => Array.from(new Set(values.filter(Boolean)));
+const isUnifiedState = (state:CanonicalState) => Boolean((state as CanonicalState & { unifiedSchemaVersion?:number }).unifiedSchemaVersion === 1);
 
 function classificationFromValue(value: number | null, knownProduct: boolean): AssortmentClassification {
   if (!knownProduct || value === null) return 'PENDENCIA_CORRESPONDENCIA';
@@ -52,18 +54,47 @@ function sourceValue(field: string, candidates: Array<{ source: string; value: s
   return { field, chosen, precedence: precedence.join(' > '), values: normalized, divergent: distinct.size > 1 };
 }
 
-function resolveCustomerProfile(state: CanonicalState, support: CustomerIntelligenceSupport, cnpj: string): CustomerResolvedProfile {
+function historicalForYear(state:CanonicalState, support:CustomerIntelligenceSupport, cnpj:string, referenceDate:string):HistoricalPurchaseRecord[] {
+  const year=referenceDate.slice(0,4);
+  const canonical=support.historicalPurchases.filter(item=>item.cnpj===cnpj && (!item.period || item.period===year || item.period==='YTD'));
+  if (canonical.length || isUnifiedState(state)) return canonical;
+
+  // Compatibilidade exclusiva de fixtures/snapshots antigos fora da UnifiedDataLayer.
+  // A rota ativa é UnifiedCanonicalState e nunca entra neste fallback do 310.
+  return support.purchases.filter(item=>item.cnpj===cnpj).map(item=>{
+    const legacy=item.legacyProductCode||item.winthorCode;
+    const mapped=state.support.itemCodes.find(code=>cleanCode(code.internalCode)===cleanCode(item.winthorCode));
+    const vendor=state.vendors.find(row=>row.newCode===item.vendorCode||row.oldCode===item.vendorCode);
+    return {
+      cnpj:item.cnpj,cnpjRaw:item.cnpjRaw,period:year,itemCanonicalId:'',legacyProductCode:legacy,
+      ean:mapped?.ean||'',winthorCode:item.winthorCode,industrySku:mapped?.factoryCode||'',description:item.description,
+      grossSaleUnits:Math.max(item.volumes+item.returnVolume,0),returnUnits:item.returnVolume,netSignedUnits:item.volumes,
+      grossSalesValue:item.purchaseValue,returnValue:item.returnValue,netValue:item.netValue,purchaseInvoiceCount:item.quantity,
+      legacyRcaCodes:item.vendorCode?[item.vendorCode]:[],rcaCanonicalIds:[],currentRcaCodes:vendor?.newCode?[vendor.newCode]:[],source:'379' as const,
+    };
+  });
+}
+
+function resolveCustomerProfile(state: CanonicalState, support: CustomerIntelligenceSupport, cnpj: string, referenceDate:string): CustomerResolvedProfile {
   const local = support.customers.filter(item => item.cnpj === cnpj);
   const premise = state.support.clients.filter(item => item.cnpj === cnpj);
   const route = state.support.activeRoute.filter(item => item.cnpj === cnpj);
   const resultClient = state.clients.filter(item => item.cnpj === cnpj);
-  const transactions = state.transactions.filter(item => item.cnpj === cnpj);
+  const transactions = state.transactions.filter(item => item.cnpj === cnpj && (!item.date || item.date <= referenceDate));
   const vendorValues = new Map<string, number>();
-  transactions.forEach(item => vendorValues.set(item.vendorCode, (vendorValues.get(item.vendorCode) || 0) + item.value));
+  transactions.forEach(item => vendorValues.set(item.vendorCode, (vendorValues.get(item.vendorCode) || 0) + Math.abs(item.value)));
   const dominantVendorCode = Array.from(vendorValues.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
   const vendor = state.vendors.find(item => item.newCode === dominantVendorCode || item.oldCode === dominantVendorCode);
-  const purchaseVendor = support.purchases.find(item => item.cnpj === cnpj)?.vendorCode || '';
-  const historicalVendor = state.vendors.find(item => item.newCode === purchaseVendor || item.oldCode === purchaseVendor);
+
+  const historicalVendorValues=new Map<string,number>();
+  historicalForYear(state,support,cnpj,referenceDate).forEach(purchase=>{
+    if(purchase.currentRcaCodes.length!==1) return;
+    const code=purchase.currentRcaCodes[0];
+    historicalVendorValues.set(code,(historicalVendorValues.get(code)||0)+Math.abs(purchase.grossSalesValue));
+  });
+  const historicalCurrentCode=Array.from(historicalVendorValues.entries()).sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
+  const historicalVendor=state.vendors.find(item=>item.newCode===historicalCurrentCode);
+
   const traces: CustomerSourceTrace[] = [];
   const pick = (field: string, values: Array<{ source: string; value: string }>, precedence: string[]) => {
     const trace = sourceValue(field, values, precedence);
@@ -95,23 +126,20 @@ function resolveCustomerProfile(state: CanonicalState, support: CustomerIntellig
     ...route.map(item => ({ source: 'ROTEIRO', value: item.tier })),
   ], ['BASE_CLIENTES_SORTIMENTO', 'ROTEIRO']);
   const assortmentChannel = channelFromTier(tier) || localOne?.assortmentChannel || '';
-  traces.push({
-    field: 'Canal de sortimento', chosen: assortmentChannel, precedence: 'REGRA_FAIXA_Q3_2026',
-    values: tier ? [{ source: 'REGRA_FAIXA_Q3_2026', value: `${tier} → ${assortmentChannel || 'SEM MAPEAMENTO'}` }] : [], divergent: false,
-  });
+  traces.push({ field:'Canal de sortimento',chosen:assortmentChannel,precedence:'REGRA_FAIXA_Q3_2026',values:tier?[{source:'REGRA_FAIXA_Q3_2026',value:`${tier} → ${assortmentChannel||'SEM MAPEAMENTO'}`}]:[],divergent:false });
   const city = pick('Cidade', [
     ...premise.map(item => ({ source: 'PREMISSAS', value: item.city })),
     ...route.map(item => ({ source: 'ROTEIRO', value: item.city })),
     ...local.map(item => ({ source: 'BASE_CLIENTES_SORTIMENTO', value: item.city })),
     ...resultClient.map(item => ({ source: '8022', value: item.city })),
   ], ['PREMISSAS', 'ROTEIRO', 'BASE_CLIENTES_SORTIMENTO', '8022']);
-  const vendorCode = vendor?.newCode || historicalVendor?.newCode || dominantVendorCode || purchaseVendor;
-  const coordinatorCode = vendor?.coordinatorCode || historicalVendor?.coordinatorCode || '';
-  const coordinatorName = vendor?.coordinatorName || historicalVendor?.coordinatorName || '';
+  const vendorCode = vendor?.newCode || historicalVendor?.newCode || dominantVendorCode || historicalCurrentCode || localOne?.vendorCode || '';
+  const coordinatorCode = vendor?.coordinatorCode || historicalVendor?.coordinatorCode || localOne?.coordinatorCode || '';
+  const coordinatorName = vendor?.coordinatorName || historicalVendor?.coordinatorName || localOne?.coordinatorName || '';
   traces.push({
-    field: 'Vendedor', chosen: vendorCode, precedence: '8022 dominante > 310 histórico',
-    values: [dominantVendorCode ? { source: '8022', value: dominantVendorCode } : null, purchaseVendor ? { source: '310', value: purchaseVendor } : null].filter(Boolean) as Array<{ source: string; value: string }>,
-    divergent: Boolean(dominantVendorCode && purchaseVendor && dominantVendorCode !== purchaseVendor),
+    field:'Vendedor',chosen:vendorCode,precedence:'8022 dominante > 379 histórico resolvido',
+    values:[dominantVendorCode?{source:'8022',value:dominantVendorCode}:null,historicalCurrentCode?{source:'379',value:historicalCurrentCode}:null].filter(Boolean) as Array<{source:string;value:string}>,
+    divergent:Boolean(dominantVendorCode&&historicalCurrentCode&&dominantVendorCode!==historicalCurrentCode),
   });
   return {
     cnpj, cnpjRaw: localOne?.cnpjRaw || premiseOne?.cnpjRaw || routeOne?.cnpjRaw || cnpj,
@@ -126,6 +154,7 @@ function recommendationFor(product: OfficialAssortmentSku, channel: string): num
 }
 
 function buildStockIndex(state: CanonicalState) {
+  const unified=state as CanonicalState & { unified?:{receiptHeaders?:any[];receiptItems?:any[]} };
   const presentation = buildStockPresentation({
     inventory: state.inventory,
     productSupport: state.support.products,
@@ -134,7 +163,9 @@ function buildStockIndex(state: CanonicalState) {
     businessDaysElapsed: state.sellOut.businessDaysElapsed,
     stockCostValue: state.stock.costValue,
     stockSaleValue: state.stock.saleValue,
-    hasStock8013: state.sources.some(source => source.kind === 'stock8013' && source.loaded),
+    hasStock105: state.sources.some(source => source.kind === 'stock105' && source.loaded) || state.inventory.some(item=>Boolean((item as CanonicalInventoryProduct & {physicalSource105?:boolean}).physicalSource105)),
+    receiptHeaders: unified.unified?.receiptHeaders as any,
+    receiptItems: unified.unified?.receiptItems as any,
     alertConfiguration: DEFAULT_STOCK_ALERT_CONFIGURATION,
   });
   const byCode = new Map<string, StockProductView>();
@@ -152,18 +183,20 @@ function packagingSourceFor(state: CanonicalState, stockProduct: StockProductVie
   if (!stockProduct) return 'UNKNOWN';
   const raw = state.inventory.find(item => cleanCode(item.code) === cleanCode(stockProduct.code)
     || (cleanDigits(item.ean) && cleanDigits(item.ean) === cleanDigits(stockProduct.ean))
-    || (cleanCode(item.factoryCode) && cleanCode(item.factoryCode) === cleanCode(stockProduct.factoryCode))) as (CanonicalInventoryProduct & { unitsPerCaseSource?: CommercialPackagingSource; unitsPerCaseConflict?: boolean }) | undefined;
-  if (raw?.unitsPerCaseConflict) return 'CONFLICT';
-  if (raw?.unitsPerCaseSource) return raw.unitsPerCaseSource;
+    || (cleanCode(item.factoryCode) && cleanCode(item.factoryCode) === cleanCode(stockProduct.factoryCode))) as (CanonicalInventoryProduct & { internalUnitsPerCase?:number|null }) | undefined;
+  if ((raw?.internalUnitsPerCase || 0) > 0) return '105_DERIVED';
   return stockProduct.unitsPerCase > 0 ? 'PRICE_LIST' : 'UNKNOWN';
 }
 
 function currentLineage(lineage: SkuLineageRecord[], ean: string, sku: string, referenceDate: string) {
   return lineage.find(item => (cleanDigits(item.oldEan) === cleanDigits(ean) || cleanCode(item.oldSku) === cleanCode(sku)) && item.effectiveFrom <= referenceDate);
 }
-
 function predecessorForCurrent(lineage: SkuLineageRecord[], ean: string, sku: string, referenceDate: string) {
   return lineage.find(item => item.status === 'MIGRACAO_VIGENTE' && item.effectiveFrom <= referenceDate && (cleanDigits(item.newEan) === cleanDigits(ean) || cleanCode(item.newSku) === cleanCode(sku)));
+}
+function purchaseMatchesSku(purchase:HistoricalPurchaseRecord,sku:string){
+  const target=cleanCode(sku); if(!target) return false;
+  return [purchase.industrySku,purchase.winthorCode,purchase.legacyProductCode].some(value=>cleanCode(value)===target);
 }
 
 function eligiblePromotion(rule: PromotionRule, customer: CustomerResolvedProfile, product: { ean: string; winthorCode: string }, referenceDate: string) {
@@ -178,10 +211,7 @@ function eligiblePromotion(rule: PromotionRule, customer: CustomerResolvedProfil
     || rule.winthorCodes.some(sku => cleanCode(sku) === cleanCode(product.winthorCode));
 }
 
-function opportunityFor(input: {
-  classification: AssortmentClassification; bought: boolean; isLaunch: boolean; hasWinthor: boolean; availableUnits: number; hasPortfolio: boolean;
-  hasPromotion: boolean; lineageStatus: string; isDiscontinued: boolean; predecessorBought?: boolean;
-}): { priority: OpportunityPriority; reason: string; action: string } {
+function opportunityFor(input: { classification: AssortmentClassification; bought: boolean; isLaunch: boolean; hasWinthor: boolean; availableUnits: number; hasPortfolio: boolean; hasPromotion: boolean; lineageStatus: string; isDiscontinued: boolean; predecessorBought?: boolean; }): { priority: OpportunityPriority; reason: string; action: string } {
   const { classification, bought, isLaunch, hasWinthor, availableUnits, hasPortfolio, hasPromotion, lineageStatus, isDiscontinued, predecessorBought } = input;
   if (lineageStatus === 'MIGRACAO_VIGENTE' && bought) return { priority: 'MIGRACAO', reason: 'Cliente possui compra do SKU anterior e o sucessor já está vigente.', action: 'Migrar a oferta para o SKU atual.' };
   if (predecessorBought && !bought) return { priority: 'MIGRACAO', reason: 'Cliente já comprou o SKU anterior; o sucessor atual ainda não foi adotado.', action: 'Migrar a compra para o SKU atual.' };
@@ -204,12 +234,26 @@ function auditCheck(id: string, label: string, expected: number | string | null,
   return { id, label, expected, calculated, status: equal ? 'OK' : 'DIVERGENT', note };
 }
 
-function emptyResult(customer: CustomerResolvedProfile, referenceDate: string, support: CustomerIntelligenceSupport): CustomerIntelligenceResult {
+function mergePurchase(target:Map<string,HistoricalPurchaseRecord>,ean:string,purchase:HistoricalPurchaseRecord){
+  const current=target.get(ean);
+  if(!current){target.set(ean,{...purchase,legacyRcaCodes:[...purchase.legacyRcaCodes],rcaCanonicalIds:[...purchase.rcaCanonicalIds],currentRcaCodes:[...purchase.currentRcaCodes]});return;}
+  current.grossSaleUnits+=purchase.grossSaleUnits;current.returnUnits+=purchase.returnUnits;current.netSignedUnits+=purchase.netSignedUnits;
+  current.grossSalesValue+=purchase.grossSalesValue;current.returnValue+=purchase.returnValue;current.netValue+=purchase.netValue;current.purchaseInvoiceCount+=purchase.purchaseInvoiceCount;
+  current.legacyRcaCodes=unique([...current.legacyRcaCodes,...purchase.legacyRcaCodes]);current.rcaCanonicalIds=unique([...current.rcaCanonicalIds,...purchase.rcaCanonicalIds]);current.currentRcaCodes=unique([...current.currentRcaCodes,...purchase.currentRcaCodes]);
+}
+
+function currentSalesForCustomer(state:CanonicalState,cnpj:string,referenceDate:string){
+  const year=referenceDate.slice(0,4);
+  return state.transactions.filter(item=>item.cnpj===cnpj && (!item.date || (item.date>=`${year}-01-01`&&item.date<=referenceDate)));
+}
+
+function emptyResult(customer: CustomerResolvedProfile, referenceDate: string, support: CustomerIntelligenceSupport, state:CanonicalState): CustomerIntelligenceResult {
+  const historical=historicalForYear(state,support,customer.cnpj,referenceDate).reduce((sum,item)=>sum+item.netValue,0);
+  const current=currentSalesForCustomer(state,customer.cnpj,referenceDate).reduce((sum,item)=>sum+item.value,0);
   return {
     referenceDate, competenceKey: '', competenceLabel: 'Sem competência oficial carregada', customer,
     officialAssortment: 0, executableAssortment: 0, assortmentBought: 0, assortmentPercent: 0, mandatoryRecommended: 0, mandatoryBought: 0,
-    importantRecommended: 0, importantBought: 0, recommendedMissing: 0, boughtOutside: 0, boughtUnresolved: 0,
-    ytdNetValue: support.purchases.filter(item => item.cnpj === customer.cnpj).reduce((sum, item) => sum + item.netValue, 0),
+    importantRecommended: 0, importantBought: 0, recommendedMissing: 0, boughtOutside: 0, boughtUnresolved: 0, ytdNetValue:historical+current,
     opportunitiesAvailableNow: 0, opportunitiesPortfolioOnly: 0, blockedByStock: 0, blockedByRegistration: 0,
     launches: { totalRecommended: 0, adopted: 0, missing: 0, availableNow: 0, portfolioOnly: 0, withoutWinthor: 0, withoutStockAndPortfolio: 0 },
     products: [], opportunities: [], launchesProducts: [], boughtOutsideProducts: [], promotions: [],
@@ -218,25 +262,14 @@ function emptyResult(customer: CustomerResolvedProfile, referenceDate: string, s
   };
 }
 
-function mergePurchase(target: Map<string, PurchaseHistory310>, ean: string, purchase: PurchaseHistory310) {
-  const current = target.get(ean);
-  if (!current) { target.set(ean, { ...purchase }); return; }
-  current.volumes += purchase.volumes;
-  current.quantity += purchase.quantity;
-  current.purchaseValue += purchase.purchaseValue;
-  current.returnVolume += purchase.returnVolume;
-  current.returnValue += purchase.returnValue;
-  current.netValue = current.purchaseValue - current.returnValue;
-}
-
 export function buildCustomerIntelligence(state: CanonicalState, support: CustomerIntelligenceSupport, rawCnpj: string, requestedDate?: string): CustomerIntelligenceResult {
   const normalized = normalizeCnpj(rawCnpj, { declaredCnpj: true });
   const cnpj = normalized.canonical;
   const referenceDate = requestedDate || state.referenceDate;
-  const customer = resolveCustomerProfile(state, support, cnpj);
+  const customer = resolveCustomerProfile(state, support, cnpj,referenceDate);
   const competence = selectCompetence(support, referenceDate);
   if (!competence || !customer.assortmentChannel) {
-    const base = emptyResult(customer, referenceDate, support);
+    const base = emptyResult(customer, referenceDate, support,state);
     if (!customer.assortmentChannel) {
       base.audit.push(auditCheck('customer.channel', 'Faixa → canal de sortimento', null, customer.tier || '', 'Faixa ausente ou sem mapeamento de domínio; nenhuma classificação de SKU foi inventada.'));
       base.limitations.push('Canal de sortimento do cliente não pôde ser determinado.');
@@ -251,21 +284,21 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
   const itemByEan = new Map(state.support.itemCodes.filter(item => cleanDigits(item.ean)).map(item => [cleanDigits(item.ean), item]));
   const masterByEan = new Map(state.support.products.map(item => [cleanDigits(item.ean), item]));
   const masterBySku = new Map(state.support.products.map(item => [cleanCode(item.sku), item]));
-  const customerPurchases = support.purchases.filter(item => item.cnpj === cnpj);
-  const purchasesByEan = new Map<string, PurchaseHistory310>();
-  const unmatchedPurchases: PurchaseHistory310[] = [];
+  const customerPurchases = historicalForYear(state,support,cnpj,referenceDate);
+  const purchasesByEan = new Map<string, HistoricalPurchaseRecord>();
+  const unmatchedPurchases: HistoricalPurchaseRecord[] = [];
   let mappedPurchaseRecords = 0;
   customerPurchases.forEach(purchase => {
-    const officialDirect = officialByWinthor.get(cleanCode(purchase.winthorCode));
-    const itemCode = itemByInternal.get(cleanCode(purchase.winthorCode));
-    const ean = cleanDigits(officialDirect?.ean || itemCode?.ean || '');
+    const itemCode = purchase.winthorCode ? itemByInternal.get(cleanCode(purchase.winthorCode)) : undefined;
+    const officialDirect = purchase.winthorCode ? officialByWinthor.get(cleanCode(purchase.winthorCode)) : undefined;
+    const ean = cleanDigits(purchase.ean || itemCode?.ean || officialDirect?.ean || '');
     if (ean) { mergePurchase(purchasesByEan, ean, purchase); mappedPurchaseRecords += 1; }
     else unmatchedPurchases.push(purchase);
   });
 
   const currentByEan = new Map<string, { value: number; units: number; winthorCode: string; description: string }>();
   const unmatchedCurrent = new Map<string, { value: number; units: number; winthorCode: string; description: string }>();
-  state.transactions.filter(item => item.cnpj === cnpj).forEach(transaction => {
+  currentSalesForCustomer(state,cnpj,referenceDate).forEach(transaction => {
     const mappedItem = itemByInternal.get(cleanCode(transaction.internalProductCode));
     const mappedMaster = masterBySku.get(cleanCode(transaction.manufacturerCode));
     const ean = cleanDigits(transaction.ean || mappedItem?.ean || mappedMaster?.ean || '');
@@ -286,13 +319,11 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
   support.lineage.filter(item => item.status === 'MIGRACAO_VIGENTE' && item.effectiveFrom <= referenceDate).forEach(item => {
     const oldEan = cleanDigits(item.oldEan);
     const oldSku = cleanCode(item.oldSku);
-    if ((oldEan && purchasesByEan.has(oldEan)) || customerPurchases.some(purchase => oldSku && cleanCode(purchase.winthorCode) === oldSku) || (oldEan && currentByEan.has(oldEan))) {
-      predecessorPurchases.add(cleanDigits(item.newEan) || cleanCode(item.newSku));
-    }
+    if ((oldEan && purchasesByEan.has(oldEan)) || customerPurchases.some(purchase => purchaseMatchesSku(purchase,oldSku)) || (oldEan && currentByEan.has(oldEan))) predecessorPurchases.add(cleanDigits(item.newEan) || cleanCode(item.newSku));
   });
 
   const allEans = new Set<string>();
-  competence.products.forEach(item => allEans.add(cleanDigits(item.ean)));
+  competence.products.forEach(item => {const ean=cleanDigits(item.ean);if(ean)allEans.add(ean)});
   purchasesByEan.forEach((_value, ean) => allEans.add(ean));
   currentByEan.forEach((_value, ean) => allEans.add(ean));
   const products: ProductCommercialView[] = [];
@@ -301,8 +332,8 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
     const official = officialByEan.get(ean);
     const purchase = purchasesByEan.get(ean);
     const currentSale = currentByEan.get(ean);
-    const itemCode = itemByEan.get(ean) || (currentSale?.winthorCode ? itemByInternal.get(cleanCode(currentSale.winthorCode)) : undefined);
-    const candidateSku = purchase?.winthorCode || currentSale?.winthorCode || official?.winthorCode || itemCode?.internalCode || '';
+    const itemCode = itemByEan.get(ean) || (purchase?.winthorCode?itemByInternal.get(cleanCode(purchase.winthorCode)):undefined) || (currentSale?.winthorCode ? itemByInternal.get(cleanCode(currentSale.winthorCode)) : undefined);
+    const candidateSku = purchase?.industrySku || currentSale?.winthorCode || official?.colgateSku || official?.winthorCode || itemCode?.factoryCode || itemCode?.internalCode || '';
     const lineage = currentLineage(support.lineage, ean, candidateSku, referenceDate);
     const predecessor = predecessorForCurrent(support.lineage, ean, official?.colgateSku || candidateSku, referenceDate);
     const isOldMigratedSku = lineage?.status === 'MIGRACAO_VIGENTE';
@@ -323,49 +354,50 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
     const hasPortfolio = portfolioCases > 0 || portfolioUnits > 0;
     const unitsPerCaseSource = packagingSourceFor(state, stockProduct);
     const isLaunch = Boolean(activeOfficial?.launchLabel && normalizeText(activeOfficial.launchLabel).includes('LANCAMENTO'));
-    const boughtHistorical = Boolean(purchase && (purchase.quantity > 0 || purchase.netValue !== 0));
+    const boughtHistorical = Boolean(purchase && (purchase.purchaseInvoiceCount > 0 || purchase.grossSalesValue > 0));
     const boughtCurrent = Boolean(currentSale && (currentSale.value !== 0 || currentSale.units > 0));
     const bought = boughtHistorical || boughtCurrent;
     const predecessorKey = cleanDigits(activeOfficial?.ean || ean) || cleanCode(activeOfficial?.colgateSku || preferredWinthor);
-    const predecessorBought = predecessorPurchases.has(predecessorKey) || Boolean(predecessor && (purchasesByEan.has(cleanDigits(predecessor.oldEan)) || currentByEan.has(cleanDigits(predecessor.oldEan))));
+    const predecessorBought = predecessorPurchases.has(predecessorKey) || Boolean(predecessor && (purchasesByEan.has(cleanDigits(predecessor.oldEan)) || customerPurchases.some(row=>purchaseMatchesSku(row,predecessor.oldSku)) || currentByEan.has(cleanDigits(predecessor.oldEan))));
     const matchingPromotions = support.promotions.filter(rule => eligiblePromotion(rule, customer, { ean: activeOfficial?.ean || ean, winthorCode: preferredWinthor }, referenceDate));
     const opportunity = opportunityFor({ classification, bought, isLaunch, hasWinthor, availableUnits, hasPortfolio, hasPromotion: matchingPromotions.length > 0, lineageStatus: lineage?.status || '', isDiscontinued: Boolean(isDiscontinued), predecessorBought });
     const master = masterByEan.get(ean) || (activeOfficial?.colgateSku ? masterBySku.get(cleanCode(activeOfficial.colgateSku)) : undefined);
     const basePrice = stockProduct?.saleUnit && stockProduct.saleUnit > 0 ? stockProduct.saleUnit : master?.unitPrice && master.unitPrice > 0 ? master.unitPrice : null;
     const availability = isDiscontinued ? 'DESCONTINUADO' : isOldMigratedSku ? 'MIGRACAO' : !hasWinthor ? 'SEM_WINTHOR' : availableUnits > 0 ? 'DISPONIVEL' : hasPortfolio ? 'SOMENTE_CARTEIRA' : 'SEM_ESTOQUE';
     products.push({
-      ean: activeOfficial?.ean || ean, winthorCode: preferredWinthor, colgateSku: activeOfficial?.colgateSku || official?.colgateSku || '',
+      ean: activeOfficial?.ean || ean, winthorCode: preferredWinthor, colgateSku: activeOfficial?.colgateSku || official?.colgateSku || purchase?.industrySku || '',
       description: activeOfficial?.description || official?.description || purchase?.description || currentSale?.description || stockProduct?.description || 'Produto sem correspondência completa',
       category: activeOfficial?.category || official?.category || '', subcategory: activeOfficial?.subcategory || official?.subcategory || '', brand: activeOfficial?.brand || official?.brand || '',
       assortmentValue, classification, isRecommended: isRecommended(classification), isLaunch, launchLabel: activeOfficial?.launchLabel || '',
       lineageStatus: lineage?.status || (predecessor ? 'MIGRACAO_VIGENTE' : ''), predecessorEan: lineage?.oldEan || predecessor?.oldEan || '', successorEan: lineage?.newEan || predecessor?.newEan || '', isDiscontinued: Boolean(isDiscontinued),
-      bought, purchaseQuantity: purchase?.quantity || 0, purchaseValue: purchase?.purchaseValue || 0, returnValue: purchase?.returnValue || 0, netValue: purchase?.netValue || 0,
+      bought, purchaseQuantity: purchase?.netSignedUnits || 0, purchaseValue: purchase?.grossSalesValue || 0, returnValue: purchase?.returnValue || 0, netValue: purchase?.netValue || 0,
       currentPeriodValue: currentSale?.value || 0,
       physicalUnits: positive(stockProduct?.physicalTotalUnits), reservedUnits: positive(stockProduct?.reservedUnits), availableUnits, portfolioCases, portfolioUnits, projectedUnits: positive(stockProduct?.projectedUnits), unitsPerCase: positive(stockProduct?.unitsPerCase), unitsPerCaseSource,
       availability, hasWinthor, promotionIds: matchingPromotions.map(rule => rule.id), basePrice, finalPrice: null, priceStatus: basePrice ? 'COMPOSICAO_FINAL_PENDENTE' : 'SEM_PRECO',
       opportunityPriority: opportunity.priority, opportunityReason: opportunity.reason, recommendedAction: opportunity.action,
       auditNotes: [
         stockProduct ? 'Estoque consumido diretamente do motor canônico de Estoque.' : 'Sem correspondência no motor canônico de Estoque.',
-        hasPortfolio && portfolioUnits <= 0 ? `Carteira identificada em ${portfolioCases.toLocaleString('pt-BR')} cx; conversão para unidades bloqueada porque o fator Un/CX está ${unitsPerCaseSource}.` : '',
-        boughtCurrent ? 'Adoção/compra também confirmada pelo 8022 do período atual.' : '',
+        boughtHistorical ? 'Compra histórica confirmada pelo HISTORICAL_SALES_FACT (379).' : '',
+        boughtCurrent ? 'Adoção/compra também confirmada pelo SALES_FACT (8022) do período atual.' : '',
         lineage ? `${lineage.status}: ${lineage.oldEan || lineage.oldSku} → ${lineage.newEan || lineage.newSku || 'sem sucessor'}` : predecessor ? `SUCESSOR VIGENTE de ${predecessor.oldEan || predecessor.oldSku}.` : '',
       ].filter(Boolean),
     });
   });
 
   unmatchedPurchases.forEach(purchase => {
-    const lineage = currentLineage(support.lineage, '', purchase.winthorCode, referenceDate);
+    const lineage = currentLineage(support.lineage, '', purchase.industrySku || purchase.winthorCode || purchase.legacyProductCode, referenceDate);
     const classification: AssortmentClassification = lineage?.status === 'DESCONTINUADO' || lineage?.status === 'MIGRACAO_VIGENTE' ? 'FORA_DO_SORTIMENTO' : 'PENDENCIA_CORRESPONDENCIA';
-    const opportunity = opportunityFor({ classification, bought: true, isLaunch: false, hasWinthor: Boolean(purchase.winthorCode), availableUnits: 0, hasPortfolio: false, hasPromotion: false, lineageStatus: lineage?.status || '', isDiscontinued: lineage?.status === 'DESCONTINUADO' });
+    const hasWinthor=Boolean(purchase.winthorCode);
+    const opportunity = opportunityFor({ classification, bought: true, isLaunch: false, hasWinthor, availableUnits: 0, hasPortfolio: false, hasPromotion: false, lineageStatus: lineage?.status || '', isDiscontinued: lineage?.status === 'DESCONTINUADO' });
     products.push({
-      ean: '', winthorCode: purchase.winthorCode, colgateSku: '', description: purchase.description, category: '', subcategory: '', brand: '', assortmentValue: null,
+      ean: '', winthorCode: purchase.winthorCode, colgateSku: purchase.industrySku, description: purchase.description || `Produto legado ${purchase.legacyProductCode}`, category: '', subcategory: '', brand: '', assortmentValue: null,
       classification, isRecommended: false, isLaunch: false, launchLabel: '', lineageStatus: lineage?.status || '', predecessorEan: lineage?.oldEan || '', successorEan: lineage?.newEan || '', isDiscontinued: lineage?.status === 'DESCONTINUADO',
-      bought: true, purchaseQuantity: purchase.quantity, purchaseValue: purchase.purchaseValue, returnValue: purchase.returnValue, netValue: purchase.netValue, currentPeriodValue: 0,
+      bought: true, purchaseQuantity: purchase.netSignedUnits, purchaseValue: purchase.grossSalesValue, returnValue: purchase.returnValue, netValue: purchase.netValue, currentPeriodValue: 0,
       physicalUnits: 0, reservedUnits: 0, availableUnits: 0, portfolioCases: 0, portfolioUnits: 0, projectedUnits: 0, unitsPerCase: 0, unitsPerCaseSource: 'UNKNOWN',
-      availability: lineage?.status === 'DESCONTINUADO' ? 'DESCONTINUADO' : lineage?.status === 'MIGRACAO_VIGENTE' ? 'MIGRACAO' : 'SEM_ESTOQUE',
-      hasWinthor: Boolean(purchase.winthorCode), promotionIds: [], basePrice: null, finalPrice: null, priceStatus: 'SEM_PRECO',
+      availability: lineage?.status === 'DESCONTINUADO' ? 'DESCONTINUADO' : lineage?.status === 'MIGRACAO_VIGENTE' ? 'MIGRACAO' : hasWinthor?'SEM_ESTOQUE':'SEM_WINTHOR',
+      hasWinthor, promotionIds: [], basePrice: null, finalPrice: null, priceStatus: 'SEM_PRECO',
       opportunityPriority: opportunity.priority, opportunityReason: opportunity.reason, recommendedAction: opportunity.action,
-      auditNotes: [lineage ? `Compra histórica relacionada a ${lineage.status}.` : 'Compra do 310 sem correspondência confiável em EAN/sortimento vigente.'],
+      auditNotes: [lineage ? `Compra histórica 379 relacionada a ${lineage.status}.` : 'HISTORICAL_SALES_FACT preservado sem correspondência canônica suficiente para EAN/sortimento vigente.'],
     });
   });
 
@@ -375,7 +407,7 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
       classification: 'PENDENCIA_CORRESPONDENCIA', isRecommended: false, isLaunch: false, launchLabel: '', lineageStatus: '', predecessorEan: '', successorEan: '', isDiscontinued: false,
       bought: true, purchaseQuantity: 0, purchaseValue: 0, returnValue: 0, netValue: 0, currentPeriodValue: currentSale.value,
       physicalUnits: 0, reservedUnits: 0, availableUnits: 0, portfolioCases: 0, portfolioUnits: 0, projectedUnits: 0, unitsPerCase: 0, unitsPerCaseSource: 'UNKNOWN', availability: 'SEM_ESTOQUE', hasWinthor: Boolean(currentSale.winthorCode),
-      promotionIds: [], basePrice: null, finalPrice: null, priceStatus: 'SEM_PRECO', opportunityPriority: 'DIAGNOSTICO', opportunityReason: 'Compra do período atual sem correspondência confiável com EAN/sortimento oficial.', recommendedAction: 'Reconciliar cadastro antes de classificar a compra como dentro ou fora do sortimento.', auditNotes: ['Movimento preservado do 8022; não foi classificado silenciosamente como fora do sortimento.'],
+      promotionIds: [], basePrice: null, finalPrice: null, priceStatus: 'SEM_PRECO', opportunityPriority: 'DIAGNOSTICO', opportunityReason: 'Compra do período atual sem correspondência confiável com EAN/sortimento oficial.', recommendedAction: 'Reconciliar cadastro antes de classificar a compra como dentro ou fora do sortimento.', auditNotes: ['SALES_FACT 8022 preservado; não foi classificado silenciosamente como fora do sortimento.'],
     });
   });
 
@@ -402,6 +434,12 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
   const actualImportant = important.length;
   const otherRecommended = recommended.filter(item => item.classification === 'RECOMENDADO').length;
   const launchesWithWinthor = launchesProducts.filter(item => item.hasWinthor).length;
+  const historyGross=customerPurchases.reduce((sum,item)=>sum+item.grossSalesValue,0);
+  const historyReturns=customerPurchases.reduce((sum,item)=>sum+item.returnValue,0);
+  const historyNet=customerPurchases.reduce((sum,item)=>sum+item.netValue,0);
+  const reconciliation310=support.purchases.filter(item=>item.cnpj===cnpj);
+  const reconciliation310Net=reconciliation310.reduce((sum,item)=>sum+item.netValue,0);
+  const currentYtd=currentSalesForCustomer(state,cnpj,referenceDate).reduce((sum,item)=>sum+item.value,0);
   const audit: CustomerIntelligenceAuditCheck[] = [
     auditCheck('cnpj.normalized', 'CNPJ normalizado em 14 dígitos', 14, cnpj.length, normalized.note),
     auditCheck('competence.selected', 'Competência oficial selecionada pela data', competence.key, competence.key, `${referenceDate} está entre ${competence.validFrom} e ${competence.validTo}.`),
@@ -410,21 +448,19 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
     auditCheck('assortment.important', `Importantes · ${customer.assortmentChannel}`, expected?.important ?? null, actualImportant, ''),
     auditCheck('assortment.decomposition', 'Mandatórios + Importantes + demais recomendados = total recomendado', officialAssortment, actualMandatory + actualImportant + otherRecommended, ''),
     auditCheck('assortment.unique-ean', 'EANs únicos no sortimento vigente', competence.products.length, new Set(competence.products.map(item => cleanDigits(item.ean))).size, 'Migrações vigentes são sobrepostas no parser oficial; EAN antigo não entra no denominador atual apenas por existir no histórico.'),
-    auditCheck('purchases.mapping', 'Registros CNPJ × SKU do 310 preservados como mapeados + pendentes', customerPurchases.length, mappedPurchaseRecords + unmatchedPurchases.length, 'Nenhuma compra é descartada por falta de EAN.'),
-    auditCheck('purchases.net', 'Valor líquido 310 = compras - devoluções', customerPurchases.reduce((sum, item) => sum + item.purchaseValue - item.returnValue, 0), customerPurchases.reduce((sum, item) => sum + item.netValue, 0), 'Desconto não foi subtraído.'),
+    auditCheck('history.mapping', 'Registros históricos 379 preservados como mapeados + pendentes', customerPurchases.length, mappedPurchaseRecords + unmatchedPurchases.length, 'Nenhum fato histórico é descartado por falta de EAN atual.'),
+    auditCheck('history.net', '379 líquido = vendas brutas - devoluções', historyGross-historyReturns, historyNet, 'Devoluções recebem sinal no Motor Histórico; desconto permanece campo separado.'),
+    auditCheck('reconciliation.310', '310 reconcilia o valor histórico 379', reconciliation310.length?reconciliation310Net:null, historyNet, reconciliation310.length?'310 usado somente como referência de reconciliação; ele não alimenta compra, vendedor ou adoção.':'310 não carregado para esta fotografia; cálculo 379 permanece válido.'),
     auditCheck('launches.registration', 'Lançamentos recomendados = com Winthor + sem Winthor', launchesProducts.length, launchesWithWinthor + launchesProducts.filter(item => !item.hasWinthor).length, 'Produto sem Winthor permanece bloqueio de cadastro, não falha do vendedor.'),
     auditCheck('stock.canonical', 'Estoque exibido vem do motor canônico de Estoque', 'CANONICAL_STOCK_PRESENTATION', 'CANONICAL_STOCK_PRESENTATION', `${stock.presentation.products.length} SKU(s) no resultado canônico; Clientes & Sortimento não recalcula reserva/disponível/Carteira.`),
-    auditCheck('historical.conformity', 'Conformidade histórica por data da compra', null, '310 SEM DATA TRANSACIONAL', 'A situação atual do mix é calculada; conformidade histórica completa permanece bloqueada até existir histórico transacional datado e classificação histórica do cliente.'),
+    auditCheck('historical.conformity', 'Conformidade histórica por data da compra', null, '379 POSSUI DATA TRANSACIONAL', 'O 379 já preserva a data de cada venda/devolução. A conformidade histórica completa fica bloqueada somente enquanto não houver classificação de sortimento/cliente versionada cobrindo cada data histórica.'),
   ];
-  customer.traces.filter(trace => trace.divergent).forEach((trace, index) => audit.push({
-    id: `customer.conflict.${index}`, label: `Divergência de cliente · ${trace.field}`, expected: trace.chosen,
-    calculated: trace.values.map(item => `${item.source}: ${item.value}`).join(' | '), status: 'DIVERGENT', note: `Precedência aplicada: ${trace.precedence}. A divergência permanece explícita.`,
-  }));
+  customer.traces.filter(trace => trace.divergent).forEach((trace, index) => audit.push({ id: `customer.conflict.${index}`, label: `Divergência de cliente · ${trace.field}`, expected: trace.chosen, calculated: trace.values.map(item => `${item.source}: ${item.value}`).join(' | '), status: 'DIVERGENT', note: `Precedência aplicada: ${trace.precedence}. A divergência permanece explícita.` }));
 
   const limitations: string[] = [];
   if (!support.promotions.length) limitations.push('Promoções: arquitetura pronta, mas não há fonte oficial estruturada carregada; nenhuma elegibilidade foi inventada.');
   if (!support.pricingRules.length) limitations.push('Preço final: preço-base pode ser exibido, mas acréscimo, rappel e ordem de composição ainda não possuem fonte/regra validada.');
-  limitations.push('Conformidade histórica completa: o 310 total 2026 é consolidado e não possui data transacional por compra; o 8022 só confirma o período detalhado que efetivamente contém.');
+  limitations.push('Conformidade histórica completa depende de classificação de cliente/sortimento versionada para cada data do 379; a ausência dessa dimensão não altera o histórico financeiro canônico.');
   limitations.push('Duração definitiva do status de lançamento ainda não foi definida; o motor usa exclusivamente o rótulo oficial da competência carregada.');
 
   return {
@@ -435,15 +471,13 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
     recommendedMissing: recommended.filter(item => !item.bought).length,
     boughtOutside: products.filter(item => item.bought && item.classification === 'FORA_DO_SORTIMENTO').length,
     boughtUnresolved: products.filter(item => item.bought && item.classification === 'PENDENCIA_CORRESPONDENCIA').length,
-    ytdNetValue: customerPurchases.reduce((sum, item) => sum + item.netValue, 0),
+    ytdNetValue: historyNet+currentYtd,
     opportunitiesAvailableNow: opportunities.filter(item => item.availableUnits > 0 && ['MAXIMA', 'MUITO_ALTA', 'ALTA', 'MEDIA', 'MIGRACAO'].includes(item.opportunityPriority)).length,
     opportunitiesPortfolioOnly: opportunities.filter(item => item.availableUnits <= 0 && item.availability === 'SOMENTE_CARTEIRA').length,
     blockedByStock: opportunities.filter(item => item.opportunityPriority === 'BLOQUEIO_DISPONIBILIDADE').length,
     blockedByRegistration: opportunities.filter(item => item.opportunityPriority === 'BLOQUEIO_CADASTRO').length,
     launches: {
-      totalRecommended: launchesProducts.length,
-      adopted: launchesProducts.filter(item => item.bought).length,
-      missing: launchesProducts.filter(item => !item.bought).length,
+      totalRecommended: launchesProducts.length, adopted: launchesProducts.filter(item => item.bought).length, missing: launchesProducts.filter(item => !item.bought).length,
       availableNow: launchesProducts.filter(item => !item.bought && item.availableUnits > 0).length,
       portfolioOnly: launchesProducts.filter(item => !item.bought && item.availableUnits <= 0 && item.availability === 'SOMENTE_CARTEIRA').length,
       withoutWinthor: launchesProducts.filter(item => !item.hasWinthor).length,
@@ -457,16 +491,9 @@ export function buildCustomerIntelligence(state: CanonicalState, support: Custom
 export function listCustomerOptions(state: CanonicalState, support: CustomerIntelligenceSupport) {
   const values = new Map<string, { cnpj: string; name: string; network: string; tier: string; city: string }>();
   support.customers.forEach(item => values.set(item.cnpj, { cnpj: item.cnpj, name: item.name, network: item.network, tier: item.tier, city: item.city }));
-  state.support.clients.forEach(item => {
-    const current = values.get(item.cnpj);
-    values.set(item.cnpj, { cnpj: item.cnpj, name: item.name || current?.name || '', network: item.network || current?.network || '', tier: current?.tier || '', city: item.city || current?.city || '' });
-  });
-  state.clients.forEach(item => {
-    const current = values.get(item.cnpj);
-    values.set(item.cnpj, { cnpj: item.cnpj, name: current?.name || item.name, network: current?.network || item.network, tier: current?.tier || '', city: current?.city || item.city });
-  });
-  support.purchases.forEach(item => {
-    if (!values.has(item.cnpj)) values.set(item.cnpj, { cnpj: item.cnpj, name: '', network: '', tier: '', city: '' });
-  });
+  state.support.clients.forEach(item => { const current = values.get(item.cnpj); values.set(item.cnpj, { cnpj: item.cnpj, name: item.name || current?.name || '', network: item.network || current?.network || '', tier: current?.tier || '', city: item.city || current?.city || '' }); });
+  state.clients.forEach(item => { const current = values.get(item.cnpj); values.set(item.cnpj, { cnpj: item.cnpj, name: current?.name || item.name, network: current?.network || item.network, tier: current?.tier || '', city: current?.city || item.city }); });
+  support.historicalPurchases.forEach(item => { if (!values.has(item.cnpj)) values.set(item.cnpj, { cnpj: item.cnpj, name: '', network: '', tier: '', city: '' }); });
+  if(!isUnifiedState(state)) support.purchases.forEach(item => { if (!values.has(item.cnpj)) values.set(item.cnpj, { cnpj: item.cnpj, name: '', network: '', tier: '', city: '' }); });
   return Array.from(values.values()).sort((a, b) => (a.name || a.cnpj).localeCompare(b.name || b.cnpj));
 }
