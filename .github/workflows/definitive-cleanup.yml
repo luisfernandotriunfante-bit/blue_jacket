@@ -1,0 +1,33 @@
+name: definitive-cleanup
+
+on:
+  push:
+    branches:
+      - feat/limpeza-padronizacao-visual
+    paths:
+      - '.github/workflows/definitive-cleanup.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/limpeza-padronizacao-visual
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Aplicar transformações aprovadas
+        run: node scripts/apply-definitive-cleanup.mjs
+      - name: Commitar limpeza
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Remove rotas e fonte TOP REDES legadas"
+          git push origin HEAD:feat/limpeza-padronizacao-visual
