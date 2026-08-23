@@ -22,6 +22,27 @@ test('379 agrega quantidade líquida assinada compatível com 310.Volumes', () =
   assert.equal(agg.returnUnits, 2);
   assert.equal(Math.abs(agg.netSignedUnits), 8);
   assert.equal(agg.netSalesValue, 80);
+  assert.equal(agg.period, '2026');
+});
+
+test('YTD histórico usa apenas o ano mais recente quando 379 de 2025 e 2026 coexistem', () => {
+  const sale2025 = { ...base, historicalSalesFactId: '2025', movementDate: '2025-07-01', sourceYear: 2025, quantityRaw: 40, signedQuantity: 40, valueRaw: 400, signedValue: 400 };
+  const sale2026 = { ...base, historicalSalesFactId: '2026', movementDate: '2026-07-01', sourceYear: 2026, quantityRaw: 10, signedQuantity: 10, valueRaw: 100, signedValue: 100 };
+  const aggregate = aggregateHistoricalCustomerProduct([sale2025, sale2026]);
+  assert.equal(aggregate.length, 1);
+  assert.equal(aggregate[0].period, '2026');
+  assert.equal(aggregate[0].grossSaleUnits, 10);
+  assert.equal(aggregate[0].netSalesValue, 100);
+});
+
+test('agregação histórica explícita continua permitindo consultar período fora do YTD sem apagar fatos de outros anos', () => {
+  const sale2025 = { ...base, historicalSalesFactId: '2025', movementDate: '2025-07-01', sourceYear: 2025, quantityRaw: 40, signedQuantity: 40, valueRaw: 400, signedValue: 400 };
+  const sale2026 = { ...base, historicalSalesFactId: '2026', movementDate: '2026-07-01', sourceYear: 2026, quantityRaw: 10, signedQuantity: 10, valueRaw: 100, signedValue: 100 };
+  const aggregate = aggregateHistoricalCustomerProduct([sale2025, sale2026], 'TODOS');
+  assert.equal(aggregate.length, 1);
+  assert.equal(aggregate[0].period, 'TODOS');
+  assert.equal(aggregate[0].grossSaleUnits, 50);
+  assert.equal(aggregate[0].netSalesValue, 500);
 });
 
 test('reconciliação 310 usa ABS(netSignedUnits), nunca quantidade bruta de vendas, para Volumes', () => {
