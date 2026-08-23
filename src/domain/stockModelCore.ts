@@ -87,7 +87,10 @@ export interface StockProductView {
   category: string;
   subcategory: string;
   line: string;
+  /** Un/CX interno, exclusivamente para decompor o físico do 105. */
   unitsPerCase: number;
+  /** Un/CX indústria, exclusivamente para converter a Carteira Colgate. */
+  industryUnitsPerCase: number;
   positionUnits: number;
   physicalCases: number;
   looseUnits: number;
@@ -141,6 +144,8 @@ export interface StockPresentationSummary {
   physicalUnits: number;
   physicalCases: number;
   looseUnits: number;
+  /** Unidades físicas do 105 sem fator interno suficiente para decomposição em caixas/avulsas. */
+  unconvertedPhysicalUnits: number;
   reservedUnits: number;
   availableUnits: number;
   pendingUnits: number;
@@ -169,15 +174,23 @@ export interface StockPresentationInput {
   businessDaysElapsed?: number;
   stockCostValue?: number;
   stockSaleValue?: number;
+  /** Indica que a posição física canônica veio do 105. */
+  hasStock105?: boolean;
+  /** @deprecated 8013 é somente auditoria logística e não define estoque físico. */
   hasStock8013?: boolean;
   alertConfiguration?: StockAlertConfiguration;
 }
+
+type InventoryCanonicalPacking = CanonicalInventoryProduct & {
+  internalUnitsPerCase?: number | null;
+  industryUnitsPerCase?: number | null;
+  physicalSource105?: boolean;
+};
 
 const TOLERANCE = 0.001;
 const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '').replace(/^0+/, '');
 const code = (value: unknown) => String(value ?? '').trim().replace(/^0+/, '');
 const nonNegative = (value: unknown) => Math.max(Number(value) || 0, 0);
-const closeEnough = (left: number, right: number) => Math.abs(left - right) <= TOLERANCE;
 
 function numericCheck(input: { id: string; label: string; expected: number; calculated: number; source: string; tolerance?: number; note?: string }): StockReconciliationCheck {
   const tolerance = input.tolerance ?? TOLERANCE;
@@ -223,14 +236,33 @@ function supportForProduct(item: CanonicalInventoryProduct, support: ReturnType<
   return (factory ? support.bySku.get(factory) : undefined) || (ean ? support.byEan.get(ean) : undefined);
 }
 
-function reservationLabel(mode: ReservationPositionMode): string {
-  if (mode === 'POSICAO_LIQUIDA') return 'Posição 105 já líquida da reserva';
-  if (mode === 'POSICAO_BRUTA') return 'Posição 105 bruta; reserva subtraída uma única vez';
-  if (mode === 'INDETERMINADA') return 'Relação entre posição e reserva não pôde ser determinada';
-  return 'Sem evidência suficiente para determinar a relação entre posição e reserva';
+function hasExplicitCanonicalPacking(item: CanonicalInventoryProduct): boolean {
+  return Object.prototype.hasOwnProperty.call(item, 'internalUnitsPerCase') || Object.prototype.hasOwnProperty.call(item, 'industryUnitsPerCase');
 }
 
-function buildReservation(inventory: CanonicalInventoryProduct[], transactions: CanonicalSalesTransaction[], hasStock8013: boolean) {
+function internalFactor(item: CanonicalInventoryProduct, master?: CanonicalProductSupport): number {
+  const extended = item as InventoryCanonicalPacking;
+  const explicit = nonNegative(extended.internalUnitsPerCase);
+  if (explicit > 0) return explicit;
+  // Compatibilidade apenas para objetos de teste/snapshots anteriores; a UnifiedDataLayer atual sempre materializa os dois campos.
+  return hasExplicitCanonicalPacking(item) ? 0 : nonNegative(master?.unitsPerCase);
+}
+
+function industryFactor(item: CanonicalInventoryProduct, master?: CanonicalProductSupport): number {
+  const extended = item as InventoryCanonicalPacking;
+  const explicit = nonNegative(extended.industryUnitsPerCase);
+  if (explicit > 0) return explicit;
+  return hasExplicitCanonicalPacking(item) ? 0 : nonNegative(master?.unitsPerCase);
+}
+
+function reservationLabel(mode: ReservationPositionMode): string {
+  if (mode === 'POSICAO_BRUTA') return 'Posição 105 física; reserva 8022 subtraída exatamente uma vez';
+  if (mode === 'POSICAO_LIQUIDA') return 'Posição previamente líquida da reserva';
+  if (mode === 'INDETERMINADA') return 'Relação entre posição e reserva não pôde ser determinada';
+  return 'Sem posição 105 comprovada para calcular disponibilidade';
+}
+
+function buildReservation(inventory: CanonicalInventoryProduct[], transactions: CanonicalSalesTransaction[], hasStock105: boolean) {
   const index = buildProductIndex(inventory);
   const reservedByCode = new Map<string, number>();
   let unresolvedReservedUnits = 0;
@@ -241,21 +273,34 @@ function buildReservation(inventory: CanonicalInventoryProduct[], transactions: 
     if (!item) { unresolvedReservedUnits += units; return; }
     reservedByCode.set(item.code, (reservedByCode.get(item.code) || 0) + units);
   });
-  if (!hasStock8013) {
-    return { reservedByCode, reconciliation: { mode: 'SEM_EVIDENCIA' as ReservationPositionMode, evidenceRows: 0, grossMatches: 0, netMatches: 0, conflictingRows: 0, unresolvedReservedUnits, note: `${reservationLabel('SEM_EVIDENCIA')}. O disponível preserva a posição exportada para impedir dupla subtração.` } };
+
+  if (!hasStock105) {
+    return {
+      reservedByCode,
+      reconciliation: {
+        mode: 'SEM_EVIDENCIA' as ReservationPositionMode,
+        evidenceRows: reservedByCode.size,
+        grossMatches: 0,
+        netMatches: 0,
+        conflictingRows: 0,
+        unresolvedReservedUnits,
+        note: `${reservationLabel('SEM_EVIDENCIA')}. O disponível não é reduzido sem uma posição física canônica.`,
+      },
+    };
   }
-  let evidenceRows = 0; let grossMatches = 0; let netMatches = 0; let conflictingRows = 0;
-  inventory.forEach(item => {
-    const reserved = reservedByCode.get(item.code) || 0; if (reserved <= 0) return;
-    const position = nonNegative(item.quantity); const physical = nonNegative(item.physicalUnits); evidenceRows += 1;
-    const gross = closeEnough(position, physical); const net = closeEnough(position + reserved, physical);
-    if (gross) grossMatches += 1; if (net) netMatches += 1; if (!gross && !net) conflictingRows += 1;
-  });
-  let mode: ReservationPositionMode = 'SEM_EVIDENCIA';
-  if (evidenceRows > 0 && grossMatches === evidenceRows && netMatches === 0) mode = 'POSICAO_BRUTA';
-  else if (evidenceRows > 0 && netMatches === evidenceRows && grossMatches === 0) mode = 'POSICAO_LIQUIDA';
-  else if (evidenceRows > 0) mode = 'INDETERMINADA';
-  return { reservedByCode, reconciliation: { mode, evidenceRows, grossMatches, netMatches, conflictingRows, unresolvedReservedUnits, note: `${reservationLabel(mode)}.${mode === 'INDETERMINADA' || mode === 'SEM_EVIDENCIA' ? ' O disponível preserva a posição exportada para impedir dupla subtração.' : ''}` } };
+
+  return {
+    reservedByCode,
+    reconciliation: {
+      mode: 'POSICAO_BRUTA' as ReservationPositionMode,
+      evidenceRows: reservedByCode.size,
+      grossMatches: reservedByCode.size,
+      netMatches: 0,
+      conflictingRows: 0,
+      unresolvedReservedUnits,
+      note: `${reservationLabel('POSICAO_BRUTA')}. O 8013 não decide o saldo físico; seus campos de estoque permanecem apenas como auditoria logística.`,
+    },
+  };
 }
 
 function createAlert(kind: StockAlertKind, severity: StockAlertSeverity, item: Pick<StockProductView, 'code' | 'ean' | 'description'>, message: string): StockAlert {
@@ -266,9 +311,10 @@ function buildAlertsForProduct(product: Omit<StockProductView, 'alerts'>, config
   const alerts: StockAlert[] = [];
   if (!product.hasWinthor && product.pendingUnits > 0) alerts.push(createAlert('SEM_WINTHOR', 'warning', product, 'Item da Carteira sem correspondência confirmada no Cadastro 286 / Winthor.'));
   if (!product.ean) alerts.push(createAlert('SEM_EAN', 'warning', product, 'Produto sem EAN conciliado.'));
-  if (product.unitsPerCase <= 0 && (product.physicalTotalUnits > 0 || product.pendingCases > 0)) alerts.push(createAlert('SEM_CONVERSAO_CAIXA', 'warning', product, 'Não há fator Un/CX confirmado para decompor caixas e unidades avulsas.'));
-  if (product.reservedUnits > product.physicalTotalUnits + TOLERANCE) alerts.push(createAlert('RESERVADO_ACIMA_FISICO', 'critical', product, 'Quantidade reservada no 8022 A Faturar supera o estoque físico identificado.'));
-  if (Math.abs(product.quantityDifference) > TOLERANCE) alerts.push(createAlert('DIVERGENCIA_QUANTIDADE', 'critical', product, `Caixas × Un/CX + avulsas diverge do total físico em ${product.quantityDifference.toLocaleString('pt-BR')} un.`));
+  if (product.physicalTotalUnits > 0 && product.unitsPerCase <= 0) alerts.push(createAlert('SEM_CONVERSAO_CAIXA', 'warning', product, 'Físico do 105 preservado em unidades, mas falta Un/CX interno do 8013 para decompor caixas completas e avulsas.'));
+  if (product.pendingCases > 0 && product.industryUnitsPerCase <= 0) alerts.push(createAlert('SEM_CONVERSAO_CAIXA', 'warning', product, 'Carteira preservada em caixas, mas falta Un/CX indústria da Lista de Preço Colgate para convertê-la em unidades.'));
+  if (product.reservedUnits > product.physicalTotalUnits + TOLERANCE) alerts.push(createAlert('RESERVADO_ACIMA_FISICO', 'critical', product, 'Quantidade reservada no 8022 A Faturar supera o estoque físico 105.'));
+  if (Math.abs(product.quantityDifference) > TOLERANCE) alerts.push(createAlert('DIVERGENCIA_QUANTIDADE', 'critical', product, `Caixas internas × Un/CX interno + avulsas diverge do físico 105 em ${product.quantityDifference.toLocaleString('pt-BR')} un.`));
   if (product.isLaunch && product.physicalTotalUnits <= 0) alerts.push(createAlert('LANCAMENTO_SEM_ESTOQUE', 'warning', product, 'Lançamento oficial sem estoque físico identificado.'));
   if (product.isLaunch && product.physicalTotalUnits > 0 && product.soldUnits <= 0) alerts.push(createAlert('LANCAMENTO_SEM_VENDA', 'info', product, 'Lançamento com estoque e sem saída faturada na competência.'));
   if (product.physicalTotalUnits <= 0) {
@@ -302,32 +348,142 @@ function buildMovements(inventory: CanonicalInventoryProduct[], transactions: Ca
 }
 
 export function buildStockPresentation(input: StockPresentationInput): StockPresentation {
-  const inventory = input.inventory || []; const transactions = input.transactions || []; const support = buildSupportIndex(input.productSupport || []); const hasStock8013 = Boolean(input.hasStock8013); const alertConfiguration = input.alertConfiguration || DEFAULT_STOCK_ALERT_CONFIGURATION; const elapsed = nonNegative(input.businessDaysElapsed);
-  const { reservedByCode, reconciliation: reservation } = buildReservation(inventory, transactions, hasStock8013);
-  const soldByCode = new Map<string, number>(); const productIndex = buildProductIndex(inventory);
-  transactions.forEach(transaction => { if (transaction.status !== 'FATURADO') return; const units = nonNegative(transaction.units); if (units <= 0) return; const item = resolveInventoryProduct(transaction, productIndex); if (!item) return; soldByCode.set(item.code, (soldByCode.get(item.code) || 0) + units); });
+  const inventory = input.inventory || [];
+  const transactions = input.transactions || [];
+  const support = buildSupportIndex(input.productSupport || []);
+  const hasStock105 = Boolean(input.hasStock105);
+  const alertConfiguration = input.alertConfiguration || DEFAULT_STOCK_ALERT_CONFIGURATION;
+  const elapsed = nonNegative(input.businessDaysElapsed);
+  const { reservedByCode, reconciliation: reservation } = buildReservation(inventory, transactions, hasStock105);
+
+  const soldByCode = new Map<string, number>();
+  const productIndex = buildProductIndex(inventory);
+  transactions.forEach(transaction => {
+    if (transaction.status !== 'FATURADO') return;
+    const units = nonNegative(transaction.units); if (units <= 0) return;
+    const item = resolveInventoryProduct(transaction, productIndex); if (!item) return;
+    soldByCode.set(item.code, (soldByCode.get(item.code) || 0) + units);
+  });
+
   const products: StockProductView[] = inventory.map(item => {
-    const master = supportForProduct(item, support); const unitsPerCase = nonNegative(master?.unitsPerCase); const positionUnits = nonNegative(item.quantity); const physicalTotalUnits = hasStock8013 ? nonNegative(item.physicalUnits) : positionUnits;
-    let physicalCases = hasStock8013 ? nonNegative(item.physicalCases) : 0; let looseUnits = 0; let quantityDifference = 0;
-    if (unitsPerCase > 0) { if (!hasStock8013) physicalCases = Math.floor(physicalTotalUnits / unitsPerCase); const residual = physicalTotalUnits - physicalCases * unitsPerCase; if (residual >= -TOLERANCE) looseUnits = Math.max(residual, 0); else quantityDifference = residual; }
-    const reservedUnits = reservedByCode.get(item.code) || 0; const availableUnits = reservation.mode === 'POSICAO_BRUTA' ? Math.max(positionUnits - reservedUnits, 0) : positionUnits; const pendingUnits = nonNegative(item.pendingQty); const pendingCases = nonNegative(item.pendingCases); const projectedUnits = availableUnits + pendingUnits; const soldUnits = soldByCode.get(item.code) || 0; const averageDailyUnits = elapsed > 0 ? soldUnits / elapsed : 0; const coverageDays = averageDailyUnits > 0 ? availableUnits / averageDailyUnits : null; const projectedCoverageDays = averageDailyUnits > 0 ? projectedUnits / averageDailyUnits : null;
-    const withoutAlerts: Omit<StockProductView, 'alerts'> = { code: item.code, factoryCode: item.factoryCode || master?.sku || '', ean: item.ean || master?.ean || '', description: item.description || master?.description || '', brand: master?.brand || '', category: master?.category || '', subcategory: master?.subcategory || '', line: master?.line || '', unitsPerCase, positionUnits, physicalCases, looseUnits, physicalTotalUnits, equivalentCases: unitsPerCase > 0 ? physicalTotalUnits / unitsPerCase : null, reservedUnits, availableUnits, pendingCases, pendingUnits, projectedUnits, costUnit: nonNegative(item.costUnit), saleUnit: nonNegative(item.saleUnit), positionCostValue: positionUnits * nonNegative(item.costUnit), positionSaleValue: positionUnits * nonNegative(item.saleUnit), soldUnits, averageDailyUnits, coverageDays, projectedCoverageDays, grossKg: nonNegative(item.grossKg), isLaunch: Boolean(item.isLaunch), hasWinthor: item.hasWinthor !== false, quantityDifference };
+    const master = supportForProduct(item, support);
+    const unitsPerCase = internalFactor(item, master);
+    const industryUnitsPerCase = industryFactor(item, master);
+    const positionUnits = nonNegative(item.quantity);
+
+    // REGRA CANÔNICA: físico é sempre Qt.Est. do 105. O 8013 não substitui essa quantidade.
+    const physicalTotalUnits = positionUnits;
+    let physicalCases = 0;
+    let looseUnits = 0;
+    let quantityDifference = 0;
+    if (unitsPerCase > 0) {
+      physicalCases = Math.floor((physicalTotalUnits + TOLERANCE) / unitsPerCase);
+      const residual = physicalTotalUnits - physicalCases * unitsPerCase;
+      if (residual >= -TOLERANCE && residual < unitsPerCase + TOLERANCE) looseUnits = Math.max(residual, 0);
+      else quantityDifference = residual;
+    }
+
+    const reservedUnits = reservedByCode.get(item.code) || 0;
+    const availableUnits = reservation.mode === 'POSICAO_BRUTA' ? Math.max(positionUnits - reservedUnits, 0) : positionUnits;
+    const pendingUnits = nonNegative(item.pendingQty);
+    const pendingCases = nonNegative(item.pendingCases);
+    const projectedUnits = availableUnits + pendingUnits;
+    const soldUnits = soldByCode.get(item.code) || 0;
+    const averageDailyUnits = elapsed > 0 ? soldUnits / elapsed : 0;
+    const coverageDays = averageDailyUnits > 0 ? availableUnits / averageDailyUnits : null;
+    const projectedCoverageDays = averageDailyUnits > 0 ? projectedUnits / averageDailyUnits : null;
+
+    const withoutAlerts: Omit<StockProductView, 'alerts'> = {
+      code: item.code,
+      factoryCode: item.factoryCode || master?.sku || '',
+      ean: item.ean || master?.ean || '',
+      description: item.description || master?.description || '',
+      brand: master?.brand || '',
+      category: master?.category || '',
+      subcategory: master?.subcategory || '',
+      line: master?.line || '',
+      unitsPerCase,
+      industryUnitsPerCase,
+      positionUnits,
+      physicalCases,
+      looseUnits,
+      physicalTotalUnits,
+      equivalentCases: unitsPerCase > 0 ? physicalTotalUnits / unitsPerCase : null,
+      reservedUnits,
+      availableUnits,
+      pendingCases,
+      pendingUnits,
+      projectedUnits,
+      costUnit: nonNegative(item.costUnit),
+      saleUnit: nonNegative(item.saleUnit),
+      positionCostValue: positionUnits * nonNegative(item.costUnit),
+      positionSaleValue: positionUnits * nonNegative(item.saleUnit),
+      soldUnits,
+      averageDailyUnits,
+      coverageDays,
+      projectedCoverageDays,
+      grossKg: nonNegative(item.grossKg),
+      isLaunch: Boolean(item.isLaunch),
+      hasWinthor: item.hasWinthor !== false,
+      quantityDifference,
+    };
     return { ...withoutAlerts, alerts: buildAlertsForProduct(withoutAlerts, alertConfiguration) };
   });
-  const movements = buildMovements(inventory, transactions); const alerts = products.flatMap(product => product.alerts);
-  const summary: StockPresentationSummary = { costValue: products.reduce((sum, product) => sum + product.positionCostValue, 0), saleValue: products.reduce((sum, product) => sum + product.positionSaleValue, 0), physicalUnits: products.reduce((sum, product) => sum + product.physicalTotalUnits, 0), physicalCases: products.reduce((sum, product) => sum + product.physicalCases, 0), looseUnits: products.reduce((sum, product) => sum + product.looseUnits, 0), reservedUnits: products.reduce((sum, product) => sum + product.reservedUnits, 0), availableUnits: products.reduce((sum, product) => sum + product.availableUnits, 0), pendingUnits: products.reduce((sum, product) => sum + product.pendingUnits, 0), pendingCases: products.reduce((sum, product) => sum + product.pendingCases, 0), projectedUnits: products.reduce((sum, product) => sum + product.projectedUnits, 0), skuCount: products.length, zeroSkuCount: products.filter(product => product.physicalTotalUnits <= 0).length, launchCount: products.filter(product => product.isLaunch).length, noWinthorCount: products.filter(product => !product.hasWinthor && product.pendingUnits > 0).length, quantityDifferenceUnits: products.reduce((sum, product) => sum + product.quantityDifference, 0) };
-  const validConversionProducts = products.filter(product => product.unitsPerCase > 0); const expectedFormulaUnits = validConversionProducts.reduce((sum, product) => sum + product.physicalTotalUnits, 0); const calculatedFormulaUnits = validConversionProducts.reduce((sum, product) => sum + product.physicalCases * product.unitsPerCase + product.looseUnits, 0); const missingConversions = products.filter(product => product.unitsPerCase <= 0 && (product.physicalTotalUnits > 0 || product.pendingCases > 0)); const portfolioMovements = movements.filter(movement => movement.kind === 'ENTRADA_PREVISTA_CARTEIRA'); const reservedMovements = movements.filter(movement => movement.kind === 'SAIDA_RESERVADA_PEDIDO' && movement.totalUnits > 0);
+
+  const movements = buildMovements(inventory, transactions);
+  const alerts = products.flatMap(product => product.alerts);
+  const summary: StockPresentationSummary = {
+    costValue: products.reduce((total, product) => total + product.positionCostValue, 0),
+    saleValue: products.reduce((total, product) => total + product.positionSaleValue, 0),
+    physicalUnits: products.reduce((total, product) => total + product.physicalTotalUnits, 0),
+    physicalCases: products.reduce((total, product) => total + product.physicalCases, 0),
+    looseUnits: products.reduce((total, product) => total + product.looseUnits, 0),
+    unconvertedPhysicalUnits: products.filter(product => product.unitsPerCase <= 0).reduce((total, product) => total + product.physicalTotalUnits, 0),
+    reservedUnits: products.reduce((total, product) => total + product.reservedUnits, 0),
+    availableUnits: products.reduce((total, product) => total + product.availableUnits, 0),
+    pendingUnits: products.reduce((total, product) => total + product.pendingUnits, 0),
+    pendingCases: products.reduce((total, product) => total + product.pendingCases, 0),
+    projectedUnits: products.reduce((total, product) => total + product.projectedUnits, 0),
+    skuCount: products.length,
+    zeroSkuCount: products.filter(product => product.physicalTotalUnits <= 0).length,
+    launchCount: products.filter(product => product.isLaunch).length,
+    noWinthorCount: products.filter(product => !product.hasWinthor && (product.pendingUnits > 0 || product.pendingCases > 0)).length,
+    quantityDifferenceUnits: products.reduce((total, product) => total + product.quantityDifference, 0),
+  };
+
+  const validPhysicalConversions = products.filter(product => product.physicalTotalUnits > 0 && product.unitsPerCase > 0);
+  const expectedFormulaUnits = validPhysicalConversions.reduce((total, product) => total + product.physicalTotalUnits, 0);
+  const calculatedFormulaUnits = validPhysicalConversions.reduce((total, product) => total + product.physicalCases * product.unitsPerCase + product.looseUnits, 0);
+  const missingInternalConversions = products.filter(product => product.physicalTotalUnits > 0 && product.unitsPerCase <= 0);
+  const missingIndustryConversions = products.filter(product => product.pendingCases > 0 && product.industryUnitsPerCase <= 0);
+  const validPortfolioConversions = products.filter(product => product.pendingCases > 0 && product.industryUnitsPerCase > 0);
+  const expectedPortfolioUnits = validPortfolioConversions.reduce((total, product) => total + product.pendingCases * product.industryUnitsPerCase, 0);
+  const calculatedPortfolioUnits = validPortfolioConversions.reduce((total, product) => total + product.pendingUnits, 0);
+  const portfolioMovements = movements.filter(movement => movement.kind === 'ENTRADA_PREVISTA_CARTEIRA');
+  const reservedMovements = movements.filter(movement => movement.kind === 'SAIDA_RESERVADA_PEDIDO' && movement.totalUnits > 0);
+
   const checks: StockReconciliationCheck[] = [
-    numericCheck({ id: 'stock.quantity.formula', label: 'Caixas × Un/CX + unidades avulsas = total físico', expected: expectedFormulaUnits, calculated: calculatedFormulaUnits, source: '8013 + Lista de Preços / cadastro de embalagem', tolerance: TOLERANCE, note: `${validConversionProducts.length} SKU(s) com conversão confirmada.` }),
-    missingConversions.length === 0 ? numericCheck({ id: 'stock.quantity.conversion', label: 'SKUs com estoque/carteira sem conversão Un/CX', expected: 0, calculated: 0, source: 'Lista de Preços / cadastro de embalagem', tolerance: 0 }) : blockedCheck('stock.quantity.conversion', 'SKUs com estoque/carteira sem conversão Un/CX', 'Lista de Preços / cadastro de embalagem', `${missingConversions.length} SKU(s) não podem ter a decomposição caixas/avulsas comprovada.`, missingConversions.length),
-    numericCheck({ id: 'stock.projected.units', label: 'Estoque projetado = disponível + entradas previstas', expected: summary.availableUnits + summary.pendingUnits, calculated: summary.projectedUnits, source: 'Posição + 8022 A Faturar + Carteira', tolerance: TOLERANCE }),
-    numericCheck({ id: 'stock.portfolio.units', label: 'Σ Carteira por SKU = total de entradas previstas', expected: summary.pendingUnits, calculated: portfolioMovements.reduce((sum, movement) => sum + nonNegative(movement.totalUnits), 0), source: 'Carteira', tolerance: TOLERANCE }),
-    numericCheck({ id: 'stock.reserved.units', label: 'Σ reservado por SKU = saídas reservadas do 8022', expected: summary.reservedUnits, calculated: reservedMovements.reduce((sum, movement) => sum + nonNegative(movement.totalUnits), 0) - reservation.unresolvedReservedUnits, source: '8022 A Faturar', tolerance: TOLERANCE, note: reservation.unresolvedReservedUnits > 0 ? `${reservation.unresolvedReservedUnits} un. do A Faturar não foram conciliadas a SKU do estoque.` : 'Todas as unidades reservadas foram conciliadas.' }),
-    reservation.unresolvedReservedUnits <= TOLERANCE ? numericCheck({ id: 'stock.reserved.unresolved', label: 'Reserva sem SKU conciliado', expected: 0, calculated: 0, source: '8022 × estoque', tolerance: TOLERANCE }) : blockedCheck('stock.reserved.unresolved', 'Reserva sem SKU conciliado', '8022 × estoque', 'Há unidades A Faturar sem SKU conciliado; elas permanecem explícitas e não foram descontadas silenciosamente.', reservation.unresolvedReservedUnits),
+    numericCheck({ id: 'stock.quantity.formula', label: 'Caixas internas × Un/CX interno + avulsas = físico 105', expected: expectedFormulaUnits, calculated: calculatedFormulaUnits, source: '105 + 8013 (embalagem interna)', tolerance: TOLERANCE, note: `${validPhysicalConversions.length} SKU(s) com Un/CX interno comprovado.` }),
+    missingInternalConversions.length === 0
+      ? numericCheck({ id: 'stock.quantity.internal-conversion', label: 'SKUs físicos sem Un/CX interno', expected: 0, calculated: 0, source: '105 × 8013', tolerance: 0 })
+      : blockedCheck('stock.quantity.internal-conversion', 'SKUs físicos sem Un/CX interno', '105 × 8013', `${missingInternalConversions.length} SKU(s) preservam o físico em unidades, mas não podem ser decompostos em caixas/avulsas.`, missingInternalConversions.length),
+    missingIndustryConversions.length === 0
+      ? numericCheck({ id: 'stock.quantity.industry-conversion', label: 'SKUs da Carteira sem Un/CX indústria', expected: 0, calculated: 0, source: 'Carteira × Lista de Preço Colgate', tolerance: 0 })
+      : blockedCheck('stock.quantity.industry-conversion', 'SKUs da Carteira sem Un/CX indústria', 'Carteira × Lista de Preço Colgate', `${missingIndustryConversions.length} SKU(s) continuam em caixas porque falta o fator industrial; unidades não foram inventadas.`, missingIndustryConversions.length),
+    numericCheck({ id: 'stock.portfolio.conversion', label: 'Carteira em caixas × Un/CX indústria = unidades', expected: expectedPortfolioUnits, calculated: calculatedPortfolioUnits, source: 'Carteira × Lista de Preço Colgate', tolerance: TOLERANCE, note: `${validPortfolioConversions.length} SKU(s) com conversão industrial comprovada.` }),
+    numericCheck({ id: 'stock.projected.units', label: 'Estoque projetado = disponível + entradas previstas', expected: summary.availableUnits + summary.pendingUnits, calculated: summary.projectedUnits, source: '105 + 8022 A Faturar + Carteira', tolerance: TOLERANCE }),
+    numericCheck({ id: 'stock.portfolio.units', label: 'Σ Carteira por SKU = total de entradas previstas', expected: summary.pendingUnits, calculated: portfolioMovements.reduce((total, movement) => total + nonNegative(movement.totalUnits), 0), source: 'Carteira', tolerance: TOLERANCE }),
+    numericCheck({ id: 'stock.reserved.units', label: 'Σ reservado por SKU = saídas reservadas do 8022', expected: summary.reservedUnits, calculated: reservedMovements.reduce((total, movement) => total + nonNegative(movement.totalUnits), 0) - reservation.unresolvedReservedUnits, source: '8022 A Faturar', tolerance: TOLERANCE, note: reservation.unresolvedReservedUnits > 0 ? `${reservation.unresolvedReservedUnits} un. do A Faturar não foram conciliadas a SKU do estoque.` : 'Todas as unidades reservadas foram conciliadas.' }),
+    reservation.unresolvedReservedUnits <= TOLERANCE
+      ? numericCheck({ id: 'stock.reserved.unresolved', label: 'Reserva sem SKU conciliado', expected: 0, calculated: 0, source: '8022 × ITEM_MASTER', tolerance: TOLERANCE })
+      : blockedCheck('stock.reserved.unresolved', 'Reserva sem SKU conciliado', '8022 × ITEM_MASTER', 'Há unidades A Faturar sem SKU conciliado; elas permanecem explícitas e não foram descontadas silenciosamente.', reservation.unresolvedReservedUnits),
     numericCheck({ id: 'stock.value.cost', label: 'Σ valor dos SKUs a custo = total da Visão Geral', expected: Number(input.stockCostValue ?? summary.costValue), calculated: summary.costValue, source: 'Posição 105', tolerance: 0.01 }),
-    numericCheck({ id: 'stock.value.sale', label: 'Σ valor dos SKUs a venda = total da Visão Geral', expected: Number(input.stockSaleValue ?? summary.saleValue), calculated: summary.saleValue, source: 'Posição 105', tolerance: 0.01 }),
-    reservation.mode === 'POSICAO_BRUTA' || reservation.mode === 'POSICAO_LIQUIDA' ? { id: 'stock.reservation.mode', label: 'Tratamento da reserva na posição exportada', expected: reservation.mode, calculated: reservation.mode, difference: null, status: 'OK', source: '105 × 8013 × 8022', note: reservation.note } : blockedCheck('stock.reservation.mode', 'Tratamento da reserva na posição exportada', '105 × 8013 × 8022', reservation.note, reservation.mode),
+    numericCheck({ id: 'stock.value.sale', label: 'Σ valor dos SKUs a venda = total da Visão Geral', expected: Number(input.stockSaleValue ?? summary.saleValue), calculated: summary.saleValue, source: '105 × PCTABPR Região 11 / PVENDA1', tolerance: 0.01 }),
+    reservation.mode === 'POSICAO_BRUTA'
+      ? { id: 'stock.reservation.mode', label: 'Tratamento da reserva na posição física', expected: '105 físico - 8022 A Faturar', calculated: '105 físico - 8022 A Faturar', difference: null, status: 'OK', source: '105 × 8022', note: reservation.note }
+      : blockedCheck('stock.reservation.mode', 'Tratamento da reserva na posição física', '105 × 8022', reservation.note, reservation.mode),
     blockedCheck('stock.movement.balance', 'Saldo anterior + entradas - saídas = saldo atual', 'Relatório detalhado de movimentações', 'A arquitetura de movimentos está pronta, mas esta reconciliação exige o razão completo de notas, devoluções, transferências e ajustes.'),
   ];
+
   return { products, movements, alerts, reservation, summary, reconciliation: checks };
 }
