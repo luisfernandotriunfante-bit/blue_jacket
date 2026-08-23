@@ -39,21 +39,21 @@ export function DailyMovementChart({ data }: { data: DailyMovementPoint[] }) {
   const labelStep = data.length > 24 ? 5 : data.length > 15 ? 3 : data.length > 9 ? 2 : 1;
 
   return (
-    <div style={{ marginTop: '18px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap', marginBottom: '10px' }}>
-        <div style={{ color: 'var(--panel-muted)', fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Gráfico do movimento</div>
-        <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontSize: '0.72rem', color: 'var(--panel-muted)' }}>
-          <Legend color="#ef3340" label="Sell Out" />
-          <Legend color="#60a5fa" label="Faturado" />
-          <Legend color="#4ade80" label="A Faturar" dashed />
+    <div>
+      <div className="chart-legend-row">
+        <span className="panel-mini-label">Gráfico do movimento</span>
+        <div className="chart-legends">
+          <Legend color="var(--panel-red)" label="Sell Out" />
+          <Legend color="var(--panel-blue)" label="Faturado" />
+          <Legend color="var(--panel-green)" label="A Faturar" dashed />
         </div>
       </div>
-      <div style={{ width: '100%', overflowX: 'auto', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '14px', background: 'rgba(0,0,0,0.12)', padding: '8px 6px 2px' }}>
-        <svg viewBox={`0 0 ${width} ${height}`} width="100%" role="img" aria-label="Gráfico diário de faturado, a faturar e Sell Out" style={{ display: 'block', minWidth: data.length > 20 ? '900px' : '720px' }}>
+      <div className="chart-canvas-wrap">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Gráfico diário de faturado, a faturar e Sell Out" className="chart-svg">
           <defs>
             <linearGradient id="movement-total-area" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#ef3340" stopOpacity="0.22" />
-              <stop offset="100%" stopColor="#ef3340" stopOpacity="0.015" />
+              <stop offset="0%" stopColor="var(--panel-red)" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="var(--panel-red)" stopOpacity="0.015" />
             </linearGradient>
           </defs>
 
@@ -63,21 +63,21 @@ export function DailyMovementChart({ data }: { data: DailyMovementPoint[] }) {
             return (
               <g key={level}>
                 <line x1={pad.left} y1={gy} x2={width - pad.right} y2={gy} stroke="rgba(255,255,255,0.075)" strokeWidth="1" />
-                <text x={pad.left - 12} y={gy + 4} textAnchor="end" fill="#8794a8" fontSize="10">{compactBRL(value)}</text>
+                <text x={pad.left - 12} y={gy + 4} textAnchor="end" fill="var(--panel-muted)" fontSize="10">{compactBRL(value)}</text>
               </g>
             );
           })}
 
           <path d={totalArea} fill="url(#movement-total-area)" />
-          <path d={totalPath} fill="none" stroke="#ef3340" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-          <path d={invoicedPath} fill="none" stroke="#60a5fa" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
-          <path d={toInvoicePath} fill="none" stroke="#4ade80" strokeWidth="2.2" strokeDasharray="7 5" strokeLinejoin="round" strokeLinecap="round" />
+          <path d={totalPath} fill="none" stroke="var(--panel-red)" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+          <path d={invoicedPath} fill="none" stroke="var(--panel-blue)" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
+          <path d={toInvoicePath} fill="none" stroke="var(--panel-green)" strokeWidth="2.2" strokeDasharray="7 5" strokeLinejoin="round" strokeLinecap="round" />
 
           {data.map((item, index) => (
             <g key={item.date}>
-              <circle cx={x(index)} cy={y(item.total)} r="3.4" fill="#ef3340" stroke="#11161d" strokeWidth="1.5" />
+              <circle cx={x(index)} cy={y(item.total)} r="3.4" fill="var(--panel-red)" stroke="var(--panel-bg)" strokeWidth="1.5" />
               {(index % labelStep === 0 || index === data.length - 1) ? (
-                <text x={x(index)} y={height - 18} textAnchor="middle" fill="#8794a8" fontSize="10">
+                <text x={x(index)} y={height - 18} textAnchor="middle" fill="var(--panel-muted)" fontSize="10">
                   {new Date(`${item.date}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
                 </text>
               ) : null}
@@ -91,8 +91,8 @@ export function DailyMovementChart({ data }: { data: DailyMovementPoint[] }) {
 
 function Legend({ color, label, dashed = false }: { color: string; label: string; dashed?: boolean }) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-      <span style={{ display: 'inline-block', width: '22px', borderTop: `2px ${dashed ? 'dashed' : 'solid'} ${color}` }} />
+    <span className="chart-legend">
+      <span className="chart-legend-line" style={{ borderTopColor: color, borderTopStyle: dashed ? 'dashed' : 'solid' }} />
       {label}
     </span>
   );
