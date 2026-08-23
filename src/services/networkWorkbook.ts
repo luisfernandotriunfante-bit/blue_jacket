@@ -22,6 +22,7 @@ export function buildCanonicalNetworkWorkbook(state: CanonicalState): XLSX.WorkB
 
   const storeRows = networks.flatMap(network => network.stores.map(store => ({
     Rede: network.name,
+    'Rede Roteiro': store.routeNetwork || '',
     CNPJ: store.cnpj,
     Loja: store.name,
     Fantasia: store.fantasyName,
@@ -46,7 +47,7 @@ export function buildCanonicalNetworkWorkbook(state: CanonicalState): XLSX.WorkB
 
   const storeSheet = XLSX.utils.json_to_sheet(storeRows);
   storeSheet['!cols'] = [
-    { wch: 30 }, { wch: 18 }, { wch: 36 }, { wch: 28 }, { wch: 24 }, { wch: 18 },
+    { wch: 30 }, { wch: 30 }, { wch: 18 }, { wch: 36 }, { wch: 28 }, { wch: 24 }, { wch: 18 },
     { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 },
   ];
   XLSX.utils.book_append_sheet(workbook, storeSheet, 'Lojas');
