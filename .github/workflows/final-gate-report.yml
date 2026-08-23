@@ -1,0 +1,60 @@
+name: final-gate-report
+
+on:
+  push:
+    branches:
+      - feat/limpeza-padronizacao-visual
+    paths:
+      - '.github/workflows/final-gate-report.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/limpeza-padronizacao-visual
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - name: Run validation
+        shell: bash
+        run: |
+          set +e
+          mkdir -p .gate
+          npm run typecheck > .gate/typecheck.txt 2>&1; TC=$?
+          npm run test:run > .gate/tests.txt 2>&1; TS=$?
+          npm run build > .gate/build.txt 2>&1; BD=$?
+          grep -RInE "canonicalEngine|supportCore|canonical/(aggregate|history|networkResolution|operations|reconciliation|relationships|support)|legacyStock|comboClientPortfolio|detectedNetworkTarget|legacyNetwork|bj_produtos|bj_metricas|bj_sellout|GlassSurface|--bj-" src package.json 2>/dev/null > .gate/runtime-residuals.txt || true
+          {
+            echo '# Gate final temporário'
+            echo "TYPECHECK=$TC"
+            echo "TESTS=$TS"
+            echo "BUILD=$BD"
+            echo
+            echo '## Typecheck'
+            cat .gate/typecheck.txt
+            echo
+            echo '## Falhas de testes'
+            grep -E "^(not ok|# fail|# pass|# tests|# todo)|ERR_|Cannot find module|AssertionError" .gate/tests.txt | tail -n 700 || true
+            echo
+            echo '## Resíduos proibidos no runtime'
+            cat .gate/runtime-residuals.txt
+            echo
+            echo '## Build'
+            cat .gate/build.txt
+          } > docs/FINAL_GATE_TEMP.md
+          rm -rf .gate
+          rm .github/workflows/final-gate-report.yml
+      - name: Commit report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Registra gate final temporário"
+          git push origin HEAD:feat/limpeza-padronizacao-visual
