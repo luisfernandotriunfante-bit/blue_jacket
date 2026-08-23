@@ -108,15 +108,11 @@ export interface CanonicalSupportData {
   vendorTargets: CanonicalVendorTargetSupport[];
   clients: CanonicalClientSupport[];
   activeRoute: CanonicalRouteStoreSupport[];
-  legacyNetworkTargets: Record<string, number>;
-  legacyNetworkOwners: Record<string, { teamCode:string; vendorCode:string }>;
-  legacyClientNetworks: Record<string, string>;
-  legacyClientOwners: Record<string, { teamCode:string; vendorCode:string }>;
   products: CanonicalProductSupport[];
   itemCodes: CanonicalItemCodeSupport[];
 }
 
-export const EMPTY_CANONICAL_SUPPORT: CanonicalSupportData = { rcas:[], vendorTargets:[], clients:[], activeRoute:[], legacyNetworkTargets:{}, legacyNetworkOwners:{}, legacyClientNetworks:{}, legacyClientOwners:{}, products:[], itemCodes:[] };
+export const EMPTY_CANONICAL_SUPPORT: CanonicalSupportData = { rcas:[], vendorTargets:[], clients:[], activeRoute:[], products:[], itemCodes:[] };
 
 export interface SourceAudit {
   kind: SourceKind;
@@ -235,7 +231,7 @@ export interface CanonicalCoordinatorResult {
 }
 
 export interface CanonicalNetworkStore { cnpj:string; name:string; fantasyName:string; city:string; managerCnpj:string; groupingCode:string; tier:string; storeType:string; topTarget:number; invoiced:number; toInvoice:number; total:number; }
-export interface CanonicalNetworkResult { key:string; name:string; teamCode:string; vendorCode:string; detectedNetworkTarget:number; networkTarget:number; topTarget:number; invoiced:number; toInvoice:number; total:number; networkAttainment:number; topAttainment:number; gapToNetworkTarget:number; gapToTopTarget:number; clients:number; stores:CanonicalNetworkStore[]; }
+export interface CanonicalNetworkResult { key:string; name:string; networkTarget:number; topTarget:number; invoiced:number; toInvoice:number; total:number; networkAttainment:number; topAttainment:number; gapToNetworkTarget:number; gapToTopTarget:number; clients:number; stores:CanonicalNetworkStore[]; }
 export interface CanonicalLineResult { name:LineName; share:number; target:number; invoiced:number; toInvoice:number; total:number; attainment:number; }
 
 export interface CanonicalStockSummary {
