@@ -51,7 +51,7 @@ type CatalogFilter = 'todos' | 'lancamento' | 'sem-winthor';
 type RiskFilter = 'todos' | 'ruptura' | 'risco' | 'sem-giro' | 'ok';
 
 export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
-  const { isLoaded, produtos, metricas, canonical } = useData();
+  const { canonical } = useData();
   const [direction, setDirection] = useState<StockMovementDirection>('ENTRADA');
   const [searchTerm, setSearchTerm] = useState('');
   const [movementSearch, setMovementSearch] = useState('');
@@ -67,39 +67,21 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
     setAlertConfiguration(loadStockAlertConfiguration(localStorage, competence));
   }, [competence]);
 
-  const inventory = useMemo(() => canonical?.inventory || produtos.map(product => ({
-    code: product.codigo,
-    description: product.descricao,
-    ean: product.ean,
-    quantity: product.quantidade,
-    costUnit: product.custoUnitario,
-    saleUnit: product.vendaUnitario,
-    pendingQty: product.saldoPedido,
-    pendingCases: product.saldoPedidoCaixas || 0,
-    pendingCost: product.saldoPedidoValorCusto || 0,
-    pendingSale: product.saldoPedidoValorVenda || 0,
-    isLaunch: Boolean(product.isLancamento),
-    hasWinthor: product.hasWinthor !== false,
-    factoryCode: product.factoryCode || '',
-    physicalCases: product.physicalCases || 0,
-    physicalUnits: product.physicalUnits || 0,
-    grossKg: product.grossKg || 0,
-  })), [canonical, produtos]);
-
-  const hasStock8013 = Boolean(canonical?.sources?.some(source => source.kind === 'stock8013' && source.loaded))
-    || produtos.some(product => product.physicalUnits !== undefined || product.physicalCases !== undefined);
+  const inventory = canonical?.inventory || [];
+  const hasStock8013 = Boolean(canonical?.sources.some(source => source.kind === 'stock8013' && source.loaded));
+  const stockCodeProducts = useMemo(() => inventory.map(item => ({ codigo: item.code, factoryCode: item.factoryCode, ean: item.ean })), [inventory]);
 
   const presentation = useMemo(() => buildStockPresentation({
     inventory,
-    productSupport: canonical?.support?.products || [],
-    itemCodeSupport: canonical?.support?.itemCodes || [],
+    productSupport: canonical?.support.products || [],
+    itemCodeSupport: canonical?.support.itemCodes || [],
     transactions: canonical?.transactions || [],
-    businessDaysElapsed: canonical?.sellOut?.businessDaysElapsed || 0,
-    stockCostValue: metricas.valorEstoqueCompra,
-    stockSaleValue: metricas.valorEstoqueVenda,
+    businessDaysElapsed: canonical?.sellOut.businessDaysElapsed || 0,
+    stockCostValue: canonical?.stock.costValue || 0,
+    stockSaleValue: canonical?.stock.saleValue || 0,
     hasStock8013,
     alertConfiguration,
-  }), [inventory, canonical, metricas.valorEstoqueCompra, metricas.valorEstoqueVenda, hasStock8013, alertConfiguration]);
+  }), [inventory, canonical, hasStock8013, alertConfiguration]);
 
   const updateAlertConfiguration = (patch: Partial<StockAlertConfiguration>) => {
     setAlertConfiguration(current => {
@@ -115,8 +97,8 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
     soldUnits: product.soldUnits,
     coverageDays: product.coverageDays,
     pendingQty: product.pendingUnits,
-    coverageTargetDays: metricas.metaCobertura,
-  })])), [presentation.products, metricas.metaCobertura]);
+    coverageTargetDays: canonical?.stock.coverageTargetDays || 0,
+  })])), [presentation.products, canonical?.stock.coverageTargetDays]);
 
   const riskCounts = useMemo(() => ({
     ruptura: presentation.products.filter(product => riskStatusByCode.get(product.code) === 'ruptura').length,
@@ -150,21 +132,21 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
     });
   }, [presentation.movements, direction, movementSearch]);
 
-  if (!isLoaded) {
-    return <PanelEmptyState icon="◆" title="Nenhum dado carregado" description={<>Vá até <strong>Configurações</strong> e carregue Posição 105, Cadastro 286, Estoque 8013, Carteira e Vendas 8022.</>} />;
+  if (!canonical) {
+    return <PanelPage title="Estoque"><PanelEmptyState variant="page" title="Nenhum dado carregado" description={<>Vá até <strong>Configurações</strong> e carregue Posição 105, Cadastro 286, Estoque 8013, Carteira e Vendas 8022.</>} /></PanelPage>;
   }
 
   const thresholdInput = (label: string, key: 'riskCoverageDays' | 'lowCoverageDays' | 'excessCoverageDays', value: number | null) => (
-    <label style={{ display: 'grid', gap: '6px', minWidth: '160px' }}>
-      <span className="panel-mini-label">{label}</span>
+    <label className="panel-field" style={{ minWidth: '160px' }}>
+      <span className="panel-field-label">{label}</span>
       <input className="panel-input" type="number" min="0" step="1" value={value ?? ''} placeholder="Desativado"
         onChange={event => updateAlertConfiguration({ [key]: event.target.value === '' ? null : Math.max(Number(event.target.value) || 0, 0) })} />
     </label>
   );
 
   const renderOverview = () => {
-    const projectedSale = metricas.valorEstoqueVenda + metricas.saldoPedidoVenda;
-    const projectedCost = metricas.valorEstoqueCompra + metricas.saldoPedidoCusto;
+    const projectedSale = canonical.stock.saleValue + canonical.stock.pendingPurchaseSale;
+    const projectedCost = canonical.stock.costValue + canonical.stock.pendingPurchaseCost;
     const winthorSkus = inventory.filter(item => item.hasWinthor).length;
     const externalCatalog = Math.max(presentation.summary.skuCount - winthorSkus, 0);
     const quantityDivergences = presentation.products.filter(product => Math.abs(product.quantityDifference) > 0.001).length;
@@ -173,10 +155,10 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
 
     return <div className="panel-stack">
       <div className="stock-financial-grid">
-        <PanelKpi label="Estoque a venda" value={formatCurrency(metricas.valorEstoqueVenda)} detail="Potencial do estoque atual pela referência de venda" tone="red" />
-        <PanelKpi label="Estoque a custo" value={formatCurrency(metricas.valorEstoqueCompra)} detail="Valor de aquisição da posição atual" />
-        <PanelKpi label="Carteira a venda" value={formatCurrency(metricas.saldoPedidoVenda)} detail={`${formatNumber(presentation.summary.pendingCases, 2)} cx previstas`} tone="blue" />
-        <PanelKpi label="Carteira a custo" value={formatCurrency(metricas.saldoPedidoCusto)} detail={`Projeção a custo: ${formatCurrency(projectedCost)}`} tone="purple" />
+        <PanelKpi label="Estoque a venda" value={formatCurrency(canonical.stock.saleValue)} detail="Potencial do estoque atual pela referência de venda" tone="red" />
+        <PanelKpi label="Estoque a custo" value={formatCurrency(canonical.stock.costValue)} detail="Valor de aquisição da posição atual" />
+        <PanelKpi label="Carteira a venda" value={formatCurrency(canonical.stock.pendingPurchaseSale)} detail={`${formatNumber(presentation.summary.pendingCases, 2)} cx previstas`} tone="blue" />
+        <PanelKpi label="Carteira a custo" value={formatCurrency(canonical.stock.pendingPurchaseCost)} detail={`Projeção a custo: ${formatCurrency(projectedCost)}`} tone="purple" />
       </div>
 
       <PanelCard>
@@ -217,7 +199,7 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
         <details className="stock-alert-params">
           <summary>Parâmetros dos alertas de cobertura</summary>
           <div className="panel-toolbar" style={{ marginTop: '14px', alignItems: 'end', justifyContent: 'flex-start' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', minHeight: '42px' }}><input type="checkbox" checked={alertConfiguration.zeroStockAsRupture} onChange={event => updateAlertConfiguration({ zeroStockAsRupture: event.target.checked })} /><span style={{ color: 'var(--panel-text-dim)', fontSize: '0.78rem' }}>Estoque zero = ruptura</span></label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', minHeight: '42px' }}><input className="panel-checkbox" type="checkbox" checked={alertConfiguration.zeroStockAsRupture} onChange={event => updateAlertConfiguration({ zeroStockAsRupture: event.target.checked })} /><span style={{ color: 'var(--panel-text-dim)', fontSize: '0.78rem' }}>Estoque zero = ruptura</span></label>
             {thresholdInput('Risco · dias', 'riskCoverageDays', alertConfiguration.riskCoverageDays)}
             {thresholdInput('Baixo estoque · dias', 'lowCoverageDays', alertConfiguration.lowCoverageDays)}
             {thresholdInput('Excesso · dias', 'excessCoverageDays', alertConfiguration.excessCoverageDays)}
@@ -250,10 +232,10 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
       <PanelSectionHeader eyebrow="PRODUTOS" title={`Posição por SKU · ${filteredProducts.length} de ${presentation.products.length}`} description="A tabela reúne posição 105, físico 8013, reserva 8022, Carteira, venda do mês, cobertura, custo, venda e peso no mesmo SKU." />
       <div className="panel-toolbar" style={{ marginBottom: '12px' }}>
         <div className="panel-chips"><button className={`panel-chip${activeFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setActiveFilter('todos')}>Todos · {presentation.products.length}</button><button className={`panel-chip${activeFilter === 'lancamento' ? ' is-active' : ''}`} onClick={() => setActiveFilter('lancamento')}>Lançamentos · {presentation.summary.launchCount}</button><button className={`panel-chip is-warning${activeFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setActiveFilter('sem-winthor')}>Sem Winthor · {presentation.summary.noWinthorCount}</button></div>
-        <input className="panel-input" value={searchTerm} placeholder="Buscar código, EAN, fabricante, produto..." onChange={event => setSearchTerm(event.target.value)} />
+        <input className="panel-input panel-input-search" value={searchTerm} placeholder="Buscar código, EAN, fabricante, produto..." onChange={event => setSearchTerm(event.target.value)} />
       </div>
-      <div className="panel-toolbar" style={{ marginBottom: '12px' }}><div className="panel-chips"><button className={`panel-chip${statusFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setStatusFilter('todos')}>Situação · Todas</button><button className={`panel-chip${statusFilter === 'ruptura' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ruptura')}>Ruptura · {riskCounts.ruptura}</button><button className={`panel-chip${statusFilter === 'risco' ? ' is-active' : ''}`} onClick={() => setStatusFilter('risco')}>Risco · {riskCounts.risco}</button><button className={`panel-chip${statusFilter === 'sem-giro' ? ' is-active' : ''}`} onClick={() => setStatusFilter('sem-giro')}>Sem giro · {riskCounts.semGiro}</button><button className={`panel-chip${statusFilter === 'ok' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ok')}>OK · {riskCounts.ok}</button></div><span style={{ color: 'var(--panel-muted)', fontSize: '0.72rem' }}>Meta de cobertura: <strong style={{ color: 'var(--panel-text)' }}>{metricas.metaCobertura} dias</strong></span></div>
-      <div className="panel-toolbar" style={{ marginBottom: '18px' }}><StockCodeListFilter products={produtos} codes={importedCodes} onChange={setImportedCodes} /><button className="panel-secondary-button" onClick={() => { setSearchTerm(''); setActiveFilter('todos'); setStatusFilter('todos'); setImportedCodes(new Set()); }}>Limpar filtros</button></div>
+      <div className="panel-toolbar" style={{ marginBottom: '12px' }}><div className="panel-chips"><button className={`panel-chip${statusFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setStatusFilter('todos')}>Situação · Todas</button><button className={`panel-chip${statusFilter === 'ruptura' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ruptura')}>Ruptura · {riskCounts.ruptura}</button><button className={`panel-chip${statusFilter === 'risco' ? ' is-active' : ''}`} onClick={() => setStatusFilter('risco')}>Risco · {riskCounts.risco}</button><button className={`panel-chip${statusFilter === 'sem-giro' ? ' is-active' : ''}`} onClick={() => setStatusFilter('sem-giro')}>Sem giro · {riskCounts.semGiro}</button><button className={`panel-chip${statusFilter === 'ok' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ok')}>OK · {riskCounts.ok}</button></div><span style={{ color: 'var(--panel-muted)', fontSize: '0.72rem' }}>Meta de cobertura: <strong style={{ color: 'var(--panel-text)' }}>{canonical.stock.coverageTargetDays} dias</strong></span></div>
+      <div className="panel-toolbar" style={{ marginBottom: '18px' }}><StockCodeListFilter products={stockCodeProducts} codes={importedCodes} onChange={setImportedCodes} /><button className="panel-secondary-button" onClick={() => { setSearchTerm(''); setActiveFilter('todos'); setStatusFilter('todos'); setImportedCodes(new Set()); }}>Limpar filtros</button></div>
       <div className="panel-table-wrap stock-table-compact"><table className="panel-table"><thead><tr><th>Código</th><th>Produto</th><th className="is-right">Un/CX</th><th className="is-right">Posição 105</th><th className="is-right">Cx físicas</th><th className="is-right">Avulsas</th><th className="is-right">Físico un.</th><th className="is-right">Reservado</th><th className="is-right">Disponível</th><th className="is-right">Carteira cx</th><th className="is-right">Carteira un.</th><th className="is-right">Projetado</th><th className="is-right">Venda mês</th><th className="is-right">Cobertura</th><th className="is-right">Custo un.</th><th className="is-right">Total custo</th><th className="is-right">Venda ref.</th><th className="is-right">Potencial</th><th className="is-right">Peso kg</th><th>Situação</th><th></th></tr></thead>
         <tbody>{filteredProducts.map(product => { const status = riskStatusByCode.get(product.code) || 'ok'; return <tr key={product.code}>
           <td className="is-strong">{product.code.startsWith('EAN-') ? '—' : product.code}</td>
@@ -268,7 +250,7 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
   const renderMovements = () => {
     const detailedPortfolio = presentation.movements.some(movement => movement.kind === 'ENTRADA_PREVISTA_CARTEIRA' && Number((movement as StockPortfolioMovement).sourceRow) > 0);
     return <div className="panel-stack"><PanelCard>
-      <PanelSectionHeader eyebrow="ENTRADAS E SAÍDAS" title={`${direction === 'ENTRADA' ? 'Entradas' : 'Saídas'} · ${movements.length}`} description="Entradas mostram a Carteira; Saídas mostram o 8022 faturado e reservado. Campos sem fonte comprovada não ocupam a tabela." action={<input className="panel-input" value={movementSearch} placeholder="Filtrar SKU, produto, parceiro, origem..." onChange={event => setMovementSearch(event.target.value)} />} />
+      <PanelSectionHeader eyebrow="ENTRADAS E SAÍDAS" title={`${direction === 'ENTRADA' ? 'Entradas' : 'Saídas'} · ${movements.length}`} description="Entradas mostram a Carteira; Saídas mostram o 8022 faturado e reservado. Campos sem fonte comprovada não ocupam a tabela." action={<input className="panel-input panel-input-search" value={movementSearch} placeholder="Filtrar SKU, produto, parceiro, origem..." onChange={event => setMovementSearch(event.target.value)} />} />
       <div className="panel-chips" style={{ marginBottom: '18px' }}><button className={`panel-chip${direction === 'ENTRADA' ? ' is-active' : ''}`} onClick={() => setDirection('ENTRADA')}>Entradas</button><button className={`panel-chip${direction === 'SAIDA' ? ' is-active' : ''}`} onClick={() => setDirection('SAIDA')}>Saídas</button></div>
       {direction === 'ENTRADA' ? <>
         {!detailedPortfolio && movements.length > 0 ? <div className="stock-inline-note" style={{ marginTop: 0, marginBottom: '14px' }}><span>A carga atual da Carteira foi salva antes do detalhamento linha a linha. Na próxima carga da Carteira, Order Qty e Bill Qty serão preservados separadamente.</span><span className="panel-badge panel-badge-amber">CONSOLIDADO</span></div> : null}
@@ -282,5 +264,5 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
   };
 
   const title = view === 'products' ? 'Produtos' : view === 'movements' ? 'Entradas e Saídas' : 'Estoque';
-  return <PanelPage title={title} metricLabel="Valor potencial de venda" metricValue={formatCurrency(metricas.valorEstoqueVenda)}>{view === 'products' ? renderProducts() : view === 'movements' ? renderMovements() : renderOverview()}</PanelPage>;
+  return <PanelPage title={title} metricLabel="Valor potencial de venda" metricValue={formatCurrency(canonical.stock.saleValue)}>{view === 'products' ? renderProducts() : view === 'movements' ? renderMovements() : renderOverview()}</PanelPage>;
 }
