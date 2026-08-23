@@ -149,8 +149,8 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
   );
 
   const renderOverview = () => {
-    const projectedSale = canonical.stock.saleValue + canonical.stock.pendingPurchaseSale;
-    const projectedCost = canonical.stock.costValue + canonical.stock.pendingPurchaseCost;
+    const projectedSale = canonical.stock.projectedSaleValue;
+    const projectedCost = canonical.stock.projectedCostValue;
     const winthorSkus = inventory.filter(item => item.hasWinthor).length;
     const externalCatalog = Math.max(presentation.summary.skuCount - winthorSkus, 0);
     const quantityDivergences = presentation.products.filter(product => Math.abs(product.quantityDifference) > 0.001).length;
