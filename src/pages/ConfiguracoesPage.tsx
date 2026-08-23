@@ -3,7 +3,6 @@ import { useData } from '../store/DataContext';
 import { detectSource } from '../services/canonical/utils';
 import {
   loadOperationalSourceState,
-  operationalLegacyData,
   prepareOperationalSources,
   saveOperationalSourceState,
   supplementalSourceKind,
@@ -87,7 +86,7 @@ function sourceForFile(fileName: string) {
 }
 
 export function ConfiguracoesPage() {
-  const { canonical, setCanonical, manualConfig, setProdutos, setMetricas, setSellOut } = useData();
+  const { canonical, setCanonical, manualConfig } = useData();
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -108,8 +107,7 @@ export function ConfiguracoesPage() {
       const operationalState = continuity?.state || prepared.state;
       if (continuity) saveOperationalSourceState(operationalState);
       const result = await processUnifiedFiles({ allFiles:selectedFiles, engineFiles:prepared.engineFiles, operational:operationalState, config:manualConfig, previous:canonical, continuityWarning:continuity?.warning });
-      const legacy = operationalLegacyData(result.canonical, manualConfig.coverageTargetDays);
-      setCanonical(result.canonical); setProdutos(legacy.produtos); setMetricas(legacy.metricas); setSellOut(result.sellOut);
+      setCanonical(result.canonical);
       setOperationalRevision(value => value + 1); setSuccess(true); setSelectedFiles([]);
     } catch (error) {
       console.error(error); setErrorMessage(error instanceof Error ? error.message : 'Não foi possível processar os arquivos.');
