@@ -22,6 +22,28 @@ const gap = (target:number, value:number) => Math.max(target - value, 0);
 const sum = <T>(rows:T[], value:(row:T)=>number) => rows.reduce((total,row) => total + (Number(value(row)) || 0), 0);
 const distinct = (values:string[]) => new Set(values.filter(Boolean)).size;
 
+function premiseCompetenceRank(value:string) {
+  const normalized = normalizeText(value);
+  const semester = normalized.match(/([12])SEM(\d{2})/);
+  const year4 = normalized.match(/\b(20\d{2})\b/);
+  const quarter = normalized.match(/Q([1-4])/);
+  const year = year4 ? Number(year4[1]) : semester ? 2000 + Number(semester[2]) : 0;
+  const phase = quarter ? Number(quarter[1]) : semester ? Number(semester[1]) * 2 : 0;
+  return year * 10 + phase;
+}
+
+function latestPremiseNetworks(unified:UnifiedDataLayer) {
+  const latest = new Map<string,typeof unified.customerClassifications[number]>();
+  unified.customerClassifications.forEach(row => {
+    const current = latest.get(row.cnpj);
+    if (!current) { latest.set(row.cnpj,row); return; }
+    const currentRank = premiseCompetenceRank(current.competence);
+    const rowRank = premiseCompetenceRank(row.competence);
+    if (rowRank > currentRank || (rowRank === currentRank && row.competence.localeCompare(current.competence) > 0)) latest.set(row.cnpj,row);
+  });
+  return new Map(Array.from(latest.entries()).map(([cnpj,row]) => [cnpj,row.premiseNetwork]));
+}
+
 export interface UnifiedCalculationSummary {
   invoiced:number;
   toInvoice:number;
@@ -147,8 +169,7 @@ function buildClients(unified:UnifiedDataLayer):CanonicalClientResult[] {
     grouped.set(row.cnpj, rows);
   });
   const customerByCnpj = new Map(unified.customers.map(row => [row.cnpj,row]));
-  const latestClass = new Map<string,string>();
-  unified.customerClassifications.forEach(row => { if (row.premiseNetwork) latestClass.set(row.cnpj,row.premiseNetwork); });
+  const latestClass = latestPremiseNetworks(unified);
   return Array.from(grouped.entries()).map(([cnpj,rows]) => ({
     cnpj,
     name: customerByCnpj.get(cnpj)?.customerName || '',
@@ -337,8 +358,7 @@ export function buildInventoryFromUnified(unified:UnifiedDataLayer, referenceDat
 }
 
 export function buildNetworks(unified:UnifiedDataLayer, config:ManualConfiguration):CanonicalNetworkResult[] {
-  const latest = new Map<string,string>();
-  unified.customerClassifications.forEach(row => { if (row.premiseNetwork) latest.set(row.cnpj,row.premiseNetwork); });
+  const latest = latestPremiseNetworks(unified);
   const salesByCnpj = new Map<string,SalesFactRecord[]>();
   unified.salesFacts.forEach(row => {
     if (!row.cnpj) return;
@@ -374,7 +394,7 @@ export function buildNetworks(unified:UnifiedDataLayer, config:ManualConfigurati
     const total = sum(rows,row => row.value);
     const key = name === 'SEM REDE' ? 'SEM REDE' : (normalizeText(name) || name);
     const target = name === 'SEM REDE' ? 0 : Math.max(config.networkTargets[key] ?? config.networkTargets[name] ?? 0,0);
-    const topRows = cnpjs.flatMap(cnpj => topByCnpj.get(cnpj) || []);
+    const topRows = cnpjs.flatMap(cnpj => topByCnpj.get(cnpj) || []).filter(row => row.isTopRetailerActive !== false);
     const topTarget = sum(topRows,row => row.target);
     const stores:CanonicalNetworkStore[] = topRows.map(store => {
       const storeSales = salesByCnpj.get(store.cnpj) || [];
@@ -395,6 +415,8 @@ export function buildNetworks(unified:UnifiedDataLayer, config:ManualConfigurati
         total: sum(storeSales,row => row.value),
       };
     });
+    const topCnpjs = Array.from(new Set(topRows.map(row => row.cnpj).filter(Boolean)));
+    const topRealized = sum(topCnpjs.flatMap(cnpj => salesByCnpj.get(cnpj) || []),row => row.value);
     return {
       key,
       name,
@@ -404,9 +426,9 @@ export function buildNetworks(unified:UnifiedDataLayer, config:ManualConfigurati
       toInvoice: total-invoiced,
       total,
       networkAttainment: ratio(total,target),
-      topAttainment: ratio(total,topTarget),
+      topAttainment: ratio(topRealized,topTarget),
       gapToNetworkTarget: gap(target,total),
-      gapToTopTarget: gap(topTarget,total),
+      gapToTopTarget: gap(topTarget,topRealized),
       clients: cnpjs.length,
       stores,
     };
