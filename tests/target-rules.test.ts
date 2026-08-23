@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as XLSX from 'xlsx';
-import { parseCompassTargets } from '../src/services/canonical/support.ts';
+import { parseCompassTargets } from '../src/services/motors/sourceParsers.ts';
 import { redistributeNetworkTotal, redistributeSingleNetwork, resolveSellOutTarget, sumNetworkTargets } from '../src/domain/targetRules.ts';
 
 function targetRow({coord='FLAVIO',code='701',channel='MCD',name='Vendedor',brand='COLGATE',sales=1000,positivity=10}:{coord?:string;code?:string;channel?:string;name?:string;brand?:string;sales?:number;positivity?:number}={}){
