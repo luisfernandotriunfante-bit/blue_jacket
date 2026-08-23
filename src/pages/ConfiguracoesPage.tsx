@@ -28,6 +28,15 @@ type SourceUi = {
   required?: boolean;
 };
 
+type QualityIssueSummary = {
+  key: string;
+  code: string;
+  severity: 'ERROR' | 'WARNING' | 'INFO';
+  message: string;
+  source: string;
+  count: number;
+};
+
 const SOURCES: SourceUi[] = [
   { id: 'sales8022', kind: 'sales8022', unifiedSourceType: '8022', label: 'Vendas 8022', description: 'Milênio → clientes. Fonte canônica de faturado, a faturar, Sell Out e positivação atual.', frequency: 'Diário', group: 'Rotina diária', required: true },
   { id: 'stock105', kind: 'stock105', unifiedSourceType: '105', label: 'Posição de Estoque 105', description: 'Autoridade do estoque físico e snapshot de custo dos itens.', frequency: 'Diário', group: 'Rotina diária', required: true },
@@ -78,6 +87,7 @@ function sourceForFile(fileName: string) {
   if(raw.includes('CARTEIRA')&&raw.includes('CLIENT'))return SOURCES.find(source=>source.id==='customerPortfolio');
   if(/(^|\D)310(\D|$)/.test(raw))return SOURCES.find(source=>source.id==='purchase310');
   if(raw.includes('SORTIMENTO'))return SOURCES.find(source=>source.id==='officialAssortment');
+  if((raw.includes('COLGATE')&&(raw.includes('PRECO')||raw.includes('PRICE'))) || raw.includes('LISTA PRECO'))return SOURCES.find(source=>source.id==='priceList');
   const supplemental = supplementalSourceKind(fileName);
   if (supplemental) return SOURCES.find(source => source.supplementalKind === supplemental);
   const kind = detectSource(fileName);
@@ -85,7 +95,7 @@ function sourceForFile(fileName: string) {
 }
 
 export function ConfiguracoesPage() {
-  const { canonical, setCanonical, manualConfig } = useData();
+  const { canonical, setCanonical, manualConfig, dataNotice, clearDataNotice } = useData();
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -135,8 +145,26 @@ export function ConfiguracoesPage() {
   const portfolioContinuity = useMemo(() => loadPortfolioContinuity(), [operationalRevision]);
   const queued = useMemo(() => new Map(selectedFiles.map(file => [sourceForFile(file.name)?.id || `unknown:${file.name}`, file])), [selectedFiles]);
   const loadedCount = SOURCES.filter(source => source.unifiedSourceType ? unifiedSources.has(source.unifiedSourceType) : source.supplementalKind ? Boolean(supplementalFileName(source, operationalState)) : Boolean(source.kind && audits.get(source.kind)?.loaded)).length;
+  const qualitySummary = useMemo<QualityIssueSummary[]>(() => {
+    if (!isUnifiedCanonicalState(canonical)) return [];
+    const grouped = new Map<string, QualityIssueSummary>();
+    for (const issue of canonical.unified.qualityIssues) {
+      const key = `${issue.severity}|${issue.code}|${issue.source}|${issue.message}`;
+      const current = grouped.get(key);
+      if (current) current.count += 1;
+      else grouped.set(key, { key, code: issue.code, severity: issue.severity, message: issue.message, source: issue.source, count: 1 });
+    }
+    const rank = { ERROR: 0, WARNING: 1, INFO: 2 } as const;
+    return Array.from(grouped.values()).sort((left, right) => rank[left.severity] - rank[right.severity] || right.count - left.count || left.code.localeCompare(right.code));
+  }, [canonical]);
+  const qualityCounts = useMemo(() => {
+    if (!isUnifiedCanonicalState(canonical)) return { total: 0, ERROR: 0, WARNING: 0, INFO: 0 };
+    return canonical.unified.qualityIssues.reduce((acc, issue) => { acc.total += 1; acc[issue.severity] += 1; return acc; }, { total: 0, ERROR: 0, WARNING: 0, INFO: 0 });
+  }, [canonical]);
 
   return <PanelPage title="Configurações" metricLabel="Fontes registradas" metricValue={`${loadedCount}/${SOURCES.length}`}>
+    {dataNotice ? <PanelAlert tone="warning"><div style={{ display: 'flex', gap: '16px', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}><div><strong>Base salva precisa ser reconstruída</strong><div style={{ marginTop: '4px', maxWidth: '1100px' }}>{dataNotice}</div></div><button className="panel-secondary-button" onClick={clearDataNotice}>Entendi</button></div></PanelAlert> : null}
+
     <PanelCard>
       <PanelSectionHeader eyebrow="ATUALIZAÇÃO" title="Atualizar arquivos" description="Todas as fontes entram pelo mesmo pipeline. Arquivo bruto alimenta motor; somente a base canônica unificada alimenta cálculos, telas e exportações." action={<span className="panel-badge">MOTORES CANÔNICOS</span>} />
       <input type="file" multiple accept=".xls,.xlsx,.xlsb,.txt" style={{ display: 'none' }} ref={fileInputRef} onChange={event => { if (event.target.files?.length) addFiles(Array.from(event.target.files)); event.target.value = ''; }} />
@@ -154,7 +182,7 @@ export function ConfiguracoesPage() {
     {GROUPS.map(group => <PanelCard key={group.key}><PanelSectionHeader eyebrow={group.key.toUpperCase()} title={group.title} description={group.description} action={<span className="panel-badge">{SOURCES.filter(source => source.group === group.key).length} arquivos</span>} /><div style={{ display: 'grid', gap: '8px', marginTop: '15px' }}>{SOURCES.filter(source => source.group === group.key).map(source => <SourceCard key={source.id} source={source} audit={source.kind ? audits.get(source.kind) : undefined} operationalState={operationalState} unifiedLoaded={Boolean(source.unifiedSourceType&&unifiedSources.has(source.unifiedSourceType))} queued={queued.get(source.id)} onAddFile={file => addFiles([file])} />)}</div></PanelCard>)}
 
     {canonical ? <ReconciliationAuditPanel checks={canonical.reconciliation?.checks||[]} /> : null}
-    {isUnifiedCanonicalState(canonical) && canonical.unified.qualityIssues.length > 0 ? <PanelCard><PanelSectionHeader eyebrow="AUDITORIA DOS MOTORES" title="Qualidade da fotografia" description="Pendências cadastrais não alteram fórmulas nem apagam fatos." /><div style={{display:'grid',gap:'8px',marginTop:'14px'}}>{canonical.unified.qualityIssues.slice(0,80).map(issue=><div key={issue.id} style={{color:issue.severity==='ERROR'?'#fca5a5':issue.severity==='WARNING'?'#fcd34d':'var(--panel-muted)',fontSize:'.78rem',padding:'9px 11px',border:'1px solid rgba(255,255,255,.08)',borderRadius:'9px'}}><strong>{issue.code}</strong> · {issue.message}</div>)}</div></PanelCard> : null}
+    {qualitySummary.length > 0 ? <PanelCard><PanelSectionHeader eyebrow="AUDITORIA DOS MOTORES" title="Qualidade da fotografia" description="Pendências são agrupadas por causa. A contagem preserva todas as ocorrências sem repetir milhares de linhas iguais na tela." action={<span className="panel-badge">{fmtNumber(qualityCounts.total)} ocorrência(s)</span>} /><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '14px' }}><span className="panel-badge" style={{ color: '#fca5a5' }}>ERROS · {fmtNumber(qualityCounts.ERROR)}</span><span className="panel-badge" style={{ color: '#fcd34d' }}>ALERTAS · {fmtNumber(qualityCounts.WARNING)}</span><span className="panel-badge">INFORMAÇÕES · {fmtNumber(qualityCounts.INFO)}</span><span className="panel-badge">CAUSAS · {fmtNumber(qualitySummary.length)}</span></div><div style={{display:'grid',gap:'8px',marginTop:'14px'}}>{qualitySummary.slice(0,30).map(issue=><div key={issue.key} style={{color:issue.severity==='ERROR'?'#fca5a5':issue.severity==='WARNING'?'#fcd34d':'var(--panel-muted)',fontSize:'.78rem',padding:'10px 11px',border:'1px solid rgba(255,255,255,.08)',borderRadius:'9px',display:'flex',gap:'10px',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap'}}><div style={{minWidth:0,flex:'1 1 620px'}}><strong>{issue.code}</strong> · {issue.message}{issue.source ? <div style={{fontSize:'.66rem',marginTop:'4px',color:'var(--panel-muted)'}}>Fonte: {issue.source}</div> : null}</div><span className="panel-badge">{fmtNumber(issue.count)} ocorrência(s)</span></div>)}</div>{qualitySummary.length > 30 ? <PanelAlert tone="info">Exibindo as 30 causas prioritárias de {fmtNumber(qualitySummary.length)}. Nenhuma ocorrência foi descartada do motor; apenas a apresentação foi resumida.</PanelAlert> : null}</PanelCard> : null}
     {canonical?.warnings.length ? <PanelCard><PanelSectionHeader eyebrow="VALIDAÇÃO" title="Pendências conhecidas" description="Somente situações que ainda precisam de dado ou conciliação." /><div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{canonical.warnings.map((warning, index) => <div key={`${warning}-${index}`} style={{ color: 'var(--panel-amber-soft)', fontSize: '.82rem', padding: '10px 12px', border: '1px solid rgba(245,158,11,0.2)', background: 'rgba(245,158,11,0.06)', borderRadius: '10px' }}>{warning}</div>)}</div></PanelCard> : null}
   </PanelPage>;
 }
