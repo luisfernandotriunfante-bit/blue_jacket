@@ -94,8 +94,24 @@ export function ConfiguracoesPage() {
   const [operationalRevision, setOperationalRevision] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const addFiles = (newFiles: File[]) => { setSuccess(false); setErrorMessage(''); setSelectedFiles(prev => [...prev.filter(p => !newFiles.some(n => n.name === p.name)), ...newFiles]); };
+  const addFiles = (newFiles: File[]) => {
+    setSuccess(false);
+    setErrorMessage('');
+    setSelectedFiles(prev => {
+      let next = [...prev];
+      for (const file of newFiles) {
+        const sourceId = sourceForFile(file.name)?.id;
+        next = next.filter(existing => {
+          const existingSourceId = sourceForFile(existing.name)?.id;
+          return sourceId ? existingSourceId !== sourceId : existing.name !== file.name;
+        });
+        next.push(file);
+      }
+      return next;
+    });
+  };
   const removeFile = (name: string) => setSelectedFiles(prev => prev.filter(file => file.name !== name));
+  const clearQueue = () => { setSelectedFiles([]); setErrorMessage(''); setSuccess(false); };
 
   const handleProcess = async () => {
     if (!selectedFiles.length) return;
@@ -129,7 +145,7 @@ export function ConfiguracoesPage() {
       </div>
 
       {selectedFiles.length > 0 && <div style={{ marginTop: '16px' }}><div className="panel-eyebrow" style={{ marginBottom: '8px' }}>NA FILA · {selectedFiles.length}</div><div style={{ display: 'grid', gap: '7px' }}>{selectedFiles.map(file => { const source = sourceForFile(file.name); return <div key={file.name} style={{ padding: '9px 12px', border: '1px solid rgba(239,51,64,.2)', borderRadius: '10px', background: 'rgba(239,51,64,.035)', display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'space-between' }}><div style={{ minWidth: 0 }}><div style={{ color: 'var(--panel-red)', fontSize: '.68rem', fontWeight: 800 }}>{source?.label || 'Arquivo não identificado'}</div><div style={{ color: 'white', fontSize: '.76rem', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name} <span style={{ color: 'var(--panel-muted)' }}>· {fmtSize(file.size)}</span></div></div><button className="panel-icon-button" onClick={() => removeFile(file.name)}>✕</button></div>; })}</div></div>}
-      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '16px', flexWrap: 'wrap' }}><button className="panel-primary-button" style={{ maxWidth: '420px' }} onClick={handleProcess} disabled={!selectedFiles.length || isProcessing}>{isProcessing ? 'Processando motores...' : 'Processar arquivos selecionados'}</button>{success && <span className="panel-success">Base canônica unificada atualizada.</span>}{errorMessage && <span style={{ color: 'var(--panel-red-soft)' }}>{errorMessage}</span>}</div>
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '16px', flexWrap: 'wrap' }}><button className="panel-primary-button" style={{ maxWidth: '420px' }} onClick={handleProcess} disabled={!selectedFiles.length || isProcessing}>{isProcessing ? 'Processando motores...' : 'Processar arquivos selecionados'}</button>{selectedFiles.length > 0 && <button className="panel-secondary-button" onClick={clearQueue} disabled={isProcessing}>Limpar fila</button>}{success && <span className="panel-success">Base canônica unificada atualizada.</span>}{errorMessage && <span style={{ color: 'var(--panel-red-soft)' }}>{errorMessage}</span>}</div>
     </PanelCard>
 
     {portfolioContinuity ? <PortfolioContinuityPanel snapshot={portfolioContinuity} /> : null}
