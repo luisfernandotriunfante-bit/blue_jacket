@@ -1,68 +1,114 @@
 import type * as XLSX from 'xlsx';
-import type { CanonicalInventoryProduct, CanonicalSupportData } from '../../domain/canonical';
 import type { DataQualityIssue, ItemMasterRecord } from '../../domain/unified';
 import { cleanCode, cleanDigits, normalizeText, parseNumber, sheetRows } from '../canonical/utils';
 import type { Row } from '../canonical/runtime';
 
 const validBarcode=(value:unknown)=>{const raw=String(value??'').replace(/\D/g,'');return [8,12,13,14].includes(raw.length)?raw:''};
 const itemId=(winthor:string,ean:string,sku:string)=>winthor?`WINTHOR:${winthor}`:ean?`EAN:${ean}`:sku?`SKU:${sku}`:'';
+const positive=(value:unknown)=>Math.max(parseNumber(value),0);
 
 interface Detailed286 { code:string; description:string; ean:string; factoryCode:string; physical:number; blocked:number; reserved:number; available:number; }
+interface Stock105Record { code:string; description:string; quantity:number; costUnit:number; saleUnit:number; masterEquivalent:number; }
 interface IndustryProduct { sku:string; description:string; ean:string; dun14:string; unitsPerCase:number|null; casesPerPallet:number|null; }
 interface InternalLogistics { factor:number|null; units:number; cases:number; grossKg:number; }
 interface PriceRecord { pVenda1:number; pVenda:number; vlSt:number; }
 
 export interface ItemMotorInput {
   normalized286Rows:Row[];
+  stock105Rows:Row[];
   stock8013Rows:Row[];
   priceListRows:Row[];
+  launchRows:Row[];
   pctabprWorkbook:XLSX.WorkBook|null;
-  inventory:CanonicalInventoryProduct[];
-  support:CanonicalSupportData;
+  previousItems:ItemMasterRecord[];
 }
 export interface ItemMotorResult { items:ItemMasterRecord[]; qualityIssues:DataQualityIssue[]; }
+
+const blankItem=(winthor='',ean='',sku=''):ItemMasterRecord=>({
+  itemCanonicalId:itemId(winthor,ean,sku),winthorCode:winthor,internalDescription:'',internalEan:ean,manufacturerCode:'',industrySku:sku,industryDescription:'',industryEan:'',industryDun14:'',internalUnitsPerCase:null,industryUnitsPerCase:null,casesPerPallet:null,physicalStockUnits:0,blockedStockUnits:0,reservedStockUnits:0,availableStockUnits:0,costUnit105:0,physicalCases8013:0,physicalUnits8013:0,grossKg8013:0,salePricePvenDa1:null,pVenda:null,vlSt:null,isLaunch:false,hasWinthor:Boolean(winthor),sourceKeys:{},
+});
 
 function parse286(rows:Row[]):Detailed286[]{
   const result:Detailed286[]=[];
   const headerIndex=rows.findIndex(row=>{const n=row.map(normalizeText);return n.includes('CODIGO')&&n.includes('DESCRICAO')&&n.includes('BARRAS')&&n.includes('FABRICA')});
+  if(rows.length&&headerIndex<0)throw new Error('Cadastro 286: cabeçalho Código/Descrição/Barras/Fábrica não reconhecido.');
   if(headerIndex>=0){
     const h=rows[headerIndex].map(normalizeText);const col=(...names:string[])=>{for(const name of names){const found=h.indexOf(normalizeText(name));if(found>=0)return found}return-1};
     const cCode=col('Código'),cDesc=col('Descrição'),cEan=col('Barras'),cFactory=col('Fábrica'),cPhysical=col('Físico'),cBlocked=col('Bloq.'),cReserved=col('Reserv.'),cAvailable=col('Disp.');
     for(let i=headerIndex+1;i<rows.length;i++){const row=rows[i];const code=cleanCode(row[cCode]);if(!/^\d+$/.test(code))continue;result.push({code,description:String(row[cDesc]??'').trim(),ean:validBarcode(row[cEan]),factoryCode:cleanCode(row[cFactory]),physical:cPhysical>=0?parseNumber(row[cPhysical]):0,blocked:cBlocked>=0?parseNumber(row[cBlocked]):0,reserved:cReserved>=0?parseNumber(row[cReserved]):0,available:cAvailable>=0?parseNumber(row[cAvailable]):0})}
-    return result;
   }
-  for(const row of rows){if(String(row[0]??'').trim()!=='11')continue;const code=cleanCode(row[1]);if(!/^\d+$/.test(code))continue;result.push({code,description:String(row[2]??'').trim(),ean:validBarcode(row[20]||row[17]),factoryCode:cleanCode(row[23]||row[18]),physical:parseNumber(row[10]||row[7]),blocked:parseNumber(row[11]||row[8]),reserved:parseNumber(row[12]||row[9]),available:parseNumber(row[13]||row[10])})}
+  return result;
+}
+
+function parse105(rows:Row[]):Stock105Record[]{
+  if(!rows.length)return[];
+  const headerIndex=rows.findIndex(row=>{const n=row.map(normalizeText);return n.some(v=>v==='CODIGO'||v==='COD')&&n.some(v=>v.includes('DESCR'))&&n.some(v=>v.includes('QT')&&v.includes('EST'))});
+  if(headerIndex<0)throw new Error('Posição 105: cabeçalho Código/Descrição/Qt.Est. não reconhecido.');
+  const h=rows[headerIndex].map(normalizeText);const find=(predicate:(value:string)=>boolean,fallback:number)=>{const index=h.findIndex(predicate);return index>=0?index:fallback};
+  const cCode=find(v=>v==='CODIGO'||v==='COD',0),cDesc=find(v=>v.includes('DESCR'),1),cQty=find(v=>v.includes('QT')&&v.includes('EST'),4),cMaster=find(v=>v==='MASTER',5);
+  const cCost=find(v=>v.includes('REAL')&&v.includes('ICMS'),6);const cSale=find(v=>v==='P VENDA'||v==='PVENDA'||v.includes('P VENDA'),9);
+  const result:Stock105Record[]=[];
+  for(let i=headerIndex+1;i<rows.length;i++){const row=rows[i];const code=cleanCode(row[cCode]);if(!/^\d+$/.test(code))continue;result.push({code,description:String(row[cDesc]??'').trim(),quantity:parseNumber(row[cQty]),costUnit:parseNumber(row[cCost]),saleUnit:parseNumber(row[cSale]),masterEquivalent:parseNumber(row[cMaster])})}
   return result;
 }
 
 function parseIndustry(rows:Row[]):IndustryProduct[]{
+  if(!rows.length)return[];
+  const headerIndex=rows.findIndex(row=>{const n=row.map(normalizeText);return n.includes('SKU')&&n.includes('EAN')&&n.some(v=>v.includes('UN')&&v.includes('CX'))});
+  if(headerIndex<0)throw new Error('Lista de Preço Colgate: cabeçalho SKU/EAN/Un-CX não reconhecido.');
+  const h=rows[headerIndex].map(normalizeText);const find=(predicate:(value:string)=>boolean,fallback:number)=>{const index=h.findIndex(predicate);return index>=0?index:fallback};
+  const cSku=find(v=>v==='SKU',8),cDesc=find(v=>v.includes('DESCRICAO PADRAO')||v==='DESCRICAO',9),cEan=find(v=>v==='EAN',10),cDun=find(v=>v.includes('DUN'),11),cUnits=find(v=>v.includes('UN')&&v.includes('CX'),17),cPallet=find(v=>v.includes('CX')&&v.includes('PAL'),18);
   const result:IndustryProduct[]=[];
-  for(let i=1;i<rows.length;i++){const row=rows[i];const sku=cleanCode(row[8]);const ean=validBarcode(row[10]);if(!sku&&!ean)continue;result.push({sku,description:String(row[9]??'').trim(),ean,dun14:validBarcode(row[11]),unitsPerCase:parseNumber(row[17])>0?parseNumber(row[17]):null,casesPerPallet:parseNumber(row[18])>0?parseNumber(row[18]):null})}
+  for(let i=headerIndex+1;i<rows.length;i++){const row=rows[i];const sku=cleanCode(row[cSku]);const ean=validBarcode(row[cEan]);if(!sku&&!ean)continue;result.push({sku,description:String(row[cDesc]??'').trim(),ean,dun14:validBarcode(row[cDun]),unitsPerCase:positive(row[cUnits])||null,casesPerPallet:positive(row[cPallet])||null})}
   return result;
 }
 
 function parseInternalLogistics(rows:Row[]):Map<string,InternalLogistics>{
-  const map=new Map<string,InternalLogistics>();
-  for(let i=1;i<rows.length;i++){const ean=validBarcode(rows[i][4]);const caseWeight=parseNumber(rows[i][8]);const unitWeight=parseNumber(rows[i][9]);if(!ean)continue;const rawFactor=caseWeight>0&&unitWeight>0?caseWeight/unitWeight:0;map.set(ean,{factor:Number.isFinite(rawFactor)&&rawFactor>0?Math.round(rawFactor*1000)/1000:null,units:parseNumber(rows[i][11]),cases:parseNumber(rows[i][12]),grossKg:parseNumber(rows[i][13])})}
+  const map=new Map<string,InternalLogistics>();if(!rows.length)return map;
+  const headerIndex=rows.findIndex(row=>{const n=row.map(normalizeText);return n.some(v=>v.includes('CODIGO DO PRODUTO')||v.includes('EAN13'))&&n.some(v=>v.includes('ESTOQUE EM UND'))});
+  if(headerIndex<0)throw new Error('Estoque 8013: cabeçalho EAN/Estoque em UND não reconhecido.');
+  const h=rows[headerIndex].map(normalizeText);const find=(predicate:(value:string)=>boolean,fallback:number)=>{const index=h.findIndex(predicate);return index>=0?index:fallback};
+  const cEan=find(v=>v.includes('CODIGO DO PRODUTO')||v.includes('EAN13'),4),cCaseWeight=find(v=>v.includes('PESO CDA'),8),cUnitWeight=find(v=>v.includes('PESO UNIDADE'),9),cUnits=find(v=>v.includes('ESTOQUE EM UND'),11),cCases=find(v=>v.includes('ESTOQUE EM CX'),12),cGross=find(v=>v==='PESO(KG)'||v==='PESO KG',13);
+  for(let i=headerIndex+1;i<rows.length;i++){const row=rows[i];const ean=validBarcode(row[cEan]);if(!ean)continue;const caseWeight=parseNumber(row[cCaseWeight]);const unitWeight=parseNumber(row[cUnitWeight]);const rawFactor=caseWeight>0&&unitWeight>0?caseWeight/unitWeight:0;map.set(ean,{factor:Number.isFinite(rawFactor)&&rawFactor>0?Math.round(rawFactor*1000)/1000:null,units:parseNumber(row[cUnits]),cases:parseNumber(row[cCases]),grossKg:parseNumber(row[cGross])})}
   return map;
+}
+
+function parseLaunchEans(rows:Row[]):Set<string>{
+  const result=new Set<string>();if(!rows.length)return result;const headerIndex=rows.findIndex(row=>row.map(normalizeText).some(v=>v==='EAN'||v.includes('EAN')));if(headerIndex<0)throw new Error('Lista de Lançamentos: coluna EAN não reconhecida.');const h=rows[headerIndex].map(normalizeText);const cEan=h.findIndex(v=>v==='EAN'||v.includes('EAN'));for(let i=headerIndex+1;i<rows.length;i++){const ean=validBarcode(rows[i][cEan]);if(ean)result.add(ean)}return result;
 }
 
 export function parsePctabprRegion11(workbook:XLSX.WorkBook|null):Map<string,PriceRecord>{
   const map=new Map<string,PriceRecord>();if(!workbook)return map;const sheet=workbook.Sheets['pctabpr'];if(!sheet)throw new Error('PCTABPR: a aba bruta "pctabpr" é obrigatória; Planilha1 filtrada não é fonte canônica.');
   const rows=sheetRows({SheetNames:['pctabpr'],Sheets:{pctabpr:sheet}} as XLSX.WorkBook,'pctabpr');const headerIndex=rows.findIndex(row=>{const n=row.map(normalizeText);return n.includes('CODPROD')&&n.includes('NUMREGIAO')&&n.includes('PVENDA1')});if(headerIndex<0)throw new Error('PCTABPR: cabeçalho bruto CODPROD/NUMREGIAO/PVENDA1 não encontrado.');
-  const h=rows[headerIndex].map(normalizeText);const col=(name:string)=>h.indexOf(name);const cCode=col('CODPROD'),cRegion=col('NUMREGIAO'),cPv1=col('PVENDA1'),cPv=col('PVENDA'),cSt=col('VLST'),cBranch=col('CODFILIAL'),cName=col('REGIAO');
-  for(let i=headerIndex+1;i<rows.length;i++){const row=rows[i];if(cleanCode(row[cRegion])!=='11')continue;const code=cleanCode(row[cCode]);if(!/^\d+$/.test(code))continue;const record={pVenda1:parseNumber(row[cPv1]),pVenda:parseNumber(row[cPv]),vlSt:parseNumber(row[cSt])};const prior=map.get(code);if(prior&&Math.abs(prior.pVenda1-record.pVenda1)>.005)throw new Error(`PCTABPR região 11: conflito de PVENDA1 para CODPROD ${code}.`);map.set(code,record);const branch=cleanCode(row[cBranch]);const regionName=normalizeText(row[cName]);if(branch&&branch!=='11'&&!regionName.includes('CAMPO GRANDE')){/* somente auditoria contextual; NUMREGIAO=11 continua sendo o filtro */}}
+  const h=rows[headerIndex].map(normalizeText);const col=(name:string)=>h.indexOf(name);const cCode=col('CODPROD'),cRegion=col('NUMREGIAO'),cPv1=col('PVENDA1'),cPv=col('PVENDA'),cSt=col('VLST');
+  for(let i=headerIndex+1;i<rows.length;i++){const row=rows[i];if(cleanCode(row[cRegion])!=='11')continue;const code=cleanCode(row[cCode]);if(!/^\d+$/.test(code))continue;const record={pVenda1:parseNumber(row[cPv1]),pVenda:parseNumber(row[cPv]),vlSt:parseNumber(row[cSt])};const prior=map.get(code);if(prior&&Math.abs(prior.pVenda1-record.pVenda1)>.005)throw new Error(`PCTABPR região 11: conflito de PVENDA1 para CODPROD ${code}.`);map.set(code,record)}
   return map;
 }
 
+function findItem(items:ItemMasterRecord[],winthor='',ean='',sku=''){
+  return items.find(item=>(winthor&&item.winthorCode===winthor)||(ean&&(item.internalEan===ean||item.industryEan===ean))||(sku&&(item.industrySku===sku||item.manufacturerCode===sku)));
+}
+function ensureItem(items:ItemMasterRecord[],winthor='',ean='',sku=''){
+  const existing=findItem(items,winthor,ean,sku);if(existing)return existing;const created=blankItem(winthor,ean,sku);items.push(created);return created;
+}
+
 export function runItemMotor(input:ItemMotorInput):ItemMotorResult{
-  const qualityIssues:DataQualityIssue[]=[];const registry=parse286(input.normalized286Rows);const byCode=new Map(registry.map(row=>[row.code,row]));const industry=parseIndustry(input.priceListRows);const industryBySku=new Map(industry.map(row=>[row.sku,row]));const industryByEan=new Map(industry.filter(row=>row.ean).map(row=>[row.ean,row]));const logistics=parseInternalLogistics(input.stock8013Rows);const priceByCode=parsePctabprRegion11(input.pctabprWorkbook);const inventoryByCode=new Map(input.inventory.filter(row=>row.code).map(row=>[cleanCode(row.code),row]));const inventoryByEan=new Map(input.inventory.filter(row=>row.ean).map(row=>[cleanDigits(row.ean),row]));
-  const keys=new Set<string>([...registry.map(r=>`C:${r.code}`),...industry.map(r=>r.sku?`S:${r.sku}`:`E:${r.ean}`),...input.inventory.map(r=>r.code?`C:${cleanCode(r.code)}`:`E:${cleanDigits(r.ean)}`)]);const items:ItemMasterRecord[]=[];const seen=new Set<string>();
-  for(const key of keys){let reg:Detailed286|undefined;let ind:IndustryProduct|undefined;let inv:CanonicalInventoryProduct|undefined;if(key.startsWith('C:')){reg=byCode.get(key.slice(2));inv=inventoryByCode.get(key.slice(2));if(reg?.factoryCode)ind=industryBySku.get(reg.factoryCode);if(!ind&&reg?.ean)ind=industryByEan.get(reg.ean)}else if(key.startsWith('S:')){ind=industryBySku.get(key.slice(2));if(ind?.ean){reg=registry.find(r=>r.ean===ind!.ean);inv=inventoryByEan.get(ind.ean)}}else{ind=industryByEan.get(key.slice(2));reg=registry.find(r=>r.ean===key.slice(2));inv=inventoryByEan.get(key.slice(2))}
-    const winthor=reg?.code||((inv?.hasWinthor!==false&&inv?.code&&!inv.code.startsWith('EAN-')&&!inv.code.startsWith('PORTFOLIO-'))?cleanCode(inv.code):'');const ean=reg?.ean||ind?.ean||validBarcode(inv?.ean);const sku=ind?.sku||reg?.factoryCode||cleanCode(inv?.factoryCode);const id=itemId(winthor,ean,sku);if(!id||seen.has(id))continue;seen.add(id);const price=winthor?priceByCode.get(winthor):undefined;const physical=inv?.quantity??reg?.physical??0;const log=ean?logistics.get(ean):undefined;
-    const record:ItemMasterRecord={itemCanonicalId:id,winthorCode:winthor,internalDescription:reg?.description||inv?.description||'',internalEan:reg?.ean||validBarcode(inv?.ean),manufacturerCode:reg?.factoryCode||cleanCode(inv?.factoryCode),industrySku:sku,industryDescription:ind?.description||'',industryEan:ind?.ean||'',industryDun14:ind?.dun14||'',internalUnitsPerCase:log?.factor??null,industryUnitsPerCase:ind?.unitsPerCase??null,casesPerPallet:ind?.casesPerPallet??null,physicalStockUnits:physical,blockedStockUnits:reg?.blocked??0,reservedStockUnits:reg?.reserved??0,availableStockUnits:reg?.available??Math.max(physical,0),costUnit105:inv?.costUnit||0,physicalCases8013:log?.cases||0,physicalUnits8013:log?.units||0,grossKg8013:log?.grossKg||0,salePricePvenDa1:price?.pVenda1??(inv?.saleUnit>0?inv.saleUnit:null),pVenda:price?.pVenda??null,vlSt:price?.vlSt??null,isLaunch:Boolean(inv?.isLaunch),hasWinthor:Boolean(winthor),sourceKeys:{'286':reg?.code||'','LISTA_PRECO':ind?.sku||'','105':inv?.code||'','PCTABPR':winthor&&price?'11':''}};items.push(record);
-    if(record.internalUnitsPerCase&&record.industryUnitsPerCase&&Math.abs(record.internalUnitsPerCase-record.industryUnitsPerCase)>.001)qualityIssues.push({id:`PACK_DIFFERENCE:${id}`,domain:'ITEM',severity:'INFO',code:'INTERNAL_INDUSTRIAL_PACK_DIFFERENCE',message:'Un/CX interno e industrial são diferentes e foram preservados separadamente.',source:'8013 × Lista de Preço',entityKey:id,details:{internal:record.internalUnitsPerCase,industry:record.industryUnitsPerCase}});
-    if(winthor&&!price)qualityIssues.push({id:`PRICE_MISSING:${id}`,domain:'ITEM',severity:'WARNING',code:'PCTABPR_REGION11_PRICE_MISSING',message:'Item Winthor sem PVENDA1 localizado na região 11 da PCTABPR carregada.',source:'PCTABPR',entityKey:id});
-  }
-  return{items,qualityIssues};
+  const qualityIssues:DataQualityIssue[]=[];const items=input.previousItems.map(item=>({...item,sourceKeys:{...item.sourceKeys}}));
+  const has286=input.normalized286Rows.length>0,has105=input.stock105Rows.length>0,has8013=input.stock8013Rows.length>0,hasIndustry=input.priceListRows.length>0,hasLaunch=input.launchRows.length>0,hasPrice=Boolean(input.pctabprWorkbook);
+  const registry=parse286(input.normalized286Rows);const stock105=parse105(input.stock105Rows);const industry=parseIndustry(input.priceListRows);const logistics=parseInternalLogistics(input.stock8013Rows);const launchEans=parseLaunchEans(input.launchRows);const priceByCode=parsePctabprRegion11(input.pctabprWorkbook);
+
+  if(has286){for(const item of items){if(item.winthorCode&&!registry.some(row=>row.code===item.winthorCode))item.hasWinthor=false}for(const reg of registry){const item=ensureItem(items,reg.code,reg.ean,reg.factoryCode);item.winthorCode=reg.code;item.internalDescription=reg.description;item.internalEan=reg.ean;item.manufacturerCode=reg.factoryCode;item.blockedStockUnits=reg.blocked;item.reservedStockUnits=reg.reserved;item.availableStockUnits=reg.available;item.hasWinthor=true;item.sourceKeys['286']=reg.code;if(!item.itemCanonicalId)item.itemCanonicalId=itemId(reg.code,reg.ean,reg.factoryCode)}}
+
+  if(hasIndustry){for(const ind of industry){const item=ensureItem(items,'',ind.ean,ind.sku);item.industrySku=ind.sku;item.industryDescription=ind.description;item.industryEan=ind.ean;item.industryDun14=ind.dun14;item.industryUnitsPerCase=ind.unitsPerCase;item.casesPerPallet=ind.casesPerPallet;item.sourceKeys['LISTA_PRECO']=ind.sku||ind.ean;if(!item.itemCanonicalId)item.itemCanonicalId=itemId(item.winthorCode,ind.ean,ind.sku)}}
+
+  if(has105){for(const item of items){item.physicalStockUnits=0;item.costUnit105=0;item.sourceKeys['105']=''}for(const row of stock105){const item=findItem(items,row.code);if(!item){qualityIssues.push({id:`105_UNRESOLVED:${row.code}`,domain:'ITEM',severity:'WARNING',code:'STOCK_105_CODE_NOT_IN_ITEM_MASTER',message:'Código da posição 105 não foi localizado no Cadastro 286 atual; estoque não foi atribuído silenciosamente.',source:'105',entityKey:row.code});continue}item.physicalStockUnits=row.quantity;item.costUnit105=row.costUnit;item.sourceKeys['105']=row.code;const reg=registry.find(candidate=>candidate.code===row.code);if(reg&&Math.abs(reg.physical-row.quantity)>.001)qualityIssues.push({id:`105_286_PHYSICAL:${row.code}`,domain:'ITEM',severity:'WARNING',code:'PHYSICAL_STOCK_CONFIRMATION_DIVERGENCE',message:'Físico do 286 diverge de Qt.Est. da posição 105; a posição 105 permanece canônica.',source:'105 × 286',entityKey:item.itemCanonicalId,details:{stock105:row.quantity,physical286:reg.physical}})}}
+
+  if(has8013){for(const item of items){item.internalUnitsPerCase=null;item.physicalCases8013=0;item.physicalUnits8013=0;item.grossKg8013=0;item.sourceKeys['8013']=''}for(const [ean,log] of logistics){const item=ensureItem(items,'',ean,'');item.internalUnitsPerCase=log.factor;item.physicalCases8013=log.cases;item.physicalUnits8013=log.units;item.grossKg8013=log.grossKg;item.sourceKeys['8013']=ean;if(!item.itemCanonicalId)item.itemCanonicalId=itemId(item.winthorCode,ean,item.industrySku)}}
+
+  if(hasPrice){for(const item of items){if(item.winthorCode){item.salePricePvenDa1=null;item.pVenda=null;item.vlSt=null;item.sourceKeys['PCTABPR']=''}}for(const [code,price] of priceByCode){const item=findItem(items,code);if(!item)continue;item.salePricePvenDa1=price.pVenda1;item.pVenda=price.pVenda;item.vlSt=price.vlSt;item.sourceKeys['PCTABPR']='11'}for(const item of items.filter(row=>row.hasWinthor&&row.winthorCode&&!priceByCode.has(row.winthorCode)))qualityIssues.push({id:`PRICE_MISSING:${item.itemCanonicalId}`,domain:'ITEM',severity:'WARNING',code:'PCTABPR_REGION11_PRICE_MISSING',message:'Item Winthor sem PVENDA1 localizado na região 11 da PCTABPR carregada.',source:'PCTABPR',entityKey:item.itemCanonicalId})}
+
+  if(hasLaunch){for(const item of items)item.isLaunch=false;for(const ean of launchEans){const item=ensureItem(items,'',ean,'');item.isLaunch=true;item.sourceKeys['LANCAMENTOS']=ean;if(!item.itemCanonicalId)item.itemCanonicalId=itemId(item.winthorCode,ean,item.industrySku)}}
+
+  for(const item of items){if(item.internalUnitsPerCase&&item.industryUnitsPerCase&&Math.abs(item.internalUnitsPerCase-item.industryUnitsPerCase)>.001)qualityIssues.push({id:`PACK_DIFFERENCE:${item.itemCanonicalId}`,domain:'ITEM',severity:'INFO',code:'INTERNAL_INDUSTRIAL_PACK_DIFFERENCE',message:'Un/CX interno e industrial são diferentes e foram preservados separadamente.',source:'8013 × Lista de Preço',entityKey:item.itemCanonicalId,details:{internal:item.internalUnitsPerCase,industry:item.industryUnitsPerCase}});if(!item.itemCanonicalId)item.itemCanonicalId=itemId(item.winthorCode,item.internalEan||item.industryEan,item.industrySku)}
+  return{items:items.filter(item=>Boolean(item.itemCanonicalId)),qualityIssues};
 }
