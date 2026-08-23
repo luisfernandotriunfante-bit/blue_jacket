@@ -72,7 +72,7 @@ test('dossiê exporta exatamente caixas, unidades e origem Un/CX materializadas 
   assert.ok(row);
   assert.equal(row?.['Carteira caixas'], 3);
   assert.equal(row?.['Carteira unidades'], 0);
-  assert.equal(row?.['Un/CX'], '');
-  assert.equal(row?.['Origem Un/CX'], 'UNKNOWN');
+  assert.equal(row?.['Un/CX interno'], '');
+  assert.equal(row?.['Origem Un/CX interno'], 'UNKNOWN');
   assert.equal(row?.Disponibilidade, 'SOMENTE EM CARTEIRA');
 });

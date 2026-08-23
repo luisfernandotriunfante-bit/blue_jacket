@@ -75,8 +75,8 @@ function stockColumns(product: ProductCommercialView) {
     Disponível: product.availableUnits,
     'Carteira caixas': product.portfolioCases,
     'Carteira unidades': product.portfolioUnits,
-    'Un/CX': product.unitsPerCase || '',
-    'Origem Un/CX': product.unitsPerCaseSource,
+    'Un/CX interno': product.unitsPerCase || '',
+    'Origem Un/CX interno': product.unitsPerCaseSource,
     Projetado: product.projectedUnits,
     Disponibilidade: availabilityLabel(product.availability),
   };

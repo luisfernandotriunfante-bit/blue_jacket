@@ -66,7 +66,7 @@ export function LancamentosPage() {
     <PanelPage title="Lançamentos" metricLabel="Potencial projetado" metricValue={formatCurrency(totals.projectedSale)}>
       <div className="panel-stack">
         <div className="panel-grid panel-grid-4">
-          <PanelKpi label="Lançamentos" value={formatNumber(launches.length)} detail={`${formatNumber(withStock)} com estoque · ${formatNumber(withSales)} com venda`} tone="purple" />
+          <PanelKpi label="Lançamentos" value={formatNumber(launches.length)} detail={`${formatNumber(withStock)} com estoque · ${formatNumber(withSales)} com faturamento`} tone="purple" />
           <PanelKpi label="Com estoque" value={formatNumber(withStock)} detail={`${formatNumber(Math.max(launches.length - withStock, 0))} sem estoque físico`} tone="green" />
           <PanelKpi label="Na Carteira" value={formatNumber(inPortfolio)} detail="Entrada prevista ainda pendente" tone="blue" />
           <PanelKpi label="Potencial projetado" value={formatCurrency(totals.projectedSale)} detail={`Após reserva + Carteira · Custo proj.: ${formatCurrency(totals.projectedCost)}`} tone="red" />
@@ -80,7 +80,7 @@ export function LancamentosPage() {
             action={<input className="panel-input panel-input-search" type="text" value={searchTerm} placeholder="Buscar código, EAN, fabricante, produto..." onChange={event => setSearchTerm(event.target.value)} />}
           />
           <div className="panel-table-wrap stock-table-compact"><table className="panel-table">
-            <thead><tr><th>Código</th><th>Produto</th><th className="is-right">Un/CX</th><th className="is-right">Cx físicas</th><th className="is-right">Avulsas</th><th className="is-right">Físico un.</th><th className="is-right">Carteira cx</th><th className="is-right">Carteira un.</th><th className="is-right">Projetado</th><th className="is-right">Venda mês</th><th className="is-right">Cobertura</th><th className="is-right">Custo un.</th><th className="is-right">Venda ref.</th><th className="is-right">Potencial atual</th><th>Status</th></tr></thead>
+            <thead><tr><th>Código</th><th>Produto</th><th className="is-right">Un/CX interno</th><th className="is-right">Cx físicas</th><th className="is-right">Avulsas</th><th className="is-right">Físico un.</th><th className="is-right">Carteira cx</th><th className="is-right">Carteira un.</th><th className="is-right">Projetado</th><th className="is-right">Faturado mês (un.)</th><th className="is-right">Cobertura</th><th className="is-right">Custo un.</th><th className="is-right">PVENDA1</th><th className="is-right">Valor físico a venda</th><th>Status</th></tr></thead>
             <tbody>{filtered.length ? filtered.map(product => <tr key={`${product.ean}-${product.code}`}>
               <td className="is-strong">{product.code.startsWith('EAN-') ? '—' : product.code}</td>
               <td className="stock-product-cell"><div className="stock-product-name">{product.description}</div><div className="stock-product-meta">EAN: {product.ean || '—'} · Fab: {product.factoryCode || '—'}{product.brand ? ` · ${product.brand}` : ''}</div></td>

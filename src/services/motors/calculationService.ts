@@ -22,6 +22,28 @@ const gap = (target:number, value:number) => Math.max(target - value, 0);
 const sum = <T>(rows:T[], value:(row:T)=>number) => rows.reduce((total,row) => total + (Number(value(row)) || 0), 0);
 const distinct = (values:string[]) => new Set(values.filter(Boolean)).size;
 
+function premiseCompetenceRank(value:string) {
+  const normalized = normalizeText(value);
+  const semester = normalized.match(/([12])SEM(\d{2})/);
+  const year4 = normalized.match(/\b(20\d{2})\b/);
+  const quarter = normalized.match(/Q([1-4])/);
+  const year = year4 ? Number(year4[1]) : semester ? 2000 + Number(semester[2]) : 0;
+  const phase = quarter ? Number(quarter[1]) : semester ? Number(semester[1]) * 2 : 0;
+  return year * 10 + phase;
+}
+
+function latestPremiseNetworks(unified:UnifiedDataLayer) {
+  const latest = new Map<string,typeof unified.customerClassifications[number]>();
+  unified.customerClassifications.forEach(row => {
+    const current = latest.get(row.cnpj);
+    if (!current) { latest.set(row.cnpj,row); return; }
+    const currentRank = premiseCompetenceRank(current.competence);
+    const rowRank = premiseCompetenceRank(row.competence);
+    if (rowRank > currentRank || (rowRank === currentRank && row.competence.localeCompare(current.competence) > 0)) latest.set(row.cnpj,row);
+  });
+  return new Map(Array.from(latest.entries()).map(([cnpj,row]) => [cnpj,row.premiseNetwork]));
+}
+
 export interface UnifiedCalculationSummary {
   invoiced:number;
   toInvoice:number;
@@ -147,8 +169,7 @@ function buildClients(unified:UnifiedDataLayer):CanonicalClientResult[] {
     grouped.set(row.cnpj, rows);
   });
   const customerByCnpj = new Map(unified.customers.map(row => [row.cnpj,row]));
-  const latestClass = new Map<string,string>();
-  unified.customerClassifications.forEach(row => { if (row.premiseNetwork) latestClass.set(row.cnpj,row.premiseNetwork); });
+  const latestClass = latestPremiseNetworks(unified);
   return Array.from(grouped.entries()).map(([cnpj,rows]) => ({
     cnpj,
     name: customerByCnpj.get(cnpj)?.customerName || '',
@@ -336,9 +357,8 @@ export function buildInventoryFromUnified(unified:UnifiedDataLayer, referenceDat
   };
 }
 
-function buildNetworks(unified:UnifiedDataLayer, config:ManualConfiguration):CanonicalNetworkResult[] {
-  const latest = new Map<string,string>();
-  unified.customerClassifications.forEach(row => { if (row.premiseNetwork) latest.set(row.cnpj,row.premiseNetwork); });
+export function buildNetworks(unified:UnifiedDataLayer, config:ManualConfiguration):CanonicalNetworkResult[] {
+  const latest = latestPremiseNetworks(unified);
   const salesByCnpj = new Map<string,SalesFactRecord[]>();
   unified.salesFacts.forEach(row => {
     if (!row.cnpj) return;
@@ -346,26 +366,35 @@ function buildNetworks(unified:UnifiedDataLayer, config:ManualConfiguration):Can
     rows.push(row);
     salesByCnpj.set(row.cnpj,rows);
   });
-  const topsByNetwork = new Map<string,typeof unified.topRetailerSnapshots>();
+  const topByCnpj = new Map<string,typeof unified.topRetailerSnapshots>();
   unified.topRetailerSnapshots.forEach(row => {
-    const key = row.topRetailerNetwork || 'SEM_REDE_TOP';
-    const rows = topsByNetwork.get(key) || [];
+    const rows = topByCnpj.get(row.cnpj) || [];
     rows.push(row);
-    topsByNetwork.set(key,rows);
+    topByCnpj.set(row.cnpj,rows);
   });
+
+  // Rede Premissas é a taxonomia operacional do agrupamento. Roteiro é preservado
+  // somente como linhagem Top e nunca é equiparado por semelhança de nome.
+  const allCnpjs = new Set<string>([
+    ...latest.keys(),
+    ...salesByCnpj.keys(),
+    ...unified.topRetailerSnapshots.map(row => row.cnpj).filter(Boolean),
+  ]);
   const networks = new Map<string,string[]>();
-  latest.forEach((network,cnpj) => {
+  allCnpjs.forEach(cnpj => {
+    const network = latest.get(cnpj) || 'SEM REDE';
     const rows = networks.get(network) || [];
     rows.push(cnpj);
     networks.set(network,rows);
   });
+
   return Array.from(networks.entries()).map(([name,cnpjs]) => {
     const rows = cnpjs.flatMap(cnpj => salesByCnpj.get(cnpj) || []);
     const invoiced = sum(rows.filter(row => row.salesStatus === 'FATURADO'),row => row.value);
     const total = sum(rows,row => row.value);
-    const key = normalizeText(name) || name;
-    const target = Math.max(config.networkTargets[key] ?? config.networkTargets[name] ?? 0,0);
-    const topRows = topsByNetwork.get(name) || [];
+    const key = name === 'SEM REDE' ? 'SEM REDE' : (normalizeText(name) || name);
+    const target = name === 'SEM REDE' ? 0 : Math.max(config.networkTargets[key] ?? config.networkTargets[name] ?? 0,0);
+    const topRows = cnpjs.flatMap(cnpj => topByCnpj.get(cnpj) || []).filter(row => row.isTopRetailerActive !== false);
     const topTarget = sum(topRows,row => row.target);
     const stores:CanonicalNetworkStore[] = topRows.map(store => {
       const storeSales = salesByCnpj.get(store.cnpj) || [];
@@ -379,12 +408,15 @@ function buildNetworks(unified:UnifiedDataLayer, config:ManualConfiguration):Can
         groupingCode: store.groupCode,
         tier: store.topCategory,
         storeType: store.storeType,
+        routeNetwork: store.topRetailerNetwork,
         topTarget: store.target,
         invoiced: storeInvoiced,
         toInvoice: sum(storeSales,row => row.value) - storeInvoiced,
         total: sum(storeSales,row => row.value),
       };
     });
+    const topCnpjs = Array.from(new Set(topRows.map(row => row.cnpj).filter(Boolean)));
+    const topRealized = sum(topCnpjs.flatMap(cnpj => salesByCnpj.get(cnpj) || []),row => row.value);
     return {
       key,
       name,
@@ -394,9 +426,9 @@ function buildNetworks(unified:UnifiedDataLayer, config:ManualConfiguration):Can
       toInvoice: total-invoiced,
       total,
       networkAttainment: ratio(total,target),
-      topAttainment: ratio(total,topTarget),
+      topAttainment: ratio(topRealized,topTarget),
       gapToNetworkTarget: gap(target,total),
-      gapToTopTarget: gap(topTarget,total),
+      gapToTopTarget: gap(topTarget,topRealized),
       clients: cnpjs.length,
       stores,
     };

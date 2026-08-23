@@ -84,6 +84,9 @@ function internalChecks(canonical: CanonicalState, unified: UnifiedDataLayer): C
   const historicalCalculated = sum(historicalApplicable, row => row.signedValue);
   const inboundExpectedCases = sum(unified.inboundOrders, row => row.orderQtyCases + row.billQtyCases);
   const inboundCalculatedCases = sum(unified.inboundOrders, row => row.pipelineQtyCases);
+  const classifiedLineSales = sum(canonical.lines, row => row.total);
+  const unclassifiedLineSales = Math.max(canonical.sellOut.total - classifiedLineSales, 0);
+  const networkSales = sum(canonical.networks, row => row.total);
 
   checks.push(numericCheck({
     id: 'INTERNAL_SELL_OUT_CLOSURE', level: 'INTERNAL', label: 'Sell Out = Faturado + A Faturar',
@@ -114,6 +117,21 @@ function internalChecks(canonical: CanonicalState, unified: UnifiedDataLayer): C
     id: 'INTERNAL_CUSTOMER_PROJECTION', level: 'INTERNAL', label: 'Venda com CNPJ válido fecha com clientes',
     expected: validCnpjSales, calculated: sum(canonical.clients, row => row.total), tolerance: .01,
     source: 'SALES_FACT × CUSTOMER_MASTER', note: 'Venda sem CNPJ canônico é preservada no total e fica fora da positivação/visão por cliente.',
+  }));
+  checks.push(numericCheck({
+    id: 'INTERNAL_NETWORK_PROJECTION', level: 'INTERNAL', label: 'Redes + SEM REDE fecham venda com CNPJ válido',
+    expected: validCnpjSales, calculated: networkSales, tolerance: .01,
+    source: 'SALES_FACT × PREMISSAS', note: 'CNPJ sem Rede Premissas permanece explicitamente no bucket SEM REDE; Roteiro não é usado como fallback de taxonomia.',
+  }));
+  checks.push(numericCheck({
+    id: 'INTERNAL_LINE_CLOSURE', level: 'INTERNAL', label: 'Linhas classificadas + sem classificação = Sell Out',
+    expected: canonical.sellOut.total, calculated: classifiedLineSales + unclassifiedLineSales, tolerance: .01,
+    source: 'SALES_FACT × ITEM_MASTER', note: `Venda classificada nas cinco linhas: ${classifiedLineSales.toFixed(2)}; sem classificação explícita: ${unclassifiedLineSales.toFixed(2)}.`,
+  }));
+  checks.push(numericCheck({
+    id: 'INTERNAL_LINE_UNCLASSIFIED', level: 'INTERNAL', label: 'Venda sem classificação de linha',
+    expected: 0, calculated: unclassifiedLineSales, tolerance: .01, statusWhenDifferent: 'BLOCKED',
+    source: 'SALES_FACT × ITEM_MASTER', note: unclassifiedLineSales > .01 ? 'Há venda preservada no Sell Out sem item/linha canônica suficiente. O motor não inventa uma das cinco linhas para fechar o total.' : 'Todo o Sell Out foi classificado em uma das cinco linhas comerciais.',
   }));
   checks.push(numericCheck({
     id: 'INTERNAL_HISTORICAL_SIGN', level: 'INTERNAL', label: 'Histórico líquido aplica sinal de devolução',
