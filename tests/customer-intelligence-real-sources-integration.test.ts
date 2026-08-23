@@ -88,17 +88,18 @@ test('nomes reais variantes de Julho e Agosto/Setembro são reconhecidos sem inv
   assert.ok(normalized.SheetNames.some(name => name.includes('Ago & Set26 - Base_Sortimento')));
 });
 
-test('310 TXT atualiza compras sem apagar a segmentação de clientes já carregada', async () => {
+test('310 TXT atualiza compras sem apagar a segmentação e mantém Valor Compras como líquido', async () => {
   const withProfiles = await processCustomerIntelligenceFiles([workbookFile('Base clientes.xlsx', customerProfileWorkbook())], EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT);
   assert.equal(withProfiles.customers.length, 1);
   const withPurchases = await processCustomerIntelligenceFiles([textFile('310 total 2026.txt', purchase310Text)], withProfiles);
   assert.equal(withPurchases.customers.length, 1);
   assert.equal(withPurchases.customers[0].tier, 'FAIXA 1');
   assert.equal(withPurchases.purchases.length, 1);
-  assert.equal(withPurchases.purchases[0].netValue, 90);
+  assert.equal(withPurchases.purchases[0].returnValue, 10);
+  assert.equal(withPurchases.purchases[0].netValue, 100, 'V.Devoluções permanece campo de reconciliação e não é abatido novamente');
 });
 
-test('perfil + 310 + sortimento oficial de agosto deixam de produzir ficha toda zerada', async () => {
+test('perfil + 310 + sortimento oficial de agosto produzem ficha usando Valor Compras líquido', async () => {
   let support = await processCustomerIntelligenceFiles([workbookFile('Base clientes.xlsx', customerProfileWorkbook())], EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT);
   support = await processCustomerIntelligenceFiles([textFile('310 total 2026.txt', purchase310Text)], support);
   support = await processCustomerIntelligenceFiles([workbookFile('Sortimento Oficial Q3.xlsx', officialWorkbookWithRealNameVariants())], support);
@@ -126,5 +127,5 @@ test('perfil + 310 + sortimento oficial de agosto deixam de produzir ficha toda 
   assert.equal(result.competenceKey, '2026-08_09');
   assert.equal(result.officialAssortment, 1);
   assert.equal(result.assortmentBought, 1);
-  assert.equal(result.ytdNetValue, 90);
+  assert.equal(result.ytdNetValue, 100);
 });

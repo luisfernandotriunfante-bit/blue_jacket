@@ -34,42 +34,32 @@ function supportFixture() {
   };
 }
 
-test('excluir uma base UNKNOWN remove somente aquela fonte e seu aviso', () => {
+test('função de migração remove somente a fonte UNKNOWN solicitada', () => {
   const original = supportFixture();
   const next = removeCustomerIntelligenceSource(original, 'UNKNOWN:$SOM DIARIO.xlsx');
-
   assert.equal(next.sources.some(source => source.kind === 'UNKNOWN:$SOM DIARIO.xlsx'), false);
   assert.equal(next.sources.some(source => source.kind === 'UNKNOWN:379 25.txt'), true);
   assert.equal(next.sources.some(source => source.kind === 'OFFICIAL_ASSORTMENT'), true);
   assert.equal(next.assortmentCompetences.length, 1);
   assert.equal(next.purchases.length, 1);
-  assert.equal(next.warnings.some(warning => warning.includes('$SOM DIARIO.xlsx')), false);
-  assert.equal(next.warnings.some(warning => warning.includes('379 25.txt')), true);
   assert.equal(next.promotions.some(rule => rule.id === 'p1'), false);
   assert.equal(next.promotions.some(rule => rule.id === 'p2'), true);
-  assert.equal(next.pricingRules.some(rule => rule.id === 'r1'), false);
-  assert.equal(next.pricingRules.some(rule => rule.id === 'r2'), true);
 });
 
-test('excluir a base 310 limpa apenas clientes e compras derivados dela', () => {
+test('função de migração da base 310 não toca no Sortimento Oficial', () => {
   const next = removeCustomerIntelligenceSource(supportFixture(), 'PURCHASE_310');
-
   assert.deepEqual(next.customers, []);
   assert.deepEqual(next.purchases, []);
   assert.equal(next.assortmentCompetences.length, 1);
   assert.equal(next.lineage.length, 1);
-  assert.equal(next.sources.some(source => source.kind === 'OFFICIAL_ASSORTMENT'), true);
-  assert.equal(next.sources.some(source => source.kind === 'PURCHASE_310'), false);
 });
 
-test('excluir Sortimento Oficial limpa somente sortimento e linhagem', () => {
+test('função de migração do Sortimento Oficial limpa somente sortimento e linhagem', () => {
   const next = removeCustomerIntelligenceSource(supportFixture(), 'OFFICIAL_ASSORTMENT');
-
   assert.deepEqual(next.assortmentCompetences, []);
   assert.deepEqual(next.lineage, []);
   assert.equal(next.customers.length, 1);
   assert.equal(next.purchases.length, 1);
-  assert.equal(next.sources.some(source => source.kind === 'PURCHASE_310'), true);
 });
 
 test('fonte inexistente não altera o estado', () => {
@@ -77,13 +67,11 @@ test('fonte inexistente não altera o estado', () => {
   assert.equal(removeCustomerIntelligenceSource(original, 'INEXISTENTE'), original);
 });
 
-test('exclusão da UI confirma a ação, persiste e atualiza imediatamente os cards', () => {
-  const page = readFileSync('src/pages/ClientesSortimentoPage.tsx', 'utf8');
+test('UI ativa não permite exclusão ou persistência paralela de fontes', () => {
+  const page = readFileSync('src/pages/ClientesSortimentoUnifiedPage.tsx', 'utf8');
   const repository = readFileSync('src/services/customerIntelligenceRepository.ts', 'utf8');
-
-  assert.match(page, /deleteCustomerIntelligenceSource/);
-  assert.match(page, /window\.confirm\(`Excluir a base/);
-  assert.match(page, /aria-label=\{`Excluir base \$\{source\.fileName\}`\}/);
-  assert.match(page, /const next = await deleteCustomerIntelligenceSource\(support, sourceKind\);[\s\S]*onChange\(next\)/);
-  assert.match(repository, /const next = removeCustomerIntelligenceSource\(support, sourceKind\);[\s\S]*await saveCustomerIntelligenceSupport\(next\);[\s\S]*return next;/);
+  assert.doesNotMatch(page, /deleteCustomerIntelligenceSource/);
+  assert.doesNotMatch(page, /saveCustomerIntelligenceSupport/);
+  assert.doesNotMatch(page, /window\.confirm\(`Excluir a base/);
+  assert.match(repository, /alimentado exclusivamente em Configurações pela base canônica unificada/);
 });

@@ -11,7 +11,7 @@ import { MetasPage } from './pages/MetasPage'
 import { SellOutPage } from './pages/SellOutPage'
 import { DocumentosPage } from './pages/DocumentosPage'
 import { CriacaoComboPage } from './pages/CriacaoComboPage'
-import { ClientesSortimentoPage, type ClientesSortimentoView } from './pages/ClientesSortimentoPage'
+import { ClientesSortimentoPage, type ClientesSortimentoView } from './pages/ClientesSortimentoUnifiedPage'
 import { DataProvider } from './store/DataContext'
 import './ui/theme/foundation.css'
 

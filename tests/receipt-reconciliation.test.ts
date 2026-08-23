@@ -59,6 +59,17 @@ test('218 não depende mais da lista de confirmações armazenada', () => { cons
 
 test('218 ignora itens anteriores a 01/08/2026', () => { const operational = state({ legacy: false }); operational.receiptItems[0].entryDate = '2026-07-31'; const result = applyReceiptReconciliation(baseCanonical(), operational, config); assert.equal(result.canonical.inventory[0].pendingQty, 1000); assert.equal(result.canonical.stock.pendingPurchaseCost, 10000); assert.equal(result.audit.confirmedItems, 0); });
 
-test('configurações usa o 218 como baixa automática e mantém tabela para auditoria item a item', () => { const page = fs.readFileSync(new URL('../src/pages/ConfiguracoesPage.tsx', import.meta.url), 'utf8'); assert.match(page, /Auditoria item a item do 218/); assert.match(page, /não é necessária nenhuma confirmação manual/); assert.match(page, /ABATIDO AUTOMATICAMENTE/); assert.doesNotMatch(page, /Aplicar confirmações/); });
+test('configurações usa o 218 como autoridade canônica e mantém tabela de auditoria item a item', () => {
+  const page = fs.readFileSync(new URL('../src/pages/ConfiguracoesPage.tsx', import.meta.url), 'utf8');
+  assert.match(page, /Autoridade do recebimento físico/);
+  assert.match(page, /Auditoria item a item do 218/);
+  assert.match(page, /baixa canônica ocorre dentro do Motor de Vendas\/Operação/);
+  assert.match(page, /MOTOR 218/);
+  assert.doesNotMatch(page, /Aplicar confirmações/);
+});
 
-test('hidratação reaplica reconciliação de recebimentos após restaurar a base', () => { const context = fs.readFileSync(new URL('../src/store/DataContext.tsx', import.meta.url), 'utf8'); assert.match(context, /applyReceiptReconciliation/); });
+test('hidratação legada ainda reaplica reconciliação somente para snapshots anteriores à base unificada', () => {
+  const context = fs.readFileSync(new URL('../src/store/DataContext.tsx', import.meta.url), 'utf8');
+  assert.match(context, /applyReceiptReconciliation/);
+  assert.match(context, /isUnifiedCanonicalState/);
+});
