@@ -1,24 +1,37 @@
 import * as XLSX from 'xlsx';
-import type { CanonicalState } from '../domain/canonical';
+import type { CanonicalNetworkResult, CanonicalState } from '../domain/canonical';
+
+function topRealized(network: CanonicalNetworkResult) {
+  const byCnpj = new Map<string, number>();
+  network.stores.forEach(store => {
+    if (!store.cnpj) return;
+    byCnpj.set(store.cnpj, store.total);
+  });
+  return Array.from(byCnpj.values()).reduce((sum, value) => sum + value, 0);
+}
 
 export function buildCanonicalNetworkWorkbook(state: CanonicalState): XLSX.WorkBook {
   const networks = state.networks
     .filter(network => network.key !== 'SEM REDE')
     .sort((left, right) => right.networkTarget - left.networkTarget || right.total - left.total);
 
-  const networkRows = networks.map(network => ({
-    Rede: network.name,
-    'Meta Rede': network.networkTarget,
-    'Meta Tops': network.topTarget,
-    Faturado: network.invoiced,
-    'A Faturar': network.toInvoice,
-    'Sell Out': network.total,
-    '% Meta Rede': network.networkTarget > 0 ? network.total / network.networkTarget : 0,
-    '% Meta Tops': network.topTarget > 0 ? network.total / network.topTarget : 0,
-    'Falta Meta Rede': network.gapToNetworkTarget,
-    'Falta Meta Tops': network.gapToTopTarget,
-    Clientes: network.clients,
-  }));
+  const networkRows = networks.map(network => {
+    const realizedTop = topRealized(network);
+    return {
+      Rede: network.name,
+      'Meta Rede': network.networkTarget,
+      'Meta Tops': network.topTarget,
+      'Realizado Tops': realizedTop,
+      Faturado: network.invoiced,
+      'A Faturar': network.toInvoice,
+      'Sell Out': network.total,
+      '% Meta Rede': network.networkTarget > 0 ? network.total / network.networkTarget : 0,
+      '% Meta Tops': network.topTarget > 0 ? realizedTop / network.topTarget : 0,
+      'Falta Meta Rede': network.gapToNetworkTarget,
+      'Falta Meta Tops': network.gapToTopTarget,
+      Clientes: network.clients,
+    };
+  });
 
   const storeRows = networks.flatMap(network => network.stores.map(store => ({
     Rede: network.name,
@@ -40,7 +53,7 @@ export function buildCanonicalNetworkWorkbook(state: CanonicalState): XLSX.WorkB
   const workbook = XLSX.utils.book_new();
   const networkSheet = XLSX.utils.json_to_sheet(networkRows);
   networkSheet['!cols'] = [
-    { wch: 32 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 16 },
+    { wch: 32 }, { wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 16 }, { wch: 16 }, { wch: 16 },
     { wch: 15 }, { wch: 15 }, { wch: 18 }, { wch: 18 }, { wch: 10 },
   ];
   XLSX.utils.book_append_sheet(workbook, networkSheet, 'Redes');
