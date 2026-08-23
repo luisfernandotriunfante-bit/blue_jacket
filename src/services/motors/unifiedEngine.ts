@@ -248,15 +248,41 @@ function unifiedSales(layer: UnifiedDataLayer): UnifiedSalesRecord[] {
   return [...historical, ...current].sort((left, right) => left.movementDate.localeCompare(right.movementDate));
 }
 
+function unifiedSalesOverlapIssues(layer: UnifiedDataLayer): DataQualityIssue[] {
+  const historicalDates = new Set(layer.historicalSalesFacts
+    .filter(row => row.movementClass === 'SALE' || row.movementClass === 'RETURN')
+    .map(row => row.movementDate)
+    .filter(Boolean));
+  const overlapDates = Array.from(new Set(layer.salesFacts
+    .map(row => row.movementDate)
+    .filter(date => Boolean(date) && historicalDates.has(date))))
+    .sort();
+  if (!overlapDates.length) return [];
+  const firstDate = overlapDates[0];
+  const lastDate = overlapDates.at(-1) || firstDate;
+  return [{
+    id: `SALES_OVERLAP:${firstDate}:${lastDate}`,
+    domain: 'HISTORY',
+    severity: 'ERROR',
+    code: 'HISTORICAL_CURRENT_SALES_OVERLAP',
+    message: '379 e 8022 possuem movimentos em datas sobrepostas. UNIFIED_SALES preserva as duas fontes e não deduplica sem chave transacional comprovada.',
+    source: '379 × 8022',
+    entityKey: `${firstDate}..${lastDate}`,
+    details: { overlapDates: overlapDates.length, firstDate, lastDate },
+  }];
+}
+
 function reconcile310(layer: UnifiedDataLayer, support: CustomerIntelligenceSupport): DataQualityIssue[] {
   if (!support.purchases.length || !layer.historicalCustomerProduct.length) return [];
-  const aggregate = new Map(layer.historicalCustomerProduct.map(row => [`${row.cnpj}:${row.legacyProductCode}`, row]));
+  const aggregate = new Map(layer.historicalCustomerProduct
+    .filter(row => row.period === '2026')
+    .map(row => [`${row.cnpj}:${row.legacyProductCode}`, row]));
   const issues: DataQualityIssue[] = [];
   for (const purchase of support.purchases) {
     const legacy = purchase.legacyProductCode || purchase.winthorCode;
     const row = aggregate.get(`${purchase.cnpj}:${legacy}`);
     if (!row) {
-      issues.push({ id: `310_MISSING:${purchase.cnpj}:${legacy}`, domain: 'HISTORY', severity: 'ERROR', code: 'HISTORICAL_310_RECONCILIATION_FAILURE', message: 'Combinação CNPJ × produto do 310 não foi reproduzida pelo 379.', source: '310 × 379', entityKey: `${purchase.cnpj}:${legacy}` });
+      issues.push({ id: `310_MISSING:${purchase.cnpj}:${legacy}`, domain: 'HISTORY', severity: 'ERROR', code: 'HISTORICAL_310_RECONCILIATION_FAILURE', message: 'Combinação CNPJ × produto do 310 não foi reproduzida pelo 379 de 2026.', source: '310 × 379/2026', entityKey: `${purchase.cnpj}:${legacy}` });
       continue;
     }
     const valueDiff = Math.abs(row.netSalesValue - purchase.netValue);
@@ -270,8 +296,8 @@ function reconcile310(layer: UnifiedDataLayer, support: CustomerIntelligenceSupp
         domain: 'HISTORY',
         severity: 'ERROR',
         code: 'HISTORICAL_310_RECONCILIATION_FAILURE',
-        message: '310 diverge da reconstrução 379 em valor, devolução, volumes ou quantidade de compras.',
-        source: '310 × 379',
+        message: '310 diverge da reconstrução 379/2026 em valor, devolução, volumes ou quantidade de compras.',
+        source: '310 × 379/2026',
         entityKey: `${purchase.cnpj}:${legacy}`,
         details: {
           value310: purchase.netValue,
@@ -405,6 +431,12 @@ function sourceKind(metadata: SourceSnapshotMetadata): SourceKind | null {
   }
 }
 
+function sourceIdentity(metadata: SourceSnapshotMetadata) {
+  if (metadata.sourceType !== '379') return metadata.sourceType;
+  const kind = sourceKind(metadata);
+  return kind === 'history379_2025' ? '379:2025' : kind === 'history379_2026' ? '379:2026' : `379:${metadata.sourceName}`;
+}
+
 function sourceAudits(layer: UnifiedDataLayer): SourceAudit[] {
   return layer.sources.flatMap(meta => {
     const kind = sourceKind(meta);
@@ -430,7 +462,7 @@ function supportFromUnified(layer: UnifiedDataLayer): CanonicalSupportData {
       return { cnpj: row.cnpj, cnpjRaw: customer?.cnpjRaw || row.cnpj, cnpjNormalizationStatus: customer?.cnpjNormalizationStatus || undefined, name: customer?.customerName || '', city: customer?.city || row.premiseCity, network: row.premiseNetwork, profile: row.profile, isTop: topCnpjs.has(row.cnpj) };
     }),
     activeRoute: layer.topRetailerSnapshots.map(row => ({ cnpj: row.cnpj, cnpjRaw: customerByCnpj.get(row.cnpj)?.cnpjRaw || row.cnpj, name: row.storeName, fantasyName: row.topTradeName, city: row.topCity, networkRaw: row.topRetailerNetwork, managerCnpj: row.managerCnpj, groupingCode: row.groupCode, tier: '', storeType: row.storeType, target: row.target })),
-    products: layer.items.map(item => ({ sku: item.industrySku || item.manufacturerCode, ean: item.industryEan || item.internalEan, description: item.industryDescription || item.internalDescription, category: '', subcategory: '', brand: '', isLaunch: item.isLaunch, boxPrice: 0, unitPrice: item.salePricePvenDa1 || 0, unitsPerCase: item.industryUnitsPerCase || item.internalUnitsPerCase || 0, line: classifyLine(item.internalDescription || item.industryDescription, item.manufacturerCode || item.industrySku) })),
+    products: layer.items.map(item => ({ sku: item.industrySku || item.manufacturerCode, ean: item.industryEan || item.internalEan, description: item.industryDescription || item.internalDescription, category: '', subcategory: '', brand: '', isLaunch: item.isLaunch, boxPrice: 0, unitPrice: item.salePricePvenDa1 || 0, unitsPerCase: item.industryUnitsPerCase || 0, line: classifyLine(item.internalDescription || item.industryDescription, item.manufacturerCode || item.industrySku) })),
     itemCodes: layer.items.filter(item => item.winthorCode).map(item => ({ internalCode: item.winthorCode, description: item.internalDescription || item.industryDescription, ean: item.internalEan || item.industryEan, factoryCode: item.manufacturerCode || item.industrySku })),
   };
 }
@@ -507,6 +539,8 @@ export async function processUnifiedFiles(input: {
   const salesResult = runSalesMotor({
     salesRows,
     portfolioRows: await rows(isInboundPortfolio),
+    entry218Rows: await rows(is218),
+    portfolioAllowedSourceRows: find(isInboundPortfolio) ? input.operational.portfolioRows.map(row => row.sourceRow) : undefined,
     items,
     rcas,
     compassWorkbook: await workbook(isCompass),
@@ -548,8 +582,8 @@ export async function processUnifiedFiles(input: {
     const meta = await metadata(file, cache, referenceDate);
     return file === priceListFile ? { ...meta, sourceType: 'LISTA_PRECO_COLGATE' } : meta;
   }));
-  const types = new Set(sourceMetadata.map(row => row.sourceType));
-  const sources = [...previousUnified.sources.filter(row => !types.has(row.sourceType)), ...sourceMetadata];
+  const identities = new Set(sourceMetadata.map(sourceIdentity));
+  const sources = [...previousUnified.sources.filter(row => !identities.has(sourceIdentity(row))), ...sourceMetadata];
 
   const layer: UnifiedDataLayer = {
     schemaVersion: 1,
@@ -574,7 +608,14 @@ export async function processUnifiedFiles(input: {
     unifiedSales: [],
   };
   layer.unifiedSales = unifiedSales(layer);
-  layer.qualityIssues = [...itemResult.qualityIssues, ...customerResult.qualityIssues, ...salesResult.qualityIssues, ...historyIssues, ...reconcile310(layer, customerIntelligenceSupport)];
+  layer.qualityIssues = [
+    ...itemResult.qualityIssues,
+    ...customerResult.qualityIssues,
+    ...salesResult.qualityIssues,
+    ...historyIssues,
+    ...unifiedSalesOverlapIssues(layer),
+    ...reconcile310(layer, customerIntelligenceSupport),
+  ];
 
   const shell = blankCanonical(referenceDate, input.config, input.previous);
   shell.sources = sourceAudits(layer);
