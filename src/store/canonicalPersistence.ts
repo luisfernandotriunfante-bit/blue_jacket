@@ -4,14 +4,8 @@ const DB_NAME = 'blue-jacket-data';
 const DB_VERSION = 1;
 const STORE_NAME = 'state';
 const CANONICAL_KEY = 'canonical';
-export const LEGACY_CANONICAL_KEY = 'bj_canonical';
 
 type LocalStorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
-
-function browserStorage(storage?: LocalStorageLike | null): LocalStorageLike | null {
-  if (storage) return storage;
-  return typeof localStorage !== 'undefined' ? localStorage : null;
-}
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -58,9 +52,7 @@ export async function saveCanonicalState(state: CanonicalState): Promise<void> {
   }
 }
 
-export async function clearCanonicalState(storage?: LocalStorageLike | null): Promise<void> {
-  const target = browserStorage(storage);
-  target?.removeItem(LEGACY_CANONICAL_KEY);
+export async function clearCanonicalState(_storage?: LocalStorageLike | null): Promise<void> {
   try {
     const db = await openDatabase();
     try {
@@ -74,54 +66,24 @@ export async function clearCanonicalState(storage?: LocalStorageLike | null): Pr
       db.close();
     }
   } catch {
-    // Sem IndexedDB, a remoção do legado no localStorage já é suficiente.
+    // Navegadores sem IndexedDB começam sem snapshot persistido.
   }
 }
 
-export async function loadCanonicalState(storage?: LocalStorageLike | null): Promise<CanonicalState | null> {
+export async function loadCanonicalState(_storage?: LocalStorageLike | null): Promise<CanonicalState | null> {
   try {
-    const indexed = await readIndexedCanonical();
-    if (indexed) return indexed;
+    return await readIndexedCanonical();
   } catch {
-    // Compatibilidade: tenta migrar a versão antiga armazenada no localStorage.
-  }
-
-  const target = browserStorage(storage);
-  const raw = target?.getItem(LEGACY_CANONICAL_KEY);
-  if (!raw) return null;
-
-  try {
-    const legacy = JSON.parse(raw) as CanonicalState;
-    try {
-      await saveCanonicalState(legacy);
-      target?.removeItem(LEGACY_CANONICAL_KEY);
-    } catch {
-      // Se a migração não puder ser persistida, ainda permite usar a base nesta sessão.
-    }
-    return legacy;
-  } catch {
-    target?.removeItem(LEGACY_CANONICAL_KEY);
     return null;
   }
 }
 
 export function safeLocalStorageWrite(storage: LocalStorageLike | null | undefined, key: string, value: string): boolean {
-  const target = browserStorage(storage);
-  if (!target) return false;
+  if (!storage) return false;
   try {
-    target.setItem(key, value);
+    storage.setItem(key, value);
     return true;
   } catch {
-    // Versões antigas deixavam a base completa em bj_canonical e consumiam toda a quota.
-    if (key !== LEGACY_CANONICAL_KEY) {
-      try {
-        target.removeItem(LEGACY_CANONICAL_KEY);
-        target.setItem(key, value);
-        return true;
-      } catch {
-        return false;
-      }
-    }
     return false;
   }
 }
