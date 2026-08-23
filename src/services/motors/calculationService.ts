@@ -246,6 +246,14 @@ export function buildInventoryFromUnified(unified:UnifiedDataLayer, referenceDat
     inboundByItem.set(row.itemCanonicalId, rows);
   });
 
+  const inventoryCodeByItem = new Map(unified.items.map(item => [item.itemCanonicalId, item.winthorCode || item.itemCanonicalId]));
+  const reservedByCode = new Map<string,number>();
+  unified.salesFacts.filter(row => row.salesStatus === 'A FATURAR' && row.itemCanonicalId).forEach(row => {
+    const code = inventoryCodeByItem.get(row.itemCanonicalId);
+    if (!code) return;
+    reservedByCode.set(code, (reservedByCode.get(code) || 0) + Math.max(Number(row.units) || 0, 0));
+  });
+
   const inventory = unified.items.map(item => {
     const inbound = inboundByItem.get(item.itemCanonicalId) || [];
     let pendingQty = 0;
@@ -297,12 +305,16 @@ export function buildInventoryFromUnified(unified:UnifiedDataLayer, referenceDat
   const saleValue = sum(inventory,row => row.quantity * row.saleUnit);
   const pendingPurchaseCost = sum(inventory,row => row.pendingCost);
   const pendingPurchaseSale = sum(inventory,row => row.pendingSale);
+  const availableCostValue = sum(inventory,row => Math.max(row.quantity - (reservedByCode.get(row.code) || 0),0) * row.costUnit);
+  const availableSaleValue = sum(inventory,row => Math.max(row.quantity - (reservedByCode.get(row.code) || 0),0) * row.saleUnit);
+  const projectedCostValue = availableCostValue + pendingPurchaseCost;
+  const projectedSaleValue = availableSaleValue + pendingPurchaseSale;
   const history = buildHistory(unified,referenceDate);
   const average = Math.max(history.average3ClosedMonths || 0,0);
   const coverageCurrentDays = average > 0 ? Math.round(saleValue / average * 30) : 0;
-  const coverageProjectedDays = average > 0 ? Math.round((saleValue + pendingPurchaseSale) / average * 30) : 0;
+  const coverageProjectedDays = average > 0 ? Math.round(projectedSaleValue / average * 30) : 0;
   const coverageCostCurrentDays = average > 0 ? Math.round(costValue / average * 30) : 0;
-  const coverageCostProjectedDays = average > 0 ? Math.round((costValue + pendingPurchaseCost) / average * 30) : 0;
+  const coverageCostProjectedDays = average > 0 ? Math.round(projectedCostValue / average * 30) : 0;
   return {
     inventory,
     stock: {
@@ -310,8 +322,8 @@ export function buildInventoryFromUnified(unified:UnifiedDataLayer, referenceDat
       saleValue,
       pendingPurchaseCost,
       pendingPurchaseSale,
-      projectedCostValue: costValue + pendingPurchaseCost,
-      projectedSaleValue: saleValue + pendingPurchaseSale,
+      projectedCostValue,
+      projectedSaleValue,
       physicalUnits: sum(inventory,row => row.quantity),
       physicalCases: sum(inventory,row => row.physicalCases || 0),
       grossKg: sum(inventory,row => row.grossKg || 0),
