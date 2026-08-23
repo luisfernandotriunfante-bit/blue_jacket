@@ -25,7 +25,7 @@ export function LancamentosPage() {
   }
 
   const inventory = canonical.inventory;
-  const hasStock8013 = canonical.sources.some(source => source.kind === 'stock8013' && source.loaded);
+  const hasStock105 = canonical.sources.some(source => source.kind === 'stock105' && source.loaded);
   const presentation = useMemo(() => buildStockPresentation({
     inventory,
     productSupport: canonical.support.products,
@@ -34,8 +34,8 @@ export function LancamentosPage() {
     businessDaysElapsed: canonical.sellOut.businessDaysElapsed,
     stockCostValue: canonical.stock.costValue,
     stockSaleValue: canonical.stock.saleValue,
-    hasStock8013,
-  }), [canonical, inventory, hasStock8013]);
+    hasStock105,
+  }), [canonical, inventory, hasStock105]);
 
   const launches = useMemo(() => presentation.products.filter(product => product.isLaunch), [presentation.products]);
   const filtered = useMemo(() => {
@@ -53,8 +53,8 @@ export function LancamentosPage() {
     const pendingSale = Number(source?.pendingSale) || (product.saleUnit > 0 ? product.pendingUnits * product.saleUnit : 0);
     acc.currentCost += product.positionCostValue;
     acc.currentSale += product.positionSaleValue;
-    acc.projectedCost += product.positionCostValue + pendingCost;
-    acc.projectedSale += product.positionSaleValue + pendingSale;
+    acc.projectedCost += product.availableUnits * product.costUnit + pendingCost;
+    acc.projectedSale += product.availableUnits * product.saleUnit + pendingSale;
     return acc;
   }, { currentCost: 0, currentSale: 0, projectedCost: 0, projectedSale: 0 }), [launches, inventoryByCode, inventoryByEan]);
 
@@ -69,7 +69,7 @@ export function LancamentosPage() {
           <PanelKpi label="Lançamentos" value={formatNumber(launches.length)} detail={`${formatNumber(withStock)} com estoque · ${formatNumber(withSales)} com venda`} tone="purple" />
           <PanelKpi label="Com estoque" value={formatNumber(withStock)} detail={`${formatNumber(Math.max(launches.length - withStock, 0))} sem estoque físico`} tone="green" />
           <PanelKpi label="Na Carteira" value={formatNumber(inPortfolio)} detail="Entrada prevista ainda pendente" tone="blue" />
-          <PanelKpi label="Potencial projetado" value={formatCurrency(totals.projectedSale)} detail={`Atual: ${formatCurrency(totals.currentSale)} · Custo proj.: ${formatCurrency(totals.projectedCost)}`} tone="red" />
+          <PanelKpi label="Potencial projetado" value={formatCurrency(totals.projectedSale)} detail={`Após reserva + Carteira · Custo proj.: ${formatCurrency(totals.projectedCost)}`} tone="red" />
         </div>
 
         <PanelCard>
