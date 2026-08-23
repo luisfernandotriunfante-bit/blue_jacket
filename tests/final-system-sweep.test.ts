@@ -26,14 +26,14 @@ test('configuração manual preserva Projetado = Disponível + Carteira, sem vol
 
 test('Redes fecha venda com CNPJ válido em SEM REDE e associa Top por CNPJ, não pelo nome da taxonomia', () => {
   const unified = {
-    customerClassifications:[{cnpj:'00111111000111',premiseNetwork:'REDE PREMISSAS'}],
+    customerClassifications:[{cnpj:'00111111000111',premiseNetwork:'REDE PREMISSAS',competence:'1SEM26 Q2'}],
     salesFacts:[
       {cnpj:'00111111000111',salesStatus:'FATURADO',value:100},
       {cnpj:'00222222000122',salesStatus:'FATURADO',value:50},
     ],
     topRetailerSnapshots:[
-      {cnpj:'00111111000111',topRetailerNetwork:'REDE ROTEIRO DIFERENTE',target:70,storeName:'Loja A',topTradeName:'A',topCity:'Campo Grande',managerCnpj:'',groupCode:'',topCategory:'OURO',storeType:'LOJA'},
-      {cnpj:'00222222000122',topRetailerNetwork:'OUTRA REDE ROTEIRO',target:30,storeName:'Loja B',topTradeName:'B',topCity:'Campo Grande',managerCnpj:'',groupCode:'',topCategory:'PRATA',storeType:'LOJA'},
+      {cnpj:'00111111000111',topRetailerNetwork:'REDE ROTEIRO DIFERENTE',target:70,isTopRetailerActive:true,storeName:'Loja A',topTradeName:'A',topCity:'Campo Grande',managerCnpj:'',groupCode:'',topCategory:'OURO',storeType:'LOJA'},
+      {cnpj:'00222222000122',topRetailerNetwork:'OUTRA REDE ROTEIRO',target:30,isTopRetailerActive:true,storeName:'Loja B',topTradeName:'B',topCity:'Campo Grande',managerCnpj:'',groupCode:'',topCategory:'PRATA',storeType:'LOJA'},
     ],
   } as any;
   const networks = buildNetworks(unified, { ...DEFAULT_MANUAL_CONFIGURATION, networkTargets:{'REDE PREMISSAS':200} });
@@ -47,6 +47,31 @@ test('Redes fecha venda com CNPJ válido em SEM REDE e associa Top por CNPJ, nã
   assert.equal(unmapped.total,50);
   assert.equal(unmapped.topTarget,30);
   assert.equal(networks.reduce((sum,network)=>sum+network.total,0),150);
+});
+
+test('Redes usa a Premissas mais recente e Meta Tops considera somente CNPJs Top', () => {
+  const unified = {
+    customerClassifications:[
+      {cnpj:'00333333000133',premiseNetwork:'REDE NOVA',competence:'1SEM26 Q2'},
+      {cnpj:'00333333000133',premiseNetwork:'REDE ANTIGA',competence:'2SEM25 Q4'},
+      {cnpj:'00444444000144',premiseNetwork:'REDE NOVA',competence:'1SEM26 Q2'},
+    ],
+    salesFacts:[
+      {cnpj:'00333333000133',salesStatus:'FATURADO',value:100},
+      {cnpj:'00444444000144',salesStatus:'FATURADO',value:50},
+    ],
+    topRetailerSnapshots:[
+      {cnpj:'00333333000133',topRetailerNetwork:'ROTEIRO X',target:80,isTopRetailerActive:true,storeName:'Loja Top',topTradeName:'Top',topCity:'Campo Grande',managerCnpj:'',groupCode:'',topCategory:'OURO',storeType:'LOJA'},
+    ],
+  } as any;
+  const networks=buildNetworks(unified,{...DEFAULT_MANUAL_CONFIGURATION,networkTargets:{'REDE NOVA':200}});
+  const nova=networks.find(network=>network.name==='REDE NOVA');
+  assert.ok(nova);
+  assert.equal(networks.some(network=>network.name==='REDE ANTIGA'),false);
+  assert.equal(nova.total,150);
+  assert.equal(nova.topTarget,80);
+  assert.equal(nova.topAttainment,100/80);
+  assert.equal(nova.gapToTopTarget,0);
 });
 
 test('Clientes & Sortimento usa exclusivamente isLaunch do ITEM_MASTER canônico, não o rótulo do sortimento', () => {
@@ -70,4 +95,21 @@ test('Clientes & Sortimento usa exclusivamente isLaunch do ITEM_MASTER canônico
   const products = support.assortmentCompetences[0].products;
   assert.equal(products[0].launchLabel,'');
   assert.equal(products[1].launchLabel,'LANÇAMENTO');
+});
+
+test('Clientes & Sortimento também seleciona a competência Premissas mais recente', () => {
+  const state={
+    customerIntelligenceSupport:{schemaVersion:1,updatedAt:'',sources:[],lineage:[],customers:[],purchases:[],historicalPurchases:[],promotions:[],pricingRules:[],warnings:[],assortmentCompetences:[]},
+    unified:{
+      generatedAt:'2026-08-23T00:00:00.000Z',historicalSalesFacts:[],historicalCustomerProduct:[],items:[],rcas:[],
+      customers:[{cnpj:'00555555000155',cnpjRaw:'00555555000155',customerName:'Cliente',winthorCustomerCode:'55',city:'Campo Grande'}],
+      customerClassifications:[
+        {cnpj:'00555555000155',competence:'1SEM26 Q2',premiseNetwork:'REDE NOVA',environment:'H&S',profile:'VAREJO',range:'FAIXA 1',premiseCity:'Campo Grande',premiseState:'MS'},
+        {cnpj:'00555555000155',competence:'2SEM25 Q4',premiseNetwork:'REDE ANTIGA',environment:'H&S',profile:'VAREJO',range:'FAIXA 1',premiseCity:'Campo Grande',premiseState:'MS'},
+      ],
+    },
+  } as any;
+  const support=customerIntelligenceFromUnified(state);
+  assert.equal(support.customers.length,1);
+  assert.equal(support.customers[0].network,'REDE NOVA');
 });
