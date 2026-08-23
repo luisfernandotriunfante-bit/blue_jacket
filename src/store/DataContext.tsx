@@ -33,8 +33,9 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     let cancelled = false;
     const hydrate = async () => {
       const stored = await loadCanonicalState();
-      const compatibilityIssue = getCanonicalSnapshotCompatibilityIssue(stored);
-      const storedCanonical = stored && isUnifiedCanonicalState(stored) && !compatibilityIssue ? stored : null;
+      const storedUnified = stored && isUnifiedCanonicalState(stored) ? stored : null;
+      const compatibilityIssue = getCanonicalSnapshotCompatibilityIssue(storedUnified || stored);
+      const storedCanonical = storedUnified && !compatibilityIssue ? storedUnified : null;
       if (stored && !storedCanonical) await clearCanonicalState();
       const competence = competenceFromCanonical(storedCanonical);
       const manualLoad = loadManualConfiguration(localStorage, competence, { migrateLegacy: false });
