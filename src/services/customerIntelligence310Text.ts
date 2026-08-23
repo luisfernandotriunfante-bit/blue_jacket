@@ -3,7 +3,7 @@ import { cleanCode, normalizeCnpj, normalizeText, parseNumber } from './canonica
 
 const PT_BR_NUMBER = '(?:-?(?:\\d{1,3}(?:\\.\\d{3})*|\\d+),\\d+-?)';
 const PRODUCT_LINE = new RegExp(
-  `^\\s*(111\\d{5})\\s+(.+?)\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(\\d{11,14})\\s+(\\d+)\\s+(\\d+)\\s+(.+?)\\s*$`,
+  `^\\s*(\\d{8})\\s+(.+?)\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(${PT_BR_NUMBER})\\s+(\\d{11,14})\\s+(\\d+)\\s+(\\d+)\\s+(.+?)\\s*$`,
 );
 
 export interface Purchase310TextParseResult {
@@ -42,12 +42,16 @@ export function parsePurchase310Text(text: string): Purchase310TextParseResult {
       continue;
     }
 
-    const winthorCode = cleanCode(match[1]);
-    const key = `${cnpj}:${winthorCode}`;
+    // O campo Produto do 310 é o código do sistema anterior (111.../legado),
+    // nunca Código Winthor atual. Mantemos winthorCode somente como alias de
+    // compatibilidade até todos os consumidores antigos serem removidos.
+    const legacyProductCode = cleanCode(match[1]);
+    const key = `${cnpj}:${legacyProductCode}`;
     const current = aggregate.get(key) || {
       cnpj,
       cnpjRaw: normalized.raw,
-      winthorCode,
+      legacyProductCode,
+      winthorCode: legacyProductCode,
       description: match[2].trim(),
       volumes: 0,
       quantity: 0,
@@ -65,7 +69,10 @@ export function parsePurchase310Text(text: string): Purchase310TextParseResult {
     current.purchaseValue += parseNumber(match[6]);
     current.returnVolume += parseNumber(match[9]);
     current.returnValue += parseNumber(match[11]);
-    current.netValue = current.purchaseValue - current.returnValue;
+    // REGRA VALIDADA CONTRA 56.597 combinações CNPJ × produto:
+    // Valor Compras já é o resultado líquido das vendas menos devoluções.
+    // V.Devoluções é coluna diagnóstica e não pode ser abatida uma segunda vez.
+    current.netValue = current.purchaseValue;
     aggregate.set(key, current);
     parsedLines += 1;
   }
