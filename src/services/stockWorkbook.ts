@@ -10,8 +10,11 @@ export interface CanonicalStockWorkbookSummary {
   availableUnits: number;
   pendingUnits: number;
   projectedUnits: number;
+  costValue: number;
   saleValue: number;
+  availableCostValue: number;
   availableSaleValue: number;
+  projectedCostValue: number;
   projectedSaleValue: number;
 }
 
@@ -36,13 +39,19 @@ function inventoryIndex(state: CanonicalState) {
 export function summarizeCanonicalStockWorkbook(state: CanonicalState): CanonicalStockWorkbookSummary {
   const presentation = stockPresentationFromState(state);
   const rawByCode = inventoryIndex(state);
+  let availableCostValue = 0;
   let availableSaleValue = 0;
+  let projectedCostValue = 0;
   let projectedSaleValue = 0;
   for (const product of presentation.products) {
     const raw = rawByCode.get(product.code);
+    const availableCost = product.availableUnits * product.costUnit;
     const availableSale = product.availableUnits * product.saleUnit;
+    const pendingCost = Number(raw?.pendingCost) || 0;
     const pendingSale = Number(raw?.pendingSale) || 0;
+    availableCostValue += availableCost;
     availableSaleValue += availableSale;
+    projectedCostValue += availableCost + pendingCost;
     projectedSaleValue += availableSale + pendingSale;
   }
   return {
@@ -53,8 +62,11 @@ export function summarizeCanonicalStockWorkbook(state: CanonicalState): Canonica
     availableUnits: presentation.summary.availableUnits,
     pendingUnits: presentation.summary.pendingUnits,
     projectedUnits: presentation.summary.projectedUnits,
+    costValue: presentation.summary.costValue,
     saleValue: presentation.summary.saleValue,
+    availableCostValue,
     availableSaleValue,
+    projectedCostValue,
     projectedSaleValue,
   };
 }
