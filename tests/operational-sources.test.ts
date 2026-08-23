@@ -18,6 +18,14 @@ test('PCTABPR usa PVENDA1 ativo da região 11 e ignora PTABELA quando PVENDA1 ex
   assert.deepEqual(parseWinthorTablePrices(rows), { '565': 20.27 });
 });
 
+test('PCTABPR sem PVENDA1 é rejeitada sem fallback silencioso para PTABELA', () => {
+  const rows = [
+    ['CODPROD', 'NUMREGIAO', 'STATUSREGIAO', 'PTABELA', 'PVENDA'],
+    [565, 11, 'A', 20.27, 20.27],
+  ];
+  assert.throws(() => parseWinthorTablePrices(rows), /CODPROD\/PVENDA1/);
+});
+
 test('PCTABPR consolida PVENDA1 elegível repetido quando os valores são iguais',()=>{
   const rows=[['CODPROD','NUMREGIAO','STATUSREGIAO','PVENDA1'],[565,11,'A',20.27],[565,11,'A',20.27]];
   assert.deepEqual(parseWinthorTablePrices(rows),{'565':20.27});
