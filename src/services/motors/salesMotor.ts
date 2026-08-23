@@ -3,7 +3,7 @@ import type { DataQualityIssue, InboundOrderFactRecord, ItemMasterRecord, Receip
 import type { OperationalSourceState } from '../operationalSources';
 import type { Row } from '../canonical/runtime';
 import { cleanCode, cleanDigits, normalizeCnpj, normalizeText, parseNumber, toIsoDate } from '../canonical/utils';
-import { parseCompassTargets } from '../canonical/support';
+import { parseCompassTargets } from './sourceParsers';
 import { parseInvoiceIdentity } from '../../domain/invoiceIdentity';
 
 const validCnpj=(v:string)=>/^\d{14}$/.test(v);

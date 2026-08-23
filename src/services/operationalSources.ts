@@ -2,7 +2,6 @@ import * as XLSX from 'xlsx';
 import type { CanonicalInventoryProduct, CanonicalState, ManualConfiguration } from '../domain/canonical';
 import { parseInvoiceIdentity } from '../domain/invoiceIdentity';
 import { packagingFactorsAgree, type UnitsPerCaseSource } from '../domain/packaging';
-import type { MetricasEstoque, ProdutoEstoque } from '../store/DataContext';
 import { cleanCode, cleanDigits, normalizeText, parseNumber, toIsoDate } from './canonical/utils';
 
 const STORAGE_KEY = 'blue-jacket:operational-sources:v1';
@@ -439,12 +438,6 @@ export function applyOperationalOverrides(canonical: CanonicalState, state: Oper
     warnings,
   };
   return { canonical: next, priceMatched, priceDivergences, portfolioDeductedRows: 0, portfolioDeductedCost: 0, portfolioBlocked: false };
-}
-
-export function operationalLegacyData(canonical: CanonicalState, coverageTarget: number): { produtos: ProdutoEstoque[]; metricas: MetricasEstoque } {
-  const produtos: ProdutoEstoque[] = canonical.inventory.map(item => ({ codigo: item.code, descricao: item.description, ean: item.ean, quantidade: item.quantity, saldoMinimo: 0, custoUnitario: item.costUnit, vendaUnitario: item.saleUnit, entradas: 0, saidas: 0, saldoPedido: item.pendingQty, saldoPedidoCaixas: item.pendingCases, saldoPedidoValorCusto: item.pendingCost, saldoPedidoValorVenda: item.pendingSale, isLancamento: item.isLaunch, hasWinthor: item.hasWinthor, factoryCode: item.factoryCode, physicalCases: item.physicalCases, physicalUnits: item.physicalUnits, grossKg: item.grossKg }));
-  const metricas: MetricasEstoque = { valorEstoqueCompra: canonical.stock.costValue, valorEstoqueVenda: canonical.stock.saleValue, saldoPedidoCusto: canonical.stock.pendingPurchaseCost, saldoPedidoVenda: canonical.stock.pendingPurchaseSale, coberturaDiasAtual: canonical.stock.coverageCurrentDays, coberturaEstoqueMaisSaldo: canonical.stock.coverageProjectedDays, coberturaDiasAtualCusto: canonical.stock.coverageCostCurrentDays, coberturaEstoqueMaisSaldoCusto: canonical.stock.coverageCostProjectedDays, produtosRuptura: canonical.inventory.filter(item => item.hasWinthor && item.quantity <= 0).length, metaCobertura: coverageTarget };
-  return { produtos, metricas };
 }
 
 export function operationalReceiptMovements(state = loadOperationalSourceState()) {
