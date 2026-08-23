@@ -1,0 +1,42 @@
+name: scan-cleanup-residuals
+
+on:
+  push:
+    branches:
+      - feat/limpeza-padronizacao-visual
+    paths:
+      - '.github/workflows/scan-cleanup-residuals.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/limpeza-padronizacao-visual
+          fetch-depth: 0
+      - name: Scan
+        run: |
+          {
+            echo '# Varredura temporária da limpeza'
+            echo
+            echo '## Imports de módulos canônicos antigos'
+            grep -RInE "canonicalEngine|supportCore|legacyStock|comboClientPortfolio|detectedNetworkTarget|legacyNetwork|TOP REDES|12\.326|(^|[^0-9])319([^0-9]|$)|bj_produtos|bj_metricas|bj_sellout|GlassSurface|--bj-" src tests scripts package.json docs 2>/dev/null || true
+            echo
+            echo '## DataContext projections'
+            grep -RInE "useData\(\).*produtos|useData\(\).*metricas|useData\(\).*sellOut|\{[^}]*produtos[^}]*\} = useData|\{[^}]*metricas[^}]*\} = useData|\{[^}]*sellOut[^}]*\} = useData" src 2>/dev/null || true
+            echo
+            echo '## Inline style count por página'
+            for f in src/pages/*.tsx; do printf '%s: ' "$f"; grep -o "style={{" "$f" | wc -l; done
+          } > docs/CLEANUP_SCAN_TEMP.md
+          rm .github/workflows/scan-cleanup-residuals.yml
+      - name: Commit scan
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Registra varredura temporária da limpeza"
+          git push origin HEAD:feat/limpeza-padronizacao-visual
