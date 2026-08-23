@@ -5,7 +5,7 @@ import './charts.css';
 
 type MovementDay = { date:string; invoiced:number; toInvoice:number; total:number; invoicedPositivation:number; totalPositivation:number; };
 const WINDOW_DAYS=10;
-const WINDOW_STORAGE_KEY='bj_sellout_daily_window_end';
+const WINDOW_STORAGE_KEY='blue_jacket_sellout_daily_window_end';
 const fmtBRL=(value:number)=>value.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const fmtInt=(value:number)=>Math.round(value||0).toLocaleString('pt-BR');
 const fmtDate=(date:string)=>new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR');
