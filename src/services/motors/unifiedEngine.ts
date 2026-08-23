@@ -32,6 +32,7 @@ import {
   parseHistoricalReceipts12322,
 } from './historicalMotor';
 import { projectCanonicalFromUnified } from './calculationService';
+import { buildCanonicalReconciliation } from './reconciliationService';
 
 export interface UnifiedCanonicalState extends CanonicalState {
   unifiedSchemaVersion: 1;
@@ -579,6 +580,7 @@ export async function processUnifiedFiles(input: {
   shell.sources = sourceAudits(layer);
   shell.support = supportFromUnified(layer);
   let projected = projectCanonicalFromUnified(shell, layer, input.config);
+  projected = { ...projected, reconciliation: buildCanonicalReconciliation(projected, layer, customerIntelligenceSupport) };
   if (input.continuityWarning) projected = { ...projected, warnings: [...projected.warnings.filter(warning => !warning.startsWith('Carteira comparável:')), input.continuityWarning] };
   const canonical = { ...projected, unifiedSchemaVersion: 1 as const, unified: layer, customerIntelligenceSupport } as UnifiedCanonicalState;
   return { canonical, sellOut: null };
