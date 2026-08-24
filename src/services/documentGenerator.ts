@@ -1,11 +1,12 @@
 import type { CanonicalState } from '../domain/canonical';
 import { TemplateWorkbook, type TemplateCellValue } from './templateWorkbook';
+import { SELL_OUT_DOCUMENT_STANDARD } from './sellOutDocumentStandard';
 
 const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 const DAY_NAMES = ['Domingo','Segunda-Feira','Terça-Feira','Quarta-Feira','Quinta-Feira','Sexta-Feira','Sábado'];
 // O modelo é versionado na URL para impedir que uma cópia antiga do Excel
 // permaneça no cache/service worker depois de uma atualização do sistema.
-const PANEL_TEMPLATE = './templates/painel-sell-out-padrao-v2.xlsx';
+const PANEL_TEMPLATE = `./templates/${SELL_OUT_DOCUMENT_STANDARD.templateFile}`;
 
 const ratio = (value:number,target:number) => target > 0 ? value / target : 0;
 const ref = (column:string,row:number) => `${column}${row}`;

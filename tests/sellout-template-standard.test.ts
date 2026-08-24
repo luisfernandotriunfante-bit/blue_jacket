@@ -19,9 +19,17 @@ test('Painel Sell Out mantém o padrão julho para todas as gerações', () => {
 
 test('gerador usa o template padrão e não troca a ordem da aba EQUIPES', () => {
   const source = readFileSync('src/services/documentGenerator.ts', 'utf8');
-  assert.match(source, /const PANEL_TEMPLATE = '\.\/templates\/painel-sell-out-padrao-v2\.xlsx'/);
+  assert.match(source, /SELL_OUT_DOCUMENT_STANDARD\.templateFile/);
   assert.match(source, /values\[ref\('A',row\)\] = vendor\.coordinatorCode/);
   assert.match(source, /values\[ref\('B',row\)\] = vendor\.coordinatorName/);
   assert.match(source, /values\[ref\('C',row\)\] = vendor\.newCode/);
   assert.match(source, /values\[ref\('D',row\)\] = vendor\.name/);
+});
+
+test('padrão do documento é uma regra interna única do sistema', () => {
+  const standard = readFileSync('src/services/sellOutDocumentStandard.ts', 'utf8');
+  assert.match(standard, /version: 'julho-v2'/);
+  assert.match(standard, /templateFile: 'painel-sell-out-padrao-v2\.xlsx'/);
+  assert.match(standard, /'SELL OUT - Milenio 2026', 'EQUIPES'/);
+  assert.match(standard, /'COORD', 'NOME COORD', 'COD', 'NOME', 'META'/);
 });
