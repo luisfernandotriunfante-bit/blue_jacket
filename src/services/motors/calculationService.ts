@@ -376,8 +376,9 @@ export function buildNetworks(unified:UnifiedDataLayer, config:ManualConfigurati
     topByCnpj.set(row.cnpj,rows);
   });
 
-  // Rede Premissas é a taxonomia operacional do agrupamento. Roteiro é preservado
-  // somente como linhagem Top e nunca é equiparado por semelhança de nome.
+  // Premissas é a fonte primária. Quando o CNPJ não possui Premissas, o Roteiro
+  // fornece o fallback por CNPJ; a rede do Roteiro nunca é equiparada por nome.
+  // A divergência de nomes continua visível no campo routeNetwork da loja.
   const allCnpjs = new Set<string>([
     ...latest.keys(),
     ...salesByCnpj.keys(),
@@ -385,7 +386,9 @@ export function buildNetworks(unified:UnifiedDataLayer, config:ManualConfigurati
   ]);
   const networks = new Map<string,string[]>();
   allCnpjs.forEach(cnpj => {
-    const network = latest.get(cnpj) || 'SEM REDE';
+    const premiseNetwork=latest.get(cnpj)?.trim() || '';
+    const routeNetwork=topByCnpj.get(cnpj)?.find(row=>row.topRetailerNetwork?.trim())?.topRetailerNetwork.trim() || '';
+    const network = premiseNetwork || routeNetwork || 'SEM REDE';
     const rows = networks.get(network) || [];
     rows.push(cnpj);
     networks.set(network,rows);

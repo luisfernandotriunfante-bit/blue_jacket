@@ -121,7 +121,7 @@ function internalChecks(canonical: CanonicalState, unified: UnifiedDataLayer): C
   checks.push(numericCheck({
     id: 'INTERNAL_NETWORK_PROJECTION', level: 'INTERNAL', label: 'Redes + SEM REDE fecham venda com CNPJ válido',
     expected: validCnpjSales, calculated: networkSales, tolerance: .01,
-    source: 'SALES_FACT × PREMISSAS', note: 'CNPJ sem Rede Premissas permanece explicitamente no bucket SEM REDE; Roteiro não é usado como fallback de taxonomia.',
+    source: 'SALES_FACT × PREMISSAS → ROTEIRO', note: 'Premissas é a fonte primária; CNPJ sem Rede Premissas usa Roteiro por CNPJ e somente depois permanece em SEM REDE.',
   }));
   checks.push(numericCheck({
     id: 'INTERNAL_LINE_CLOSURE', level: 'INTERNAL', label: 'Linhas classificadas + sem classificação = Sell Out',

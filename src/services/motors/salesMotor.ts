@@ -37,8 +37,8 @@ export interface SalesMotorResult {
 
 function itemIndexes(items: ItemMasterRecord[]) {
   return {
-    byWinthor: new Map(items.filter(item => item.winthorCode && item.hasWinthor).map(item => [item.winthorCode, item])),
-    bySku: new Map(items.filter(item => item.industrySku).map(item => [item.industrySku, item])),
+    byWinthor: new Map(items.filter(item => item.winthorCode && item.hasWinthor).map(item => [cleanCode(item.winthorCode), item])),
+    bySku: new Map(items.filter(item => item.industrySku).map(item => [cleanCode(item.industrySku), item])),
     byEan: new Map(items.flatMap(item => [item.internalEan, item.industryEan].filter(Boolean).map(ean => [cleanDigits(ean), item] as const))),
   };
 }
@@ -68,7 +68,13 @@ export function parseSales8022(rows: Row[], items: ItemMasterRecord[], rcas: Rca
 
   const header = headerMap(rows[headerIndex]);
   const itemIndex = itemIndexes(items);
-  const rcaByCurrent = new Map(rcas.map(rca => [rca.currentRcaCode, rca]));
+  const rcaByCode = new Map<string, RcaMasterRecord>();
+  rcas.forEach(rca => {
+    if (rca.currentRcaCode) rcaByCode.set(cleanCode(rca.currentRcaCode), rca);
+    // O 8022 pode carregar o código legado. O código atual tem precedência
+    // quando houver colisão, mas o legado oficial também é resolvido.
+    if (rca.legacyRcaCode && !rcaByCode.has(cleanCode(rca.legacyRcaCode))) rcaByCode.set(cleanCode(rca.legacyRcaCode), rca);
+  });
 
   for (let rowIndex = headerIndex + 1; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex];
@@ -83,7 +89,7 @@ export function parseSales8022(rows: Row[], items: ItemMasterRecord[], rcas: Rca
     const normalizedCnpj = normalizeCnpj(rawCnpj, { declaredCnpj: rawCnpj.replace(/\D/g, '').length >= 12 });
     const cnpj = validCnpj(normalizedCnpj.canonical) ? normalizedCnpj.canonical : '';
     const seller = cleanCode(cell(row, idx(header, 'COD. VENDEDOR')));
-    const rca = rcaByCurrent.get(seller);
+    const rca = rcaByCode.get(cleanCode(seller));
     const winthor = cleanCode(cell(row, idx(header, 'CODPROD. WINTHOR')));
     const sku = cleanCode(cell(row, idx(header, 'CODIGO FABRICANTE')));
     const ean = cleanDigits(cell(row, idx(header, 'EAN PRODUTO')) || cell(row, idx(header, 'EAN CADASTRO')));
