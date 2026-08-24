@@ -394,7 +394,7 @@ export function buildNetworks(unified:UnifiedDataLayer, config:ManualConfigurati
     const rows = cnpjs.flatMap(cnpj => salesByCnpj.get(cnpj) || []);
     const invoiced = sum(rows.filter(row => row.salesStatus === 'FATURADO'),row => row.value);
     const total = sum(rows,row => row.value);
-    const key = name === 'SEM REDE' ? 'SEM REDE' : (normalizeText(name) || name;
+    const key = name === 'SEM REDE' ? 'SEM REDE' : (normalizeText(name) || name);
     const target = name === 'SEM REDE' ? 0 : Math.max(config.networkTargets[key] ?? config.networkTargets[name] ?? 0,0);
     const topRows = cnpjs.flatMap(cnpj => topByCnpj.get(cnpj) || []).filter(row => row.isTopRetailerActive !== false);
     const topTarget = sum(topRows,row => row.target);
