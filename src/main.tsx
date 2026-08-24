@@ -75,9 +75,10 @@ function App() {
 
   const atividadesTopTabs = [{ id: 'combo', label: 'Criação de Combo' }]
   const clientesTopTabs = [
-    { id: 'overview', label: 'Visão Geral' }, { id: 'assortment', label: 'Sortimento' }, { id: 'opportunities', label: 'Oportunidades' },
-    { id: 'launches', label: 'Lançamentos' }, { id: 'outside', label: 'Comprado Fora' }, { id: 'promotions', label: 'Promoções' },
-    { id: 'pricing', label: 'Preços' }, { id: 'history', label: 'Histórico' }, { id: 'export', label: 'Exportar' },
+    { id: 'overview', label: 'Visão Geral' },
+    { id: 'assortment', label: 'Sortimento' },
+    { id: 'launches', label: 'Lançamentos' },
+    { id: 'promotions', label: 'Promoções' },
   ]
 
   const topNavigation = activeTab === 'estoque' ? (

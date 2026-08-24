@@ -1,17 +1,40 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useData } from '../store/DataContext';
+import { buildCustomerIntelligence, listCustomerOptions } from '../domain/customerIntelligence';
+import { EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT } from '../domain/customerIntelligenceTypes';
 import { downloadSellOutDocument } from '../services/documentGenerator';
 import { downloadCanonicalNetworkWorkbook } from '../services/networkWorkbook';
 import { downloadCanonicalStockWorkbook, summarizeCanonicalStockWorkbook } from '../services/stockWorkbook';
+import { downloadCustomerCommercialFile, downloadCustomerInternalDossier } from '../services/customerIntelligenceExport';
+import { customerIntelligenceFromUnified } from '../services/motors/customerIntelligenceUnifiedAdapter';
+import { isUnifiedCanonicalState } from '../services/motors/unifiedEngine';
 import { PanelAlert, PanelCard, PanelEmptyState, PanelInfoRow, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtInt = (value: number) => Math.round(value || 0).toLocaleString('pt-BR');
+type GenerationKind = 'painel' | 'redes' | 'estoque' | 'cliente-comercial' | 'cliente-dossie';
 
 export function DocumentosPage() {
   const { canonical } = useData();
-  const [generating, setGenerating] = useState<'painel' | 'redes' | 'estoque' | null>(null);
+  const [generating, setGenerating] = useState<GenerationKind | null>(null);
   const [error, setError] = useState('');
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [selectedCustomerCnpj, setSelectedCustomerCnpj] = useState('');
+  const [customerReferenceDate, setCustomerReferenceDate] = useState('');
+
+  const unifiedCanonical = canonical && isUnifiedCanonicalState(canonical) ? canonical : null;
+  useEffect(() => { if (unifiedCanonical?.referenceDate && !customerReferenceDate) setCustomerReferenceDate(unifiedCanonical.referenceDate); }, [unifiedCanonical?.referenceDate, customerReferenceDate]);
+
+  const customerSupport = useMemo(() => unifiedCanonical ? customerIntelligenceFromUnified(unifiedCanonical) : EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT, [unifiedCanonical]);
+  const customerOptions = useMemo(() => unifiedCanonical ? listCustomerOptions(unifiedCanonical, customerSupport) : [], [unifiedCanonical, customerSupport]);
+  const filteredCustomerOptions = useMemo(() => {
+    const query = customerSearch.trim().toLowerCase();
+    if (!query) return customerOptions.slice(0, 100);
+    return customerOptions.filter(item => [item.cnpj, item.name, item.network, item.city, item.tier].some(value => String(value || '').toLowerCase().includes(query))).slice(0, 100);
+  }, [customerOptions, customerSearch]);
+  const customerResult = useMemo(() => unifiedCanonical && selectedCustomerCnpj
+    ? buildCustomerIntelligence(unifiedCanonical, customerSupport, selectedCustomerCnpj, customerReferenceDate || unifiedCanonical.referenceDate)
+    : null, [unifiedCanonical, customerSupport, selectedCustomerCnpj, customerReferenceDate]);
 
   if (!canonical) {
     return (
@@ -30,13 +53,18 @@ export function DocumentosPage() {
   const networkCount = officialNetworks.filter(network => network.networkTarget > 0 || network.topTarget > 0 || network.total > 0).length;
   const stockSummary = summarizeCanonicalStockWorkbook(canonical);
 
-  const generate = async (kind: 'painel' | 'redes' | 'estoque') => {
+  const generate = async (kind: GenerationKind) => {
     setGenerating(kind);
     setError('');
     try {
       if (kind === 'painel') await downloadSellOutDocument(canonical);
       else if (kind === 'redes') downloadCanonicalNetworkWorkbook(canonical);
-      else downloadCanonicalStockWorkbook(canonical);
+      else if (kind === 'estoque') downloadCanonicalStockWorkbook(canonical);
+      else {
+        if (!customerResult) throw new Error('Selecione um CNPJ válido antes de gerar o documento do cliente.');
+        if (kind === 'cliente-comercial') downloadCustomerCommercialFile(customerResult);
+        else downloadCustomerInternalDossier(customerResult);
+      }
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : 'Não foi possível gerar o arquivo.');
     } finally {
@@ -104,6 +132,50 @@ export function DocumentosPage() {
             </button>
           </PanelCard>
         </div>
+
+        <PanelCard>
+          <PanelSectionHeader
+            eyebrow="CLIENTES & SORTIMENTO"
+            title="Documentos por CNPJ"
+            description="Arquivo Comercial e Dossiê Interno ficam centralizados aqui. Ambos usam exatamente o mesmo motor canônico da tela Clientes & Sortimento e não releem arquivos brutos."
+            action={unifiedCanonical ? <label style={{ display: 'grid', gap: 4 }}><span className="panel-mini-label">Data de análise</span><input className="panel-input" type="date" value={customerReferenceDate || unifiedCanonical.referenceDate} onChange={event => setCustomerReferenceDate(event.target.value)} /></label> : undefined}
+          />
+          {!unifiedCanonical ? <PanelAlert tone="warning">A fotografia atual ainda não está no contrato UnifiedDataLayer necessário para os documentos por CNPJ.</PanelAlert> : <>
+            <div className="panel-grid panel-grid-2" style={{ marginTop: 14 }}>
+              <input className="panel-input panel-input-full" placeholder="Buscar CNPJ, cliente, rede, cidade ou faixa" value={customerSearch} onChange={event => setCustomerSearch(event.target.value)} />
+              <select className="panel-select panel-input-full" value={selectedCustomerCnpj} onChange={event => setSelectedCustomerCnpj(event.target.value)}>
+                <option value="">Selecione um CNPJ</option>
+                {filteredCustomerOptions.map(item => <option key={item.cnpj} value={item.cnpj}>{item.cnpj} · {item.name || 'Cliente sem nome'} · {item.network || 'Sem rede'} · {item.tier || 'Sem faixa'}</option>)}
+              </select>
+            </div>
+            {customerResult ? <div className="panel-grid panel-grid-2" style={{ marginTop: 18 }}>
+              <PanelCard compact>
+                <PanelSectionHeader eyebrow="ARQUIVO COMERCIAL" title={customerResult.customer.name || customerResult.customer.cnpj} description="Sortimento, adoção, oportunidades, lançamentos, comprado fora, pendências, promoções e preços." />
+                <div>
+                  <PanelInfoRow label="CNPJ" value={customerResult.customer.cnpj} />
+                  <PanelInfoRow label="Assortment" value={`${(customerResult.assortmentPercent * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`} />
+                  <PanelInfoRow label="Não comprados" value={fmtInt(customerResult.recommendedMissing)} />
+                  <PanelInfoRow label="Lançamentos faltantes" value={fmtInt(customerResult.launches.missing)} />
+                </div>
+                <button className="panel-primary-button" disabled={generating !== null} onClick={() => void generate('cliente-comercial')} style={{ marginTop: 16 }}>
+                  {generating === 'cliente-comercial' ? 'Gerando arquivo...' : 'Gerar Arquivo Comercial'}
+                </button>
+              </PanelCard>
+              <PanelCard compact>
+                <PanelSectionHeader eyebrow="USO INTERNO" title="Dossiê Interno" description="Inclui a mesma ficha comercial, fontes 379/8022 separadas, estoque, auditoria e limitações." />
+                <div>
+                  <PanelInfoRow label="Sortimento oficial" value={fmtInt(customerResult.officialAssortment)} />
+                  <PanelInfoRow label="Executável agora" value={fmtInt(customerResult.executableAssortment)} />
+                  <PanelInfoRow label="Comprados fora" value={fmtInt(customerResult.boughtOutside)} />
+                  <PanelInfoRow label="Pendências" value={fmtInt(customerResult.boughtUnresolved)} />
+                </div>
+                <button className="panel-primary-button" disabled={generating !== null} onClick={() => void generate('cliente-dossie')} style={{ marginTop: 16 }}>
+                  {generating === 'cliente-dossie' ? 'Gerando dossiê...' : 'Gerar Dossiê Interno'}
+                </button>
+              </PanelCard>
+            </div> : <PanelEmptyState variant="section" title="Selecione um CNPJ" description="Os documentos do cliente serão materializados a partir da mesma ficha canônica usada no módulo Clientes & Sortimento." />}
+          </>}
+        </PanelCard>
 
         {error ? <PanelAlert tone="error">{error}</PanelAlert> : null}
 
