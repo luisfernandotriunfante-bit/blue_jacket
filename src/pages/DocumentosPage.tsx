@@ -47,6 +47,9 @@ export function DocumentosPage() {
   }
 
   const sourceCount = canonical.sources.filter(source => source.loaded).length;
+  const hasSalesSource = canonical.sources.some(source => source.kind === 'sales8022' && source.loaded);
+  const hasStock105 = canonical.sources.some(source => source.kind === 'stock105' && source.loaded);
+  const hasSalesOverlap = Boolean(unifiedCanonical?.unified.qualityIssues.some(issue => issue.code === 'HISTORICAL_CURRENT_SALES_OVERLAP'));
   const officialNetworks = canonical.networks.filter(network => network.key !== 'SEM REDE');
   const networkCount = officialNetworks.filter(network => network.networkTarget > 0 || network.topTarget > 0 || network.total > 0).length;
   const stockSummary = summarizeCanonicalStockWorkbook(canonical);
@@ -55,13 +58,19 @@ export function DocumentosPage() {
     setGenerating(kind);
     setError('');
     try {
-      if (kind === 'painel') await downloadSellOutDocument(canonical);
-      else if (kind === 'redes') downloadCanonicalNetworkWorkbook(canonical);
-      else if (kind === 'estoque') downloadCanonicalStockWorkbook(canonical);
-      else {
+      if (kind === 'painel') {
+        if (!hasSalesSource) throw new Error('Carregue o Vendas 8022 antes de gerar o Painel Sell Out.');
+        await downloadSellOutDocument(canonical);
+      } else if (kind === 'redes') {
+        if (!hasSalesSource) throw new Error('Carregue o Vendas 8022 antes de gerar o Relatório de Redes.');
+        downloadCanonicalNetworkWorkbook(canonical);
+      } else if (kind === 'estoque') {
+        if (!hasStock105) throw new Error('Carregue a Posição 105 antes de gerar o Relatório de Estoque.');
+        downloadCanonicalStockWorkbook(canonical);
+      } else {
         if (!customerResult) throw new Error('Selecione um CNPJ válido antes de gerar o documento do cliente.');
         if (kind === 'cliente-comercial') downloadCustomerCommercialFile(customerResult);
-        else downloadCustomerInternalDossier(customerResult);
+        else downloadCustomerInternalDossier(customerResult, { hasSalesOverlap });
       }
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : 'Não foi possível gerar o arquivo.');
@@ -86,11 +95,12 @@ export function DocumentosPage() {
             />
             <div>
               <PanelInfoRow label="Sell Out total" value={fmtBRL(canonical.sellOut.total)} />
-              <PanelInfoRow label="Meta T&C" value={fmtBRL(canonical.sellOut.sellOutTarget)} />
-              <PanelInfoRow label="Meta indústria" value={fmtBRL(canonical.industryTarget)} />
+              <PanelInfoRow label="Meta T&C" value={canonical.sellOut.sellOutTarget > 0 ? fmtBRL(canonical.sellOut.sellOutTarget) : '—'} />
+              <PanelInfoRow label="Meta indústria" value={canonical.industryTarget > 0 ? fmtBRL(canonical.industryTarget) : '—'} />
               <PanelInfoRow label="Carteira / estoque em trânsito" value={fmtBRL(canonical.stock.pendingPurchaseCost)} />
             </div>
-            <button className="panel-primary-button" disabled={generating !== null} onClick={() => void generate('painel')} style={{ marginTop: 20 }}>
+            {!hasSalesSource ? <div style={{ marginTop: 14 }}><PanelAlert tone="warning">Vendas 8022 não está carregado. O Painel Sell Out fica bloqueado para não materializar um fechamento zerado ou incompleto.</PanelAlert></div> : null}
+            <button className="panel-primary-button" disabled={generating !== null || !hasSalesSource} onClick={() => void generate('painel')} style={{ marginTop: 20 }}>
               {generating === 'painel' ? 'Gerando documento...' : 'Gerar Painel Sell Out'}
             </button>
           </PanelCard>
@@ -107,7 +117,8 @@ export function DocumentosPage() {
               <PanelInfoRow label="Realizado + A faturar" value={fmtBRL(officialNetworks.reduce((sum, network) => sum + network.total, 0))} />
               <PanelInfoRow label="Fontes válidas na base" value={sourceCount.toLocaleString('pt-BR')} />
             </div>
-            <button className="panel-primary-button" disabled={generating !== null} onClick={() => void generate('redes')} style={{ marginTop: 20 }}>
+            {!hasSalesSource ? <div style={{ marginTop: 14 }}><PanelAlert tone="warning">Vendas 8022 não está carregado. O relatório de Redes fica bloqueado porque o realizado e o A Faturar não estão materializados.</PanelAlert></div> : null}
+            <button className="panel-primary-button" disabled={generating !== null || !hasSalesSource} onClick={() => void generate('redes')} style={{ marginTop: 20 }}>
               {generating === 'redes' ? 'Gerando documento...' : 'Gerar Relatório de Redes'}
             </button>
           </PanelCard>
@@ -125,7 +136,8 @@ export function DocumentosPage() {
               <PanelInfoRow label="Projetado" value={`${fmtInt(stockSummary.projectedUnits)} un.`} />
               <PanelInfoRow label="Potencial projetado" value={fmtBRL(stockSummary.projectedSaleValue)} />
             </div>
-            <button className="panel-primary-button" disabled={generating !== null} onClick={() => void generate('estoque')} style={{ marginTop: 20 }}>
+            {!hasStock105 ? <div style={{ marginTop: 14 }}><PanelAlert tone="warning">Posição 105 não está carregada. O relatório de Estoque fica bloqueado porque o físico oficial não está comprovado.</PanelAlert></div> : null}
+            <button className="panel-primary-button" disabled={generating !== null || !hasStock105} onClick={() => void generate('estoque')} style={{ marginTop: 20 }}>
               {generating === 'estoque' ? 'Gerando relatório...' : 'Gerar Relatório de Estoque'}
             </button>
           </PanelCard>
@@ -146,6 +158,7 @@ export function DocumentosPage() {
                 {filteredCustomerOptions.map(item => <option key={item.cnpj} value={item.cnpj}>{item.cnpj} · {item.name || 'Cliente sem nome'} · {item.network || 'Sem rede'} · {item.tier || 'Sem faixa'}</option>)}
               </select>
             </div>
+            {hasSalesOverlap ? <div style={{ marginTop: 14 }}><PanelAlert tone="error">379 e 8022 possuem datas sobrepostas na fotografia canônica. O Dossiê manterá as duas fontes separadas e marcará o YTD consolidado como BLOQUEADO.</PanelAlert></div> : null}
             {customerResult ? <div className="panel-grid panel-grid-2" style={{ marginTop: 18 }}>
               <PanelCard compact>
                 <PanelSectionHeader eyebrow="ARQUIVO COMERCIAL" title={customerResult.customer.name || customerResult.customer.cnpj} description="Sortimento, adoção, oportunidades, lançamentos, comprado fora, pendências, promoções e preços." />
@@ -182,7 +195,7 @@ export function DocumentosPage() {
             <PanelSectionHeader
               eyebrow="CONFERÊNCIA"
               title="Pendências antes do fechamento"
-              description="Os arquivos podem ser gerados, mas estes pontos continuam sinalizados pelos motores para não mascarar divergências."
+              description="Os arquivos permitidos continuam sinalizando estes pontos dos motores para não mascarar divergências. Fontes primárias ausentes bloqueiam o documento correspondente."
             />
             <div className="panel-stack" style={{ gap: 8 }}>
               {canonical.warnings.map((warning, index) => <PanelAlert tone="warning" key={`${warning}-${index}`}>{warning}</PanelAlert>)}
