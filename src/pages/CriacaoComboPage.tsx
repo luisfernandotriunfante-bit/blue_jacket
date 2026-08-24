@@ -33,8 +33,9 @@ export function CriacaoComboPage() {
   const [clientImportName, setClientImportName] = useState('');
   const [exportOptions, setExportOptions] = useState<ComboWorkbookOptions>({ ...DEFAULT_COMBO_WORKBOOK_OPTIONS });
 
+  // Catálogo completo: item conhecido não pode ser confundido com item elegível para o combo.
+  // A elegibilidade (Winthor + PVENDA1 região 11) é aplicada por selectComboProducts.
   const tableProducts = useMemo(() => (canonical?.inventory || [])
-    .filter(product => product.hasWinthor === true && Number.isFinite(product.saleUnit) && product.saleUnit > 0)
     .map(product => ({
       codigo: product.code,
       descricao: product.description,
@@ -62,15 +63,33 @@ export function CriacaoComboPage() {
     [tableProducts, importedCodes],
   );
 
-  const matchedImportedCodes = useMemo(
+  const matchedCatalogCodes = useMemo(
     () => matchedStockCodes(tableProducts, importedCodes),
     [tableProducts, importedCodes],
   );
 
-  const unmatchedCodes = useMemo(
-    () => Array.from(importedCodes).filter(code => !matchedImportedCodes.has(code)),
-    [importedCodes, matchedImportedCodes],
+  const matchedEligibleCodes = useMemo(
+    () => matchedStockCodes(comboProducts, importedCodes),
+    [comboProducts, importedCodes],
   );
+
+  const unmatchedCodes = useMemo(
+    () => Array.from(importedCodes).filter(code => !matchedCatalogCodes.has(code)),
+    [importedCodes, matchedCatalogCodes],
+  );
+
+  const blockedCodes = useMemo(
+    () => Array.from(importedCodes).filter(code => matchedCatalogCodes.has(code) && !matchedEligibleCodes.has(code)),
+    [importedCodes, matchedCatalogCodes, matchedEligibleCodes],
+  );
+
+  const blockedSelections = useMemo(() => blockedCodes.map(code => {
+    const product = tableProducts.find(candidate => matchedStockCodes([candidate], new Set([code])).has(code));
+    const reasons: string[] = [];
+    if (product && !product.hasWinthor) reasons.push('SEM WINTHOR');
+    if (product && (!Number.isFinite(product.vendaUnitario) || product.vendaUnitario <= 0)) reasons.push('SEM PVENDA1 REGIÃO 11');
+    return { code, product, reasons };
+  }), [blockedCodes, tableProducts]);
 
   const filledCount = useMemo(
     () => comboProducts.filter(product => parseComboPrice(practicedPrices[product.codigo] || '') !== null).length,
@@ -78,15 +97,25 @@ export function CriacaoComboPage() {
   );
 
   const clientLookup = useMemo(() => {
-    const lookup = buildComboClientLookup(canonical?.transactions || []);
+    const observedLookup = buildComboClientLookup(canonical?.transactions || []);
+    const lookup = new Map<string, ComboClientLookupEntry & { masterCode: string; observedCodes: string[] }>();
+    observedLookup.forEach((entry, cnpj) => lookup.set(cnpj, {
+      ...entry,
+      masterCode: '',
+      observedCodes: [...entry.codes],
+    }));
+
     if (canonical && isUnifiedCanonicalState(canonical)) {
       canonical.unified.customers.forEach(customer => {
         const current = lookup.get(customer.cnpj);
-        const code = normalizeComboClientCode(customer.winthorCustomerCode);
+        const masterCode = normalizeComboClientCode(customer.winthorCustomerCode);
+        const observedCodes = current?.observedCodes || current?.codes || [];
         lookup.set(customer.cnpj, {
           cnpj: customer.cnpj,
           name: customer.customerName || current?.name || '',
-          codes: code ? [code] : current?.codes || [],
+          codes: masterCode ? [masterCode] : observedCodes,
+          masterCode,
+          observedCodes,
         });
       });
     }
@@ -96,23 +125,39 @@ export function CriacaoComboPage() {
   const selectedClients = useMemo(() => Array.from(clientCnpjs).map(cnpj => {
     const lookup = clientLookup.get(cnpj);
     const hasOverride = Object.prototype.hasOwnProperty.call(clientCodeOverrides, cnpj);
-    const automaticCode = lookup?.codes.length === 1 ? lookup.codes[0] : '';
+    const masterCode = lookup?.masterCode || '';
+    const observedCodes = lookup?.observedCodes || [];
+    const automaticCode = masterCode || (observedCodes.length === 1 ? observedCodes[0] : '');
     const rawCode = hasOverride ? clientCodeOverrides[cnpj] : automaticCode;
     const clientCode = normalizeComboClientCode(rawCode);
-    const source = hasOverride && clientCode
-      ? 'MANUAL'
-      : lookup?.codes.length === 1
-        ? 'BASE CANÔNICA'
-        : lookup && lookup.codes.length > 1
-          ? 'CONFLITO CANÔNICO'
-          : 'NÃO LOCALIZADO';
-    return { cnpj, name: lookup?.name || '', clientCode, rawCode, source, possibleCodes: lookup?.codes || [] };
+    const masterDiverges = Boolean(masterCode && observedCodes.some(code => code !== masterCode));
+    const source = hasOverride
+      ? (clientCode ? 'MANUAL' : 'MANUAL · EM BRANCO')
+      : masterCode
+        ? (masterDiverges ? 'CUSTOMER MASTER · DIVERGE 8022' : 'CUSTOMER MASTER')
+        : observedCodes.length === 1
+          ? '8022'
+          : observedCodes.length > 1
+            ? 'CONFLITO 8022'
+            : 'NÃO LOCALIZADO';
+    return {
+      cnpj,
+      name: lookup?.name || '',
+      clientCode,
+      rawCode,
+      source,
+      possibleCodes: observedCodes,
+      masterCode,
+    };
   }), [clientCnpjs, clientLookup, clientCodeOverrides]);
 
   const resolvedClientCount = selectedClients.filter(client => Boolean(client.clientCode)).length;
   const unresolvedClientCount = selectedClients.length - resolvedClientCount;
+  const unresolvedProductCount = blockedSelections.length + unmatchedCodes.length;
   const needsPracticedPrice = exportOptions.includePracticedPrice || exportOptions.includeDiscount;
-  const productsReady = comboProducts.length > 0 && (!needsPracticedPrice || filledCount === comboProducts.length);
+  const productsReady = comboProducts.length > 0
+    && unresolvedProductCount === 0
+    && (!needsPracticedPrice || filledCount === comboProducts.length);
   const clientsReady = !exportOptions.includeClients || selectedClients.length > 0;
   const canExport = productsReady && clientsReady;
 
@@ -192,7 +237,6 @@ export function CriacaoComboPage() {
     }
   };
 
-
   const updateClientCode = (cnpj: string, value: string) => {
     setClientCodeOverrides(current => ({ ...current, [cnpj]: value }));
   };
@@ -238,8 +282,8 @@ export function CriacaoComboPage() {
       <PanelPage title="Criação de Combo">
         <PanelEmptyState
           icon="◆"
-          title="Preço de tabela indisponível"
-          description="Carregue PCTABPR e Cadastro 286 em Configurações. Esta tela usa o PVENDA1 canônico da Região 11 como preço de tabela."
+          title="Cadastro de produtos indisponível"
+          description="Carregue Cadastro 286 e PCTABPR em Configurações. O combo só exporta itens com código Winthor confirmado e PVENDA1 canônico da Região 11."
         />
       </PanelPage>
     );
@@ -260,12 +304,13 @@ export function CriacaoComboPage() {
             <StockCodeListFilter products={tableProducts} codes={importedCodes} onChange={changeImportedCodes} allowManual />
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: 'auto', flexWrap: 'wrap' }}>
               {comboProducts.length > 0 ? <span className="panel-badge">PREÇOS · {filledCount}/{comboProducts.length}</span> : null}
+              {unresolvedProductCount > 0 ? <span className="panel-badge panel-badge-amber">PENDÊNCIAS · {unresolvedProductCount}</span> : null}
               <button type="button" className="panel-secondary-button" onClick={clearPrices} disabled={filledCount === 0}>Limpar preços</button>
             </div>
           </div>
 
           <div style={{ color: 'var(--panel-muted)', fontSize: '0.74rem', marginBottom: '16px' }}>
-            O desconto é calculado por item como (Preço de Tabela − Preço Praticado) ÷ Preço de Tabela. O preenchimento do preço praticado só será obrigatório se ele ou a % de desconto estiverem marcados para exportação.
+            O desconto é calculado por item como (Preço de Tabela − Preço Praticado) ÷ Preço de Tabela. O preenchimento do preço praticado só será obrigatório se ele ou a % de desconto estiverem marcados para exportação. Um item selecionado sem Winthor, sem PVENDA1 ou não localizado bloqueia o Excel até ser corrigido ou removido.
           </div>
 
           {!importedCodes.size ? (
@@ -324,12 +369,34 @@ export function CriacaoComboPage() {
                       </tr>
                     );
                   })}
+
+                  {blockedSelections.map(selection => {
+                    const product = selection.product;
+                    return (
+                      <tr key={`blocked-${selection.code}`}>
+                        <td className="is-strong">{selection.code}</td>
+                        <td>
+                          <div className="is-strong" style={{ color: '#fca5a5' }}>{product?.descricao || 'Item conhecido com cadastro incompleto'}</div>
+                          <div className="is-muted" style={{ marginTop: '3px', fontSize: '0.7rem' }}>
+                            {product?.ean ? `EAN ${product.ean} · ` : ''}{selection.reasons.join(' · ') || 'Item não elegível para exportação'}
+                          </div>
+                        </td>
+                        <td className="is-right">{product && Number.isFinite(product.vendaUnitario) && product.vendaUnitario > 0 ? formatCurrency(product.vendaUnitario) : <span className="is-muted">—</span>}</td>
+                        <td className="is-right"><span className="is-muted">—</span></td>
+                        <td className="is-right"><span className="panel-badge panel-badge-amber">BLOQUEADO</span></td>
+                        <td className="is-right">
+                          <button type="button" className="panel-secondary-button" aria-label={`Excluir código ${selection.code}`} onClick={() => removeSelectedCode(selection.code)}>Excluir</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
                   {unmatchedCodes.map(code => (
                     <tr key={`unmatched-${code}`}>
                       <td className="is-strong">{code}</td>
                       <td>
                         <div className="is-strong" style={{ color: '#fca5a5' }}>Item não encontrado</div>
-                        <div className="is-muted" style={{ marginTop: '3px', fontSize: '0.7rem' }}>Revise o EAN/código informado e adicione o correto.</div>
+                        <div className="is-muted" style={{ marginTop: '3px', fontSize: '0.7rem' }}>O código não existe no catálogo canônico atual. Revise o EAN/código ou remova a pendência.</div>
                       </td>
                       <td className="is-right"><span className="is-muted">—</span></td>
                       <td className="is-right"><span className="is-muted">—</span></td>
@@ -373,12 +440,14 @@ export function CriacaoComboPage() {
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <span className="panel-badge">PRODUTOS · {comboProducts.length}</span>
+            {unresolvedProductCount > 0 ? <span className="panel-badge panel-badge-amber">PENDÊNCIAS PRODUTO · {unresolvedProductCount}</span> : null}
             {exportOptions.includeClients ? <span className="panel-badge">CLIENTES · {resolvedClientCount}/{selectedClients.length}</span> : <span className="panel-badge">CLIENTES · FORA DO EXCEL</span>}
             <button type="button" className="panel-primary-button" onClick={downloadExcel} disabled={!canExport} style={{ marginLeft: 'auto' }}>Gerar Excel</button>
           </div>
 
-          {!productsReady && comboProducts.length === 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Adicione ao menos um produto para gerar o Excel.</div> : null}
-          {!productsReady && comboProducts.length > 0 && needsPracticedPrice ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Como Preço Praticado ou % de Desconto está marcado, preencha o preço praticado de todos os produtos.</div> : null}
+          {unresolvedProductCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Existem {unresolvedProductCount} item{unresolvedProductCount === 1 ? '' : 's'} selecionado{unresolvedProductCount === 1 ? '' : 's'} sem condição de exportação. Corrija o cadastro/preço ou exclua a pendência antes de gerar o Excel.</div> : null}
+          {!productsReady && comboProducts.length === 0 && unresolvedProductCount === 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Adicione ao menos um produto para gerar o Excel.</div> : null}
+          {!productsReady && comboProducts.length > 0 && unresolvedProductCount === 0 && needsPracticedPrice ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>Como Preço Praticado ou % de Desconto está marcado, preencha o preço praticado de todos os produtos.</div> : null}
           {exportOptions.includeClients && selectedClients.length === 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>A aba Clientes está marcada. Adicione ao menos um cliente ou desmarque essa opção.</div> : null}
           {exportOptions.includeClients && unresolvedClientCount > 0 ? <div style={{ color: '#fca5a5', fontSize: '0.74rem', marginTop: '12px' }}>{unresolvedClientCount} cliente{unresolvedClientCount === 1 ? '' : 's'} sem código Winthor confirmado. O Excel será gerado normalmente e esses códigos ficarão em branco.</div> : null}
         </PanelCard>
@@ -387,7 +456,7 @@ export function CriacaoComboPage() {
           <PanelSectionHeader
             eyebrow="CLIENTES"
             title="Clientes do Combo"
-            description="Adicione um CNPJ manualmente ou importe uma lista. O código Winthor vem do Customer Master canônico; vínculos observados no 8022 servem apenas como confirmação dentro da mesma base."
+            description="Adicione um CNPJ manualmente ou importe uma lista. O Customer Master canônico é a autoridade do código Winthor; vínculos observados no 8022 ficam visíveis como confirmação ou divergência."
             action={<span className="panel-badge">{exportOptions.includeClients ? 'INCLUIR NO EXCEL' : 'FORA DO EXCEL'}</span>}
           />
 
@@ -453,28 +522,32 @@ export function CriacaoComboPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {selectedClients.map(client => (
-                    <tr key={client.cnpj}>
-                      <td className="is-strong">{formatCnpj(client.cnpj)}</td>
-                      <td>{client.name || <span className="is-muted">—</span>}</td>
-                      <td>
-                        <input
-                          className="panel-input"
-                          aria-label={`Código Winthor do cliente ${client.cnpj}`}
-                          inputMode="numeric"
-                          value={client.rawCode}
-                          placeholder="Código Winthor"
-                          onChange={event => updateClientCode(client.cnpj, event.target.value)}
-                          style={{ width: '150px', minHeight: '34px', padding: '6px 8px' }}
-                        />
-                        {client.source === 'CONFLITO CANÔNICO' ? <div style={{ color: '#fca5a5', fontSize: '0.68rem', marginTop: '4px' }}>Códigos encontrados: {client.possibleCodes.join(', ')}</div> : null}
-                      </td>
-                      <td>
-                        <span className={`panel-badge${client.source === 'BASE CANÔNICA' ? '' : client.clientCode ? '' : ' panel-badge-amber'}`}>{client.source}</span>
-                      </td>
-                      <td className="is-right"><button type="button" className="panel-secondary-button" onClick={() => removeClient(client.cnpj)}>Remover</button></td>
-                    </tr>
-                  ))}
+                  {selectedClients.map(client => {
+                    const hasConflict = client.source.includes('DIVERGE') || client.source.includes('CONFLITO');
+                    return (
+                      <tr key={client.cnpj}>
+                        <td className="is-strong">{formatCnpj(client.cnpj)}</td>
+                        <td>{client.name || <span className="is-muted">—</span>}</td>
+                        <td>
+                          <input
+                            className="panel-input"
+                            aria-label={`Código Winthor do cliente ${client.cnpj}`}
+                            inputMode="numeric"
+                            value={client.rawCode}
+                            placeholder="Código Winthor"
+                            onChange={event => updateClientCode(client.cnpj, event.target.value)}
+                            style={{ width: '150px', minHeight: '34px', padding: '6px 8px' }}
+                          />
+                          {client.source === 'CUSTOMER MASTER · DIVERGE 8022' ? <div style={{ color: '#fca5a5', fontSize: '0.68rem', marginTop: '4px' }}>Customer Master: {client.masterCode || '—'} · 8022 observado: {client.possibleCodes.join(', ') || '—'}</div> : null}
+                          {client.source === 'CONFLITO 8022' ? <div style={{ color: '#fca5a5', fontSize: '0.68rem', marginTop: '4px' }}>Códigos observados no 8022: {client.possibleCodes.join(', ')}</div> : null}
+                        </td>
+                        <td>
+                          <span className={`panel-badge${hasConflict || !client.clientCode ? ' panel-badge-amber' : ''}`}>{client.source}</span>
+                        </td>
+                        <td className="is-right"><button type="button" className="panel-secondary-button" onClick={() => removeClient(client.cnpj)}>Remover</button></td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
