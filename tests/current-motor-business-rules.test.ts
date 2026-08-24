@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as XLSX from 'xlsx';
 import { runItemMotor } from '../src/services/motors/itemMotor.ts';
-import { buildInboundFacts, buildTargets } from '../src/services/motors/salesMotor.ts';
+import { buildInboundFacts, buildTargets, parseSales8022 } from '../src/services/motors/salesMotor.ts';
 import { calculateUnifiedSummary } from '../src/services/motors/calculationService.ts';
 
 const item = (overrides:Record<string,unknown>={}) => ({
@@ -88,4 +88,20 @@ test('Bússola preserva meta sem RCA resolvido e mapeia somente pelo código leg
   assert.equal(result.targets.reduce((sum,row)=>sum+row.salesTarget,0),1500);
   assert.equal(result.targets.find(row=>row.legacyRcaCode==='701')?.assignmentStatus,'RESOLVED');
   assert.equal(result.targets.find(row=>row.legacyRcaCode==='999')?.assignmentStatus,'UNRESOLVED_RCA');
+});
+
+test('códigos inteiros serializados pelo Excel preservam a correspondência dos motores',()=>{
+  const rows286=[['11',123,'Produto','','','','','',0,0,0,0,0,0,0,0,0,'7891000000011','MAT1']];
+  const rows105=[['Código','Descrição','Qt.Est.','Custo','PVenda'],['123.0','Produto',10,5,10]];
+  const result=runItemMotor({normalized286Rows:rows286 as any,stock105Rows:rows105 as any,stock8013Rows:[],priceListRows:[],launchRows:[],pctabprWorkbook:null,previousItems:[]});
+  assert.equal(result.items.find(item=>item.winthorCode==='123')?.physicalStockUnits,10);
+  assert.equal(result.qualityIssues.some(issue=>issue.code==='STOCK_105_CODE_NOT_IN_ITEM_MASTER'),false);
+});
+
+test('8022 resolve RCA oficial também pelo código legado',()=>{
+  const header=['DATA MOVIMENTO','STATUS PEDIDO','VALOR R$ NF','CNPJ/CPF CLIENTE','COD. VENDEDOR','CODPROD. WINTHOR','TIPO VENDA'];
+  const row=['2026-08-23','FATURADO',100,'00123456000199','701','100','VENDA'];
+  const result=parseSales8022([header,row] as any,[item()], [{rcaCanonicalId:'RCA:1701',currentRcaCode:'1701',legacyRcaCode:'701'}] as any);
+  assert.equal(result.facts[0].rcaAssignmentStatus,'RESOLVED');
+  assert.equal(result.qualityIssues.some(issue=>issue.code==='SALES_RCA_NOT_OFFICIAL'),false);
 });
