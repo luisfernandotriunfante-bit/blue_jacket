@@ -33,7 +33,7 @@ test('Redes fecha venda com CNPJ válido em SEM REDE e associa Top por CNPJ, nã
     ],
     topRetailerSnapshots:[
       {cnpj:'00111111000111',topRetailerNetwork:'REDE ROTEIRO DIFERENTE',target:70,isTopRetailerActive:true,storeName:'Loja A',topTradeName:'A',topCity:'Campo Grande',managerCnpj:'',groupCode:'',topCategory:'OURO',storeType:'LOJA'},
-      {cnpj:'00222222000122',topRetailerNetwork:'OUTRA REDE ROTEIRO',target:30,isTopRetailerActive:true,storeName:'Loja B',topTradeName:'B',topCity:'Campo Grande',managerCnpj:'',groupCode:'',topCategory:'PRATA',storeType:'LOJA'},
+      {cnpj:'00222222000122',topRetailerNetwork:'',target:30,isTopRetailerActive:true,storeName:'Loja B',topTradeName:'B',topCity:'Campo Grande',managerCnpj:'',groupCode:'',topCategory:'PRATA',storeType:'LOJA'},
     ],
   } as any;
   const networks = buildNetworks(unified, { ...DEFAULT_MANUAL_CONFIGURATION, networkTargets:{'REDE PREMISSAS':200} });
@@ -72,6 +72,17 @@ test('Redes usa a Premissas mais recente e Meta Tops considera somente CNPJs Top
   assert.equal(nova.topTarget,80);
   assert.equal(nova.topAttainment,100/80);
   assert.equal(nova.gapToTopTarget,0);
+});
+
+test('Redes usa Roteiro como fallback por CNPJ quando Premissas não possui o cliente', () => {
+  const unified = {
+    customerClassifications: [],
+    salesFacts: [{ cnpj:'00555555000155', salesStatus:'FATURADO', value:80 }],
+    topRetailerSnapshots: [{ cnpj:'00555555000155', topRetailerNetwork:'REDE ROTEIRO', target:0, isTopRetailerActive:false, storeName:'Loja', topTradeName:'Loja', topCity:'Campo Grande', managerCnpj:'', groupCode:'', topCategory:'', storeType:'LOJA' }],
+  } as any;
+  const networks = buildNetworks(unified, DEFAULT_MANUAL_CONFIGURATION);
+  assert.equal(networks.find(network => network.name === 'REDE ROTEIRO')?.total, 80);
+  assert.equal(networks.some(network => network.name === 'SEM REDE'), false);
 });
 
 test('Clientes & Sortimento usa exclusivamente isLaunch do ITEM_MASTER canônico, não o rótulo do sortimento', () => {
