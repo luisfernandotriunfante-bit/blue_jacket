@@ -16,6 +16,7 @@ import type { SourceAudit, SourceKind } from '../domain/canonical';
 import { ReconciliationAuditPanel } from '../ui/audit/ReconciliationAuditPanel';
 import { PanelAlert, PanelCard, PanelDisclosure, PanelPage, PanelSectionHeader, PanelTabs } from '../ui/pattern/PanelVisual';
 import { listCanonicalSnapshots, type CanonicalSnapshotRecord } from '../store/snapshotHistory';
+import { buildAuditNotices, summarizeQualityIssues, type AuditNotice, type QualityIssueSummary } from '../domain/auditPresentation';
 
 type SourceGroup = 'Rotina diária' | 'Mensal / competência' | 'Apoio / quando mudar' | 'Histórico';
 type SourceUi = {
@@ -28,15 +29,6 @@ type SourceUi = {
   frequency: string;
   group: SourceGroup;
   required?: boolean;
-};
-
-type QualityIssueSummary = {
-  key: string;
-  code: string;
-  severity: 'ERROR' | 'WARNING' | 'INFO';
-  message: string;
-  source: string;
-  count: number;
 };
 
 const SOURCES: SourceUi[] = [
@@ -177,29 +169,17 @@ export function ConfiguracoesPage() {
         : Boolean(source.kind && audits.get(source.kind)?.loaded);
   const loadedCount = SOURCES.filter(isLoaded).length;
 
-  const qualitySummary = useMemo<QualityIssueSummary[]>(() => {
-    if (!isUnifiedCanonicalState(canonical)) return [];
-    const grouped = new Map<string, QualityIssueSummary>();
-    for (const issue of canonical.unified.qualityIssues) {
-      const key = `${issue.severity}|${issue.code}|${issue.source}|${issue.message}`;
-      const current = grouped.get(key);
-      if (current) current.count += 1;
-      else grouped.set(key, { key, code: issue.code, severity: issue.severity, message: issue.message, source: issue.source, count: 1 });
-    }
-    const rank = { ERROR: 0, WARNING: 1, INFO: 2 } as const;
-    return Array.from(grouped.values()).sort((left, right) => rank[left.severity] - rank[right.severity] || right.count - left.count || left.code.localeCompare(right.code));
-  }, [canonical]);
+  const qualitySummary = useMemo<QualityIssueSummary[]>(() => isUnifiedCanonicalState(canonical) ? summarizeQualityIssues(canonical.unified.qualityIssues) : [], [canonical]);
   const qualityCounts = useMemo(() => {
     if (!isUnifiedCanonicalState(canonical)) return { total: 0, ERROR: 0, WARNING: 0, INFO: 0 };
     return canonical.unified.qualityIssues.reduce((acc, issue) => { acc.total += 1; acc[issue.severity] += 1; return acc; }, { total: 0, ERROR: 0, WARNING: 0, INFO: 0 });
   }, [canonical]);
-  const auditNotices = useMemo(() => {
-    const notices = (canonical?.warnings || []).map(warning => ({ severity: 'WARNING', text: warning, action: 'Revise a fonte mencionada e processe um lote atualizado em Atualizar lote.' }));
-    SOURCES.filter(source => source.required && source.kind && !audits.get(source.kind)?.loaded).forEach(source => {
-      notices.push({ severity: 'BLOCKED', text: `${source.label}: fonte principal ainda não carregada.`, action: `Carregue ${source.label} em Atualizar lote e processe o arquivo.` });
-    });
-    return notices;
-  }, [canonical, audits]);
+  const auditNotices = useMemo<AuditNotice[]>(() => buildAuditNotices({
+    warnings: canonical?.warnings,
+    checks: canonical?.reconciliation?.checks,
+    qualityIssues: isUnifiedCanonicalState(canonical) ? canonical.unified.qualityIssues : [],
+    sources: SOURCES.map(source => ({ id: source.id, label: source.label, required: source.required, loaded: isLoaded(source) })),
+  }), [canonical, audits, unifiedSources, operationalState]);
 
   return <PanelPage title="Configurações" metricLabel="Fontes registradas" metricValue={`${loadedCount}/${SOURCES.length}`}>
     {dataNotice ? <PanelAlert tone="warning"><div style={{ display: 'flex', gap: '16px', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}><div><strong>Base salva precisa ser reconstruída</strong><div style={{ marginTop: '4px', maxWidth: '1100px' }}>{dataNotice}</div></div><button className="panel-secondary-button" onClick={clearDataNotice}>Entendi</button></div></PanelAlert> : null}
@@ -221,8 +201,8 @@ export function ConfiguracoesPage() {
     {activeView === 'continuity' ? <div id="config-continuidade">{portfolioContinuity ? <PortfolioContinuityPanel snapshot={portfolioContinuity} /> : null}<FrozenSnapshotsPanel snapshots={frozenSnapshots} /></div> : null}
 
     {activeView === 'audit' ? <div id="config-auditoria">{canonical ? <PanelDisclosure eyebrow="RECONCILIAÇÃO" title="Validação em três níveis" description="Abra para conferir cada teste, fonte, esperado, calculado e status." action={<span className="panel-badge">{canonical.reconciliation?.checks?.length || 0} testes</span>}><ReconciliationAuditPanel checks={canonical.reconciliation?.checks || []} /></PanelDisclosure> : null}
-    <PanelCard><PanelSectionHeader eyebrow="AVISOS CONSOLIDADOS" title="Central de avisos do sistema" description="Cada aviso explica o problema e a ação correspondente. Resolva primeiro os bloqueios, depois as divergências." action={<span className="panel-badge">{auditNotices.length} pendência(s)</span>} />{auditNotices.length ? <div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{auditNotices.map((notice, index) => <div key={`${notice.text}-${index}`} className={`panel-alert panel-alert-${notice.severity === 'BLOCKED' ? 'warning' : 'info'}`}><div style={{ display: 'grid', gap: '4px' }}><strong>{notice.severity === 'BLOCKED' ? 'BLOQUEADO · AÇÃO NECESSÁRIA' : 'ATENÇÃO · REVISAR'}</strong><span>{notice.text}</span><span style={{ fontSize: '.7rem', color: 'var(--panel-muted)' }}><strong>Próximo passo:</strong> {notice.action}</span></div></div>)}</div> : <PanelAlert tone="success">Nenhum aviso pendente na fotografia atual.</PanelAlert>}</PanelCard>
-    {qualitySummary.length > 0 ? <PanelCard><PanelSectionHeader eyebrow="AUDITORIA DOS MOTORES" title="Qualidade da fotografia" description="Cada causa informa a fonte envolvida e o próximo passo. A contagem agrupa ocorrências iguais para não repetir milhares de linhas." action={<span className="panel-badge">{fmtNumber(qualityCounts.total)} ocorrência(s)</span>} /><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '14px' }}><span className="panel-badge" style={{ color: '#fca5a5' }}>ERROS · {fmtNumber(qualityCounts.ERROR)}</span><span className="panel-badge" style={{ color: '#fcd34d' }}>ALERTAS · {fmtNumber(qualityCounts.WARNING)}</span><span className="panel-badge">INFORMAÇÕES · {fmtNumber(qualityCounts.INFO)}</span><span className="panel-badge">CAUSAS · {fmtNumber(qualitySummary.length)}</span></div><div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{qualitySummary.slice(0, 30).map(issue => <div key={issue.key} style={{ color: issue.severity === 'ERROR' ? '#fca5a5' : issue.severity === 'WARNING' ? '#fcd34d' : 'var(--panel-muted)', fontSize: '.78rem', padding: '10px 11px', border: '1px solid rgba(255,255,255,.08)', borderRadius: '9px', display: 'grid', gap: '5px' }}><div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap' }}><div style={{ minWidth: 0, flex: '1 1 620px' }}><strong>{issue.code}</strong> · {issue.message}{issue.source ? <div style={{ fontSize: '.66rem', marginTop: '4px', color: 'var(--panel-muted)' }}>Fonte: {issue.source}</div> : null}</div><span className="panel-badge">{fmtNumber(issue.count)} ocorrência(s)</span></div><div style={{ fontSize: '.7rem', color: issue.severity === 'INFO' ? 'var(--panel-muted)' : '#fcd34d' }}><strong>Próximo passo:</strong> {qualityAction(issue.code)}</div></div>)}</div>{qualitySummary.length > 30 ? <PanelAlert tone="info">Exibindo as 30 causas prioritárias de {fmtNumber(qualitySummary.length)}. Nenhuma ocorrência foi descartada do motor; apenas a apresentação foi resumida.</PanelAlert> : null}</PanelCard> : null}
+    <PanelCard><PanelSectionHeader eyebrow="AVISOS CONSOLIDADOS" title="Central de avisos do sistema" description="Cada aviso explica o problema e a ação correspondente. Resolva primeiro os bloqueios, depois as divergências." action={<span className="panel-badge">{auditNotices.length} pendência(s)</span>} />{auditNotices.length ? <div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{auditNotices.map((notice, index) => <div key={`${notice.text}-${index}`} className={`panel-alert panel-alert-${notice.severity === 'BLOCKED' || notice.severity === 'DIVERGENT' || notice.severity === 'ERROR' ? 'warning' : 'info'}`}><div style={{ display: 'grid', gap: '4px' }}><strong>{notice.severity === 'BLOCKED' ? 'BLOQUEADO · AÇÃO NECESSÁRIA' : notice.severity === 'DIVERGENT' || notice.severity === 'ERROR' ? 'DIVERGENTE · CORREÇÃO NECESSÁRIA' : 'ATENÇÃO · REVISAR'}</strong><span>{notice.text}</span><span style={{ fontSize: '.7rem', color: 'var(--panel-muted)' }}><strong>Próximo passo:</strong> {notice.action}</span></div></div>)}</div> : <PanelAlert tone="success">Nenhum aviso pendente na fotografia atual.</PanelAlert>}</PanelCard>
+    {qualitySummary.length > 0 ? <PanelCard><PanelSectionHeader eyebrow="AUDITORIA DOS MOTORES" title="Qualidade da fotografia" description="Cada causa informa a fonte envolvida, exemplos de entidades afetadas e o próximo passo. A contagem agrupa ocorrências iguais sem esconder a população." action={<span className="panel-badge">{fmtNumber(qualityCounts.total)} ocorrência(s)</span>} /><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '14px' }}><span className="panel-badge" style={{ color: '#fca5a5' }}>ERROS · {fmtNumber(qualityCounts.ERROR)}</span><span className="panel-badge" style={{ color: '#fcd34d' }}>ALERTAS · {fmtNumber(qualityCounts.WARNING)}</span><span className="panel-badge">INFORMAÇÕES · {fmtNumber(qualityCounts.INFO)}</span><span className="panel-badge">CAUSAS · {fmtNumber(qualitySummary.length)}</span></div><div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{qualitySummary.slice(0, 30).map(issue => <div key={issue.key} style={{ color: issue.severity === 'ERROR' ? '#fca5a5' : issue.severity === 'WARNING' ? '#fcd34d' : 'var(--panel-muted)', fontSize: '.78rem', padding: '10px 11px', border: '1px solid rgba(255,255,255,.08)', borderRadius: '9px', display: 'grid', gap: '5px' }}><div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap' }}><div style={{ minWidth: 0, flex: '1 1 620px' }}><strong>{issue.code}</strong> · {issue.message}{issue.source ? <div style={{ fontSize: '.66rem', marginTop: '4px', color: 'var(--panel-muted)' }}>Fonte: {issue.source}</div> : null}{issue.entities.length ? <div style={{ fontSize: '.66rem', marginTop: '4px', color: 'var(--panel-muted)' }}>Exemplos afetados: {issue.entities.join(', ')}{issue.count > issue.entities.length ? ' …' : ''}</div> : null}</div><span className="panel-badge">{fmtNumber(issue.count)} ocorrência(s)</span></div><div style={{ fontSize: '.7rem', color: issue.severity === 'INFO' ? 'var(--panel-muted)' : '#fcd34d' }}><strong>Próximo passo:</strong> {qualityAction(issue.code)}</div></div>)}</div>{qualitySummary.length > 30 ? <PanelAlert tone="info">Exibindo as 30 causas prioritárias de {fmtNumber(qualitySummary.length)}. Nenhuma ocorrência foi descartada do motor; apenas a apresentação foi resumida.</PanelAlert> : null}</PanelCard> : null}
     {canonical?.warnings.length ? <PanelCard><PanelSectionHeader eyebrow="VALIDAÇÃO" title="Pendências conhecidas" description="Somente situações que ainda precisam de dado ou conciliação." /><div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{canonical.warnings.map((warning, index) => <div key={`${warning}-${index}`} style={{ color: 'var(--panel-amber-soft)', fontSize: '.82rem', padding: '10px 12px', border: '1px solid rgba(245,158,11,0.2)', background: 'rgba(245,158,11,0.06)', borderRadius: '10px' }}>{warning}</div>)}</div></PanelCard> : null}</div> : null}
   </PanelPage>;
 }
