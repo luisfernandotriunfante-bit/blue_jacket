@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useData } from '../store/DataContext';
 import { buildStockPresentation } from '../domain/stockModel';
+import { hasPendingPortfolio } from '../domain/stockUi';
 import { PanelCard, PanelEmptyState, PanelKpi, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 import '../ui/stock/stock-layout.css';
 
@@ -15,25 +16,17 @@ function formatNumber(value: number, digits = 0) {
 export function LancamentosPage() {
   const { canonical } = useData();
   const [searchTerm, setSearchTerm] = useState('');
+  const inventory = canonical?.inventory || [];
+  const hasStock105 = Boolean(canonical?.sources.some(source => source.kind === 'stock105' && source.loaded));
 
-  if (!canonical) {
-    return (
-      <PanelPage title="Lançamentos">
-        <PanelEmptyState variant="page" title="Nenhum dado carregado" description={<>Vá até <strong>Configurações</strong> e carregue a Lista Oficial de Lançamentos junto das bases operacionais.</>} />
-      </PanelPage>
-    );
-  }
-
-  const inventory = canonical.inventory;
-  const hasStock105 = canonical.sources.some(source => source.kind === 'stock105' && source.loaded);
   const presentation = useMemo(() => buildStockPresentation({
     inventory,
-    productSupport: canonical.support.products,
-    itemCodeSupport: canonical.support.itemCodes,
-    transactions: canonical.transactions,
-    businessDaysElapsed: canonical.sellOut.businessDaysElapsed,
-    stockCostValue: canonical.stock.costValue,
-    stockSaleValue: canonical.stock.saleValue,
+    productSupport: canonical?.support.products || [],
+    itemCodeSupport: canonical?.support.itemCodes || [],
+    transactions: canonical?.transactions || [],
+    businessDaysElapsed: canonical?.sellOut.businessDaysElapsed || 0,
+    stockCostValue: canonical?.stock.costValue || 0,
+    stockSaleValue: canonical?.stock.saleValue || 0,
     hasStock105,
   }), [canonical, inventory, hasStock105]);
 
@@ -58,8 +51,17 @@ export function LancamentosPage() {
     return acc;
   }, { currentCost: 0, currentSale: 0, projectedCost: 0, projectedSale: 0 }), [launches, inventoryByCode, inventoryByEan]);
 
+  if (!canonical) {
+    return (
+      <PanelPage title="Lançamentos">
+        <PanelEmptyState variant="page" title="Nenhum dado carregado" description={<>Vá até <strong>Configurações</strong> e carregue a Lista Oficial de Lançamentos junto das bases operacionais.</>} />
+      </PanelPage>
+    );
+  }
+
   const withStock = launches.filter(product => product.physicalTotalUnits > 0).length;
-  const inPortfolio = launches.filter(product => product.pendingUnits > 0 || product.pendingCases > 0).length;
+  const inPortfolio = launches.filter(hasPendingPortfolio).length;
+  const noWinthor = launches.filter(product => !product.hasWinthor && hasPendingPortfolio(product)).length;
   const withSales = launches.filter(product => product.soldUnits > 0).length;
 
   return (
@@ -68,7 +70,7 @@ export function LancamentosPage() {
         <div className="panel-grid panel-grid-4">
           <PanelKpi label="Lançamentos" value={formatNumber(launches.length)} detail={`${formatNumber(withStock)} com estoque · ${formatNumber(withSales)} com faturamento`} tone="purple" />
           <PanelKpi label="Com estoque" value={formatNumber(withStock)} detail={`${formatNumber(Math.max(launches.length - withStock, 0))} sem estoque físico`} tone="green" />
-          <PanelKpi label="Na Carteira" value={formatNumber(inPortfolio)} detail="Entrada prevista ainda pendente" tone="blue" />
+          <PanelKpi label="Na Carteira" value={formatNumber(inPortfolio)} detail={`Entrada prevista · ${formatNumber(noWinthor)} sem Winthor`} tone="blue" />
           <PanelKpi label="Potencial projetado" value={formatCurrency(totals.projectedSale)} detail={`Após reserva + Carteira · Custo proj.: ${formatCurrency(totals.projectedCost)}`} tone="red" />
         </div>
 
@@ -76,17 +78,17 @@ export function LancamentosPage() {
           <PanelSectionHeader
             eyebrow="PORTFÓLIO"
             title={`Catálogo oficial · ${filtered.length} de ${launches.length}`}
-            description="Lançamento é definido exclusivamente pela Lista Oficial por EAN. A classificação permanece na base canônica entre cargas parciais."
+            description="Lançamento é definido exclusivamente pela Lista Oficial por EAN. Físico, reserva, disponível, Carteira e projetado permanecem separados; a Carteira usa Un/CX indústria."
             action={<input className="panel-input panel-input-search" type="text" value={searchTerm} placeholder="Buscar código, EAN, fabricante, produto..." onChange={event => setSearchTerm(event.target.value)} />}
           />
           <div className="panel-table-wrap stock-table-compact"><table className="panel-table">
-            <thead><tr><th>Código</th><th>Produto</th><th className="is-right">Un/CX interno</th><th className="is-right">Cx físicas</th><th className="is-right">Avulsas</th><th className="is-right">Físico un.</th><th className="is-right">Carteira cx</th><th className="is-right">Carteira un.</th><th className="is-right">Projetado</th><th className="is-right">Faturado mês (un.)</th><th className="is-right">Cobertura</th><th className="is-right">Custo un.</th><th className="is-right">PVENDA1</th><th className="is-right">Valor físico a venda</th><th>Status</th></tr></thead>
-            <tbody>{filtered.length ? filtered.map(product => <tr key={`${product.ean}-${product.code}`}>
+            <thead><tr><th>Código</th><th>Produto</th><th className="is-right">Un/CX interno</th><th className="is-right">Un/CX indústria</th><th className="is-right">Cx físicas</th><th className="is-right">Avulsas</th><th className="is-right">Físico un.</th><th className="is-right">Reservado</th><th className="is-right">Disponível</th><th className="is-right">Carteira cx</th><th className="is-right">Carteira un.</th><th className="is-right">Projetado</th><th className="is-right">Faturado mês (un.)</th><th className="is-right">Cobertura ritmo faturado</th><th className="is-right">Custo un.</th><th className="is-right">PVENDA1</th><th className="is-right">Valor físico a venda</th><th>Status</th></tr></thead>
+            <tbody>{filtered.length ? filtered.map(product => { const productInPortfolio = hasPendingPortfolio(product); return <tr key={`${product.ean}-${product.code}`}>
               <td className="is-strong">{product.code.startsWith('EAN-') ? '—' : product.code}</td>
               <td className="stock-product-cell"><div className="stock-product-name">{product.description}</div><div className="stock-product-meta">EAN: {product.ean || '—'} · Fab: {product.factoryCode || '—'}{product.brand ? ` · ${product.brand}` : ''}</div></td>
-              <td className="is-right">{product.unitsPerCase > 0 ? formatNumber(product.unitsPerCase, 2) : '—'}</td><td className="is-right">{formatNumber(product.physicalCases, 2)}</td><td className="is-right">{formatNumber(product.looseUnits)}</td><td className="is-right is-strong">{formatNumber(product.physicalTotalUnits)}</td><td className="is-right">{formatNumber(product.pendingCases, 2)}</td><td className="is-right is-blue">{formatNumber(product.pendingUnits)}</td><td className="is-right is-strong">{formatNumber(product.projectedUnits)}</td><td className="is-right">{formatNumber(product.soldUnits)}</td><td className="is-right">{product.coverageDays === null ? '—' : `${formatNumber(product.coverageDays, 1)} dias`}</td><td className="is-right is-muted">{product.costUnit > 0 ? formatCurrency(product.costUnit) : '—'}</td><td className="is-right">{product.saleUnit > 0 ? formatCurrency(product.saleUnit) : '—'}</td><td className="is-right is-strong">{formatCurrency(product.positionSaleValue)}</td>
-              <td><div className="panel-badges"><span className="panel-badge panel-badge-purple">LANÇAMENTO</span>{product.physicalTotalUnits > 0 ? <span className="panel-badge panel-badge-green">COM ESTOQUE</span> : <span className="panel-badge panel-badge-red">SEM ESTOQUE</span>}{product.pendingUnits > 0 && <span className="panel-badge panel-badge-blue">EM CARTEIRA</span>}{!product.hasWinthor && product.pendingUnits > 0 && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}</div></td>
-            </tr>) : <tr><td colSpan={15}><PanelEmptyState variant="compact" title="Nenhum lançamento encontrado" description="Revise o termo de busca ou a Lista Oficial de Lançamentos carregada em Configurações." /></td></tr>}</tbody>
+              <td className="is-right">{product.unitsPerCase > 0 ? formatNumber(product.unitsPerCase, 2) : '—'}</td><td className="is-right">{product.industryUnitsPerCase > 0 ? formatNumber(product.industryUnitsPerCase, 2) : '—'}</td><td className="is-right">{formatNumber(product.physicalCases, 2)}</td><td className="is-right">{formatNumber(product.looseUnits)}</td><td className="is-right is-strong">{formatNumber(product.physicalTotalUnits)}</td><td className="is-right">{formatNumber(product.reservedUnits)}</td><td className="is-right is-green">{formatNumber(product.availableUnits)}</td><td className="is-right">{formatNumber(product.pendingCases, 2)}</td><td className="is-right is-blue">{formatNumber(product.pendingUnits)}</td><td className="is-right is-strong">{formatNumber(product.projectedUnits)}</td><td className="is-right">{formatNumber(product.soldUnits)}</td><td className="is-right">{product.coverageDays === null ? '—' : `${formatNumber(product.coverageDays, 1)} dias`}</td><td className="is-right is-muted">{product.costUnit > 0 ? formatCurrency(product.costUnit) : '—'}</td><td className="is-right">{product.saleUnit > 0 ? formatCurrency(product.saleUnit) : '—'}</td><td className="is-right is-strong">{formatCurrency(product.positionSaleValue)}</td>
+              <td><div className="panel-badges"><span className="panel-badge panel-badge-purple">LANÇAMENTO</span>{product.physicalTotalUnits > 0 ? <span className="panel-badge panel-badge-green">COM ESTOQUE</span> : <span className="panel-badge panel-badge-red">SEM ESTOQUE</span>}{productInPortfolio && <span className="panel-badge panel-badge-blue">EM CARTEIRA</span>}{!product.hasWinthor && productInPortfolio && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}</div></td>
+            </tr>; }) : <tr><td colSpan={18}><PanelEmptyState variant="compact" title="Nenhum lançamento encontrado" description="Revise o termo de busca ou a Lista Oficial de Lançamentos carregada em Configurações." /></td></tr>}</tbody>
           </table></div>
         </PanelCard>
       </div>
