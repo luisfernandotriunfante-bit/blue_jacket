@@ -46,13 +46,13 @@ export function buildComboWorkbook(
     columns.push({ header: 'Preço de Tabela', width: 18, value: product => product.tablePrice, format: 'R$ #,##0.00' });
   }
   if (options.includePracticedPrice) {
-    columns.push({ header: 'Preço Praticado', width: 18, value: product => product.practicedPrice ?? 0, format: 'R$ #,##0.00' });
+    columns.push({ header: 'Preço Praticado', width: 18, value: product => product.practicedPrice ?? '', format: 'R$ #,##0.00' });
   }
   if (options.includeDiscount) {
     columns.push({
       header: '% de Desconto',
       width: 16,
-      value: product => comboDiscount(product.tablePrice, product.practicedPrice) ?? 0,
+      value: product => comboDiscount(product.tablePrice, product.practicedPrice) ?? '',
       format: '0.00%',
     });
   }
