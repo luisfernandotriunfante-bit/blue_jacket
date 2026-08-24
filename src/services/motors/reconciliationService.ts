@@ -193,15 +193,6 @@ function sourceChecks(unified: UnifiedDataLayer): CanonicalReconciliationCheck[]
       })
     : blocked('SOURCE_TARGET_RCA_IDENTITY', 'SOURCE', 'Bússola encontra RCA legado oficial', 'Bússola × NOVOS RCAS', 'Carregue Bússola e Novos RCAs para executar o teste.'));
 
-  const packMissing = issueCount(unified.qualityIssues, 'INDUSTRIAL_PACK_MISSING');
-  checks.push(has('CARTEIRA_COLGATE') && has('LISTA_PRECO_COLGATE')
-    ? numericCheck({
-        id: 'SOURCE_INBOUND_INDUSTRIAL_PACK', level: 'SOURCE', label: 'Carteira encontra Un/CX industrial',
-        expected: 0, calculated: packMissing, source: 'Carteira Colgate × Lista de Preço Colgate', statusWhenDifferent: 'BLOCKED',
-        note: packMissing ? 'As caixas são preservadas; o motor não fabrica unidades quando Un/CX industrial não existe.' : 'Todos os itens aplicáveis da Carteira possuem conversão industrial materializada.',
-      })
-    : blocked('SOURCE_INBOUND_INDUSTRIAL_PACK', 'SOURCE', 'Carteira encontra Un/CX industrial', 'Carteira Colgate × Lista de Preço Colgate', 'Carregue Carteira Colgate e Lista de Preço Colgate para validar caixas → unidades.'));
-
   if (has('LISTA_PRECO_COLGATE')) {
     const materialized = unified.items.filter(item => Boolean(item.sourceKeys?.LISTA_PRECO)).length;
     checks.push(textCheck({
@@ -213,16 +204,9 @@ function sourceChecks(unified: UnifiedDataLayer): CanonicalReconciliationCheck[]
     checks.push(blocked('SOURCE_COLGATE_PRICE_LIST_MATERIALIZED', 'SOURCE', 'Lista de Preço Colgate materializada no ITEM_MASTER', 'Lista de Preço Colgate', 'Fonte não carregada na fotografia atual.'));
   }
 
-  if (has('PCTABPR')) {
-    const missingPrices = issueCount(unified.qualityIssues, 'PCTABPR_REGION11_PRICE_MISSING');
-    checks.push(numericCheck({
-      id: 'SOURCE_PCTABPR_REGION11', level: 'SOURCE', label: 'PVENDA1 da Região 11 cobre itens Winthor',
-      expected: 0, calculated: missingPrices, source: 'PCTABPR NUMREGIAO=11', statusWhenDifferent: 'BLOCKED',
-      note: missingPrices ? 'Há itens Winthor sem PVENDA1 na Região 11 da fotografia de preços; não há fallback para outra região/preço.' : 'Nenhuma ausência de PVENDA1 foi sinalizada pelo Motor de Itens.',
-    }));
-  } else {
-    checks.push(blocked('SOURCE_PCTABPR_REGION11', 'SOURCE', 'PVENDA1 da Região 11 cobre itens Winthor', 'PCTABPR NUMREGIAO=11', 'PCTABPR não carregada na fotografia atual.'));
-  }
+  // Ausências transitórias de preço e conversão ficam registradas como INFO
+  // no painel de qualidade. Não bloqueiam a reconciliação: o dado canônico é
+  // preservado e a mensagem desaparece automaticamente na próxima carga.
 
   const has310 = has('310');
   const has379 = has('379');

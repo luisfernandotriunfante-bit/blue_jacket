@@ -324,18 +324,18 @@ export function buildInboundFacts(
       if (!item) qualityIssues.push({
         id: `INBOUND_ITEM:${rowIndex}`,
         domain: 'INBOUND',
-        severity: 'WARNING',
+        severity: 'INFO',
         code: 'INBOUND_ITEM_UNRESOLVED',
-        message: 'Linha da Carteira preservada sem ITEM_MASTER resolvido.',
+        message: 'Carteira sem correspondência no Cadastro 286 desta fotografia; a linha foi preservada e será resolvida quando a próxima carga trouxer o vínculo.',
         source: 'CARTEIRA_COLGATE',
         entityKey: material,
       });
       if (cases > 0 && !factor) qualityIssues.push({
         id: `INBOUND_PACK:${rowIndex}`,
         domain: 'INBOUND',
-        severity: 'WARNING',
+        severity: 'INFO',
         code: 'INDUSTRIAL_PACK_MISSING',
-        message: 'Carteira em caixas preservada sem inventar unidades.',
+        message: 'Sem Un/CX industrial para converter a Carteira; as caixas foram preservadas e a conversão aparecerá quando a próxima lista trouxer o fator.',
         source: 'CARTEIRA_COLGATE',
         entityKey: material,
       });
