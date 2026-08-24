@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import * as XLSX from 'xlsx';
+import { parseRcaMap } from '../src/services/motors/sourceParsers';
 
 test('Painel Sell Out mantém o padrão julho para todas as gerações', () => {
   const templatePath = 'public/templates/painel-sell-out-padrao.xlsx';
@@ -32,4 +33,17 @@ test('padrão do documento é uma regra interna única do sistema', () => {
   assert.match(standard, /templateFile: 'painel-sell-out-padrao-v2\.xlsx'/);
   assert.match(standard, /'SELL OUT - Milenio 2026', 'EQUIPES'/);
   assert.match(standard, /'COORD', 'NOME COORD', 'COD', 'NOME', 'META'/);
+});
+
+test('NOVOS RCAS preenche coordenador, RCA e nome nas colunas corretas', () => {
+  const rows = [
+    ['COD', 'NOME', 'COD COORD', 'NOME COORD', 'COD ANTIGO'],
+    [433, 'CLT - JOSE LUCA', 62, 'THIAGO', 130],
+    ['', '', '', '', '', '', '', '', 752, 'CLT - DEYSIANE', 56, 'FLAVIO', 752],
+  ] as any;
+  const parsed = parseRcaMap(rows);
+  assert.deepEqual(parsed.slice(0, 2), [
+    { newCode: '433', oldCode: '130', name: 'CLT - JOSE LUCA', coordinatorCode: '62', coordinatorName: 'THIAGO' },
+    { newCode: '752', oldCode: '752', name: 'CLT - DEYSIANE', coordinatorCode: '56', coordinatorName: 'FLAVIO' },
+  ]);
 });

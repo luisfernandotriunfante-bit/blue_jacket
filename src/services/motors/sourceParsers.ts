@@ -36,8 +36,10 @@ export function parseRcaMap(rows: Row[]): ParsedRcaMap[] {
     });
   };
   rows.forEach(row => {
-    add(row[0], row[2], row[3], row[4], row[5]);
-    add(row[9], row[10], row[11], row[12], row[13]);
+    // NOVOS RCAS possui dois blocos de cinco colunas:
+    // COD | NOME | COD. COORD | NOME COORD | COD. ANTIGO.
+    add(row[0], row[1], row[2], row[3], row[4]);
+    add(row[8], row[9], row[10], row[11], row[12]);
   });
   return Array.from(result.values());
 }
