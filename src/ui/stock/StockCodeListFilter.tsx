@@ -39,18 +39,14 @@ export function StockCodeListFilter({ products, codes, onChange, allowManual = f
 
       const imported = extractStockCodes(values);
       if (!imported.size) {
-        setFileName('');
-        onChange(new Set());
-        setError('Nenhum código válido foi encontrado no arquivo.');
+        setError('Nenhum código válido foi encontrado no arquivo. A seleção atual foi preservada.');
         return;
       }
 
       setFileName(file.name);
-      onChange(imported);
+      onChange(allowManual ? new Set([...codes, ...imported]) : imported);
     } catch {
-      setFileName('');
-      onChange(new Set());
-      setError('Não foi possível ler a lista de códigos.');
+      setError('Não foi possível ler a lista de códigos. A seleção atual foi preservada.');
     }
   };
 
