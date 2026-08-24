@@ -26,7 +26,6 @@ export function MetasPage() {
 
   const setField = (field: 'sellOutTarget' | 'coverageTargetDays', value: number) => setManualConfig({ ...manualConfig, [field]: Math.max(value || 0, 0) });
   const setShare = (name: (typeof LINE_NAMES)[number], value: number) => setManualConfig({ ...manualConfig, lineShares: { ...manualConfig.lineShares, [name]: Math.max(value || 0, 0) / 100 } });
-  const setPortfolioMarkup = (value: number) => setManualConfig({ ...manualConfig, portfolioSaleMarkup: Math.max(value || 0, 0) / 100 });
   const addHoliday = () => {
     if (!holidayDate) return;
     setManualConfig({ ...manualConfig, holidays: Array.from(new Set([...manualConfig.holidays, holidayDate])).sort() });
@@ -63,8 +62,8 @@ export function MetasPage() {
             <NumberField label="Meta Sell Out (T&C)" value={manualConfig.sellOutTarget} step={1000} onChange={value => setField('sellOutTarget', value)} detail="Meta manual e independente da Meta Indústria. Zero significa meta T&C não informada." />
             <NumberField label="Meta Redes Geral" value={networkTotal} step={1000} onChange={setNetworkTotal} detail="Total exclusivo das redes. Ao alterar, as metas são redistribuídas proporcionalmente." />
             <NumberField label="Meta de cobertura (dias)" value={manualConfig.coverageTargetDays} step={1} onChange={value => setField('coverageTargetDays', value)} detail="Referência usada nas visões e alertas de estoque." />
-            <NumberField label="Acréscimo de venda da Carteira (%)" value={manualConfig.portfolioSaleMarkup * 100} step={0.01} onChange={setPortfolioMarkup} detail="Parâmetro operacional versionado por configuração; não altera o valor bruto da Carteira." />
           </div>
+          <div className="panel-mini-note" style={{ marginTop: 12 }}>Carteira a venda não possui parâmetro de acréscimo: a valorização do Estoque usa exclusivamente unidades comprovadas × PVENDA1 da Região 11.</div>
         </PanelCard>
 
         <PanelCard>

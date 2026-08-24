@@ -2,8 +2,8 @@ export * from './stockModelCore';
 
 import type { CanonicalInventoryProduct, CanonicalProductSupport } from './canonical';
 import type { UnitsPerCaseSource } from './packaging';
-import type { ReceiptHeaderRecord, ReceiptItemRecord } from './unified';
-import { buildStockPresentation as buildCore } from './stockModelCore';
+import type { InboundOrderFactRecord, ItemMasterRecord, ReceiptHeaderRecord, ReceiptItemRecord } from './unified';
+import { buildStockPresentation as buildCore, isOperationalNoWinthor } from './stockModelCore';
 import type { StockMovement, StockPresentationInput as CoreStockPresentationInput, StockPresentation, StockReconciliationCheck } from './stockModelCore';
 
 export interface StockItemCodeSupport { internalCode: string; ean: string; factoryCode: string; }
@@ -23,7 +23,16 @@ export interface StockPortfolioLine {
   description: string;
   hasWinthor: boolean;
 }
-export type StockPortfolioMovement = StockMovement & { orderQtyCases?: number; billQtyCases?: number; unitsPerCase?: number; unitsPerCaseSource?: UnitsPerCaseSource; sourceRow?: number; saleValue?: number };
+export type StockPortfolioMovement = StockMovement & {
+  orderQtyCases?: number;
+  billQtyCases?: number;
+  unitsPerCase?: number;
+  unitsPerCaseSource?: UnitsPerCaseSource;
+  sourceRow?: number;
+  saleValue?: number | null;
+  receivedUnits?: number;
+  pipelineCases?: number;
+};
 type InventoryWithPackaging = CanonicalInventoryProduct & {
   internalUnitsPerCase?: number | null;
   industryUnitsPerCase?: number | null;
@@ -34,6 +43,8 @@ export type StockPresentationInputWithPackaging = CoreStockPresentationInput & {
   itemCodeSupport?: StockItemCodeSupport[];
   receiptHeaders?: ReceiptHeaderRecord[];
   receiptItems?: ReceiptItemRecord[];
+  inboundOrders?: InboundOrderFactRecord[];
+  itemMaster?: ItemMasterRecord[];
 };
 
 const clean = (value: unknown) => String(value ?? '').replace(/\D/g, '').replace(/^0+/, '');
@@ -58,8 +69,9 @@ function restoreLaunchCatalog(inventory: CanonicalInventoryProduct[], productSup
       description: master.description || `Lançamento ${ean}`,
       ean,
       quantity: 0,
-      costUnit: master.unitPrice || 0,
-      saleUnit: master.unitPrice || 0,
+      // Lista industrial/lançamentos não substitui custo 105 nem PVENDA1 PCTABPR.
+      costUnit: 0,
+      saleUnit: 0,
       pendingQty: 0,
       pendingCases: 0,
       pendingCost: 0,
@@ -86,14 +98,14 @@ function restoreLaunchCatalog(inventory: CanonicalInventoryProduct[], productSup
 /** hasWinthor é fato cadastral. O KPI e o alerta operacional Sem Winthor só dependem da presença real na Carteira. */
 function refreshOperationalNoWinthorCount(result: StockPresentation): StockPresentation {
   const products = result.products.map(product => {
-    const operationalNoWinthor = !product.hasWinthor && (product.pendingUnits > 0 || product.pendingCases > 0);
+    const operationalNoWinthor = isOperationalNoWinthor(product);
     const withoutOldAlert = product.alerts.filter(alert => alert.kind !== 'SEM_WINTHOR');
     const alerts = operationalNoWinthor
       ? [...withoutOldAlert, { id: `SEM_WINTHOR:${product.code}`, kind: 'SEM_WINTHOR' as const, severity: 'warning' as const, sku: product.code, ean: product.ean, product: product.description, message: 'Item da Carteira sem correspondência confirmada no Cadastro 286 / Winthor.' }]
       : withoutOldAlert;
     return { ...product, alerts };
   });
-  const noWinthorCount = products.filter(product => !product.hasWinthor && (product.pendingUnits > 0 || product.pendingCases > 0)).length;
+  const noWinthorCount = products.filter(isOperationalNoWinthor).length;
   return { ...result, products, alerts: products.flatMap(product => product.alerts), summary: { ...result.summary, noWinthorCount } };
 }
 
@@ -111,6 +123,7 @@ function enrichMovementPackaging(result: StockPresentation): StockPresentation {
   return { ...result, movements };
 }
 
+/** Compatibilidade com snapshots antigos que já materializavam as linhas da Carteira dentro do inventário. */
 function enrichPortfolioMovements(result: StockPresentation, inventory: CanonicalInventoryProduct[]): StockPresentation {
   const detailed: StockPortfolioMovement[] = [];
   const detailedCodes = new Set<string>();
@@ -151,6 +164,77 @@ function enrichPortfolioMovements(result: StockPresentation, inventory: Canonica
   if (!detailed.length) return result;
   const movements = result.movements
     .filter(movement => !(movement.kind === 'ENTRADA_PREVISTA_CARTEIRA' && detailedCodes.has(cleanCode(movement.sku))))
+    .concat(detailed)
+    .sort((left, right) => { if (left.date && right.date && left.date !== right.date) return right.date.localeCompare(left.date); if (left.date && !right.date) return -1; if (!left.date && right.date) return 1; return left.id.localeCompare(right.id); });
+  return { ...result, movements };
+}
+
+function inboundStatusLabel(status: InboundOrderFactRecord['inboundStatus']) {
+  if (status === 'ORDERED_FROM_COLGATE') return 'Pedido Colgate';
+  if (status === 'BILLED_BY_COLGATE_IN_TRANSIT') return 'Faturado Colgate · em trânsito';
+  if (status === 'PARTIALLY_RECEIVED') return 'Parcialmente recebido';
+  return 'Entrada prevista';
+}
+
+/**
+ * A UnifiedDataLayer preserva a Carteira linha a linha em INBOUND_ORDER_FACT. Esta é a fonte
+ * preferencial da aba Entradas e Saídas; o consolidado por SKU permanece somente como fallback
+ * para snapshots antigos que não possuíam esses fatos.
+ */
+function enrichCanonicalInboundMovements(result: StockPresentation, inboundOrders: InboundOrderFactRecord[], itemMaster: ItemMasterRecord[]): StockPresentation {
+  const openRows = inboundOrders.filter(row => row.inboundStatus !== 'RECEIVED_BY_MILENIO');
+  if (!openRows.length) return result;
+  const masterById = new Map(itemMaster.map(item => [item.itemCanonicalId, item]));
+  const productByCode = new Map(result.products.map(product => [cleanCode(product.code), product]));
+  const detailed: StockPortfolioMovement[] = openRows.map((row, index) => {
+    const master = masterById.get(row.itemCanonicalId);
+    const lookupCode = master?.winthorCode || row.itemCanonicalId;
+    const product = productByCode.get(cleanCode(lookupCode))
+      || result.products.find(candidate => cleanCode(candidate.factoryCode) === cleanCode(row.industrySku));
+    const factor = Math.max(Number(master?.industryUnitsPerCase ?? product?.industryUnitsPerCase) || 0, 0);
+    const remainingRaw = row.remainingInTransitUnits ?? row.pipelineUnits;
+    const hasUnits = remainingRaw !== null;
+    const remainingUnits = hasUnits ? Math.max(Number(remainingRaw) || 0, 0) : 0;
+    const remainingCases = hasUnits && factor > 0 ? remainingUnits / factor : Math.max(Number(row.pipelineQtyCases) || 0, 0);
+    const pipelineUnits = row.pipelineUnits === null ? 0 : Math.max(Number(row.pipelineUnits) || 0, 0);
+    const fraction = hasUnits && pipelineUnits > 0 ? Math.min(Math.max(remainingUnits / pipelineUnits, 0), 1) : 1;
+    const costValue = Math.max(Number(row.netValue) || 0, 0) * fraction;
+    const saleValue = hasUnits && remainingUnits > 0 && (product?.saleUnit || 0) > 0
+      ? remainingUnits * (product?.saleUnit || 0)
+      : null;
+    const invoice = row.invoiceRaw || row.invoiceNormalized || '';
+    const order = row.orderNumber || '';
+    return {
+      id: `INBOUND:${row.inboundFactId || index}`,
+      direction: 'ENTRADA',
+      stage: 'PREVISTA',
+      kind: 'ENTRADA_PREVISTA_CARTEIRA',
+      status: inboundStatusLabel(row.inboundStatus),
+      movement: 'Carteira Colgate',
+      date: row.billingDate || row.orderDate || '',
+      document: invoice || order,
+      order,
+      invoice,
+      sku: product?.code || master?.winthorCode || row.industrySku || row.itemCanonicalId || `SEM-SKU-${index + 1}`,
+      ean: product?.ean || master?.internalEan || master?.industryEan || '',
+      product: product?.description || master?.internalDescription || master?.industryDescription || row.industrySku || 'Item da Carteira',
+      partner: 'Colgate → Milênio',
+      partnerDocument: '',
+      cases: remainingCases,
+      looseUnits: 0,
+      totalUnits: remainingUnits,
+      value: costValue,
+      origin: 'INBOUND_ORDER_FACT · CARTEIRA',
+      orderQtyCases: Math.max(Number(row.orderQtyCases) || 0, 0),
+      billQtyCases: Math.max(Number(row.billQtyCases) || 0, 0),
+      pipelineCases: Math.max(Number(row.pipelineQtyCases) || 0, 0),
+      unitsPerCase: factor,
+      receivedUnits: Math.max(Number(row.receivedUnits) || 0, 0),
+      saleValue,
+    };
+  });
+  const movements = result.movements
+    .filter(movement => movement.kind !== 'ENTRADA_PREVISTA_CARTEIRA')
     .concat(detailed)
     .sort((left, right) => { if (left.date && right.date && left.date !== right.date) return right.date.localeCompare(left.date); if (left.date && !right.date) return -1; if (!left.date && right.date) return 1; return left.id.localeCompare(right.id); });
   return { ...result, movements };
@@ -241,15 +325,21 @@ export function buildStockPresentation(input: StockPresentationInputWithPackagin
     itemCodeSupport: _itemCodeSupport,
     receiptHeaders = [],
     receiptItems = [],
+    inboundOrders = [],
+    itemMaster = [],
     ...coreInput
   } = { ...input, inventory: restoredInventory };
   const inferred105 = restoredInventory.some(item => Boolean((item as InventoryWithPackaging).physicalSource105));
   const result = buildCore({ ...coreInput, hasStock105: input.hasStock105 ?? inferred105, productSupport: input.productSupport || [] });
   return enrichReconciliation(
     enrichCanonicalReceiptMovements(
-      enrichPortfolioMovements(
-        enrichMovementPackaging(refreshOperationalNoWinthorCount(result)),
-        restoredInventory,
+      enrichCanonicalInboundMovements(
+        enrichPortfolioMovements(
+          enrichMovementPackaging(refreshOperationalNoWinthorCount(result)),
+          restoredInventory,
+        ),
+        inboundOrders,
+        itemMaster,
       ),
       receiptHeaders,
       receiptItems,

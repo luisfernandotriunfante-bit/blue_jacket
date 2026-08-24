@@ -192,6 +192,20 @@ const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '').replac
 const code = (value: unknown) => String(value ?? '').trim().replace(/^0+/, '');
 const nonNegative = (value: unknown) => Math.max(Number(value) || 0, 0);
 
+export function isOperationalNoWinthor(product: Pick<StockProductView, 'hasWinthor' | 'pendingUnits' | 'pendingCases'>): boolean {
+  return !product.hasWinthor && (nonNegative(product.pendingUnits) > 0 || nonNegative(product.pendingCases) > 0);
+}
+
+export function prioritizeStockAlerts(alerts: StockAlert[], limit = 30): StockAlert[] {
+  const rank: Record<StockAlertSeverity, number> = { critical: 0, warning: 1, info: 2 };
+  return [...alerts]
+    .sort((left, right) => rank[left.severity] - rank[right.severity]
+      || left.kind.localeCompare(right.kind)
+      || left.sku.localeCompare(right.sku)
+      || left.id.localeCompare(right.id))
+    .slice(0, Math.max(Math.trunc(limit), 0));
+}
+
 function numericCheck(input: { id: string; label: string; expected: number; calculated: number; source: string; tolerance?: number; note?: string }): StockReconciliationCheck {
   const tolerance = input.tolerance ?? TOLERANCE;
   const difference = input.calculated - input.expected;
@@ -303,21 +317,22 @@ function buildReservation(inventory: CanonicalInventoryProduct[], transactions: 
   };
 }
 
-function createAlert(kind: StockAlertKind, severity: StockAlertSeverity, item: Pick<StockProductView, 'code' | 'ean' | 'description'>, message: string): StockAlert {
-  return { id: `${kind}:${item.code}`, kind, severity, sku: item.code, ean: item.ean, product: item.description, message };
+function createAlert(kind: StockAlertKind, severity: StockAlertSeverity, item: Pick<StockProductView, 'code' | 'ean' | 'description'>, message: string, idSuffix = ''): StockAlert {
+  return { id: `${kind}:${item.code}${idSuffix ? `:${idSuffix}` : ''}`, kind, severity, sku: item.code, ean: item.ean, product: item.description, message };
 }
 
 function buildAlertsForProduct(product: Omit<StockProductView, 'alerts'>, configuration: StockAlertConfiguration): StockAlert[] {
   const alerts: StockAlert[] = [];
-  if (!product.hasWinthor && product.pendingUnits > 0) alerts.push(createAlert('SEM_WINTHOR', 'warning', product, 'Item da Carteira sem correspondência confirmada no Cadastro 286 / Winthor.'));
+  if (isOperationalNoWinthor(product)) alerts.push(createAlert('SEM_WINTHOR', 'warning', product, 'Item da Carteira sem correspondência confirmada no Cadastro 286 / Winthor.'));
   if (!product.ean) alerts.push(createAlert('SEM_EAN', 'warning', product, 'Produto sem EAN conciliado.'));
-  if (product.physicalTotalUnits > 0 && product.unitsPerCase <= 0) alerts.push(createAlert('SEM_CONVERSAO_CAIXA', 'warning', product, 'Físico do 105 preservado em unidades, mas falta Un/CX interno do 8013 para decompor caixas completas e avulsas.'));
-  if (product.pendingCases > 0 && product.industryUnitsPerCase <= 0) alerts.push(createAlert('SEM_CONVERSAO_CAIXA', 'warning', product, 'Carteira preservada em caixas, mas falta Un/CX indústria da Lista de Preço Colgate para convertê-la em unidades.'));
+  if (product.physicalTotalUnits > 0 && product.unitsPerCase <= 0) alerts.push(createAlert('SEM_CONVERSAO_CAIXA', 'warning', product, 'Físico do 105 preservado em unidades, mas falta Un/CX interno do 8013 para decompor caixas completas e avulsas.', 'INTERNO'));
+  if (product.pendingCases > 0 && product.industryUnitsPerCase <= 0) alerts.push(createAlert('SEM_CONVERSAO_CAIXA', 'warning', product, 'Carteira preservada em caixas, mas falta Un/CX indústria da Lista de Preço Colgate para convertê-la em unidades.', 'INDUSTRIA'));
   if (product.reservedUnits > product.physicalTotalUnits + TOLERANCE) alerts.push(createAlert('RESERVADO_ACIMA_FISICO', 'critical', product, 'Quantidade reservada no 8022 A Faturar supera o estoque físico 105.'));
   if (Math.abs(product.quantityDifference) > TOLERANCE) alerts.push(createAlert('DIVERGENCIA_QUANTIDADE', 'critical', product, `Caixas internas × Un/CX interno + avulsas diverge do físico 105 em ${product.quantityDifference.toLocaleString('pt-BR')} un.`));
   if (product.isLaunch && product.physicalTotalUnits <= 0) alerts.push(createAlert('LANCAMENTO_SEM_ESTOQUE', 'warning', product, 'Lançamento oficial sem estoque físico identificado.'));
   if (product.isLaunch && product.physicalTotalUnits > 0 && product.soldUnits <= 0) alerts.push(createAlert('LANCAMENTO_SEM_VENDA', 'info', product, 'Lançamento com estoque e sem saída faturada na competência.'));
-  if (product.physicalTotalUnits <= 0) {
+  // Ruptura exige item Winthor. Produto sem Winthor continua visível como bloqueio cadastral e não vira ruptura artificial.
+  if (product.hasWinthor && product.physicalTotalUnits <= 0) {
     if (configuration.zeroStockAsRupture) alerts.push(createAlert('RUPTURA', 'critical', product, 'Estoque zerado; classificado como ruptura conforme a regra validada do módulo de Estoque.'));
     else alerts.push(createAlert('ESTOQUE_ZERADO', 'warning', product, 'Estoque físico zerado; a classificação de ruptura foi desativada explicitamente na configuração do Estoque.'));
   }
@@ -341,8 +356,33 @@ function buildMovements(inventory: CanonicalInventoryProduct[], transactions: Ca
     movements.push({ id: `CARTEIRA:${item.code}`, direction: 'ENTRADA', stage: 'PREVISTA', kind: 'ENTRADA_PREVISTA_CARTEIRA', status: 'Entrada prevista', movement: 'Entrada prevista — Carteira', date: '', document: '', order: '', invoice: '', sku: item.code, ean: item.ean || '', product: item.description, partner: 'Colgate → Milênio', partnerDocument: '', cases: pendingCases, looseUnits: 0, totalUnits: pendingUnits, value: pendingCost, origin: 'CARTEIRA' });
   });
   transactions.forEach((transaction, transactionIndex) => {
-    const item = resolveInventoryProduct(transaction, index); const sku = item?.code || transaction.internalProductCode || transaction.manufacturerCode || `SEM-SKU-${transactionIndex + 1}`; const reserved = transaction.status === 'A FATURAR';
-    movements.push({ id: `8022:${transactionIndex}:${transaction.status}:${sku}`, direction: 'SAIDA', stage: reserved ? 'RESERVADA' : 'REALIZADA', kind: reserved ? 'SAIDA_RESERVADA_PEDIDO' : 'SAIDA_FATURADA', status: reserved ? 'Saída reservada' : 'Saída faturada', movement: reserved ? 'Saída reservada — pedido a faturar' : 'Saída faturada', date: transaction.date || '', document: '', order: '', invoice: '', sku, ean: item?.ean || transaction.ean || '', product: item?.description || transaction.productDescription, partner: transaction.clientName, partnerDocument: transaction.cnpj, cases: Number(transaction.cases) || 0, looseUnits: 0, totalUnits: Number(transaction.units) || 0, value: Number(transaction.value) || 0, origin: '8022' });
+    const item = resolveInventoryProduct(transaction, index);
+    const sku = item?.code || transaction.internalProductCode || transaction.manufacturerCode || `SEM-SKU-${transactionIndex + 1}`;
+    const reserved = transaction.status === 'A FATURAR';
+    const order = transaction.orderNumber || '';
+    const invoice = transaction.invoiceNumber || '';
+    movements.push({
+      id: `8022:${transactionIndex}:${transaction.status}:${sku}`,
+      direction: 'SAIDA',
+      stage: reserved ? 'RESERVADA' : 'REALIZADA',
+      kind: reserved ? 'SAIDA_RESERVADA_PEDIDO' : 'SAIDA_FATURADA',
+      status: reserved ? 'Saída reservada' : 'Saída faturada',
+      movement: reserved ? 'Saída reservada — pedido a faturar' : 'Saída faturada',
+      date: transaction.date || transaction.invoiceDate || '',
+      document: invoice || order,
+      order,
+      invoice,
+      sku,
+      ean: item?.ean || transaction.ean || '',
+      product: item?.description || transaction.productDescription,
+      partner: transaction.clientName,
+      partnerDocument: transaction.cnpj,
+      cases: Number(transaction.cases) || 0,
+      looseUnits: 0,
+      totalUnits: Number(transaction.units) || 0,
+      value: Number(transaction.value) || 0,
+      origin: '8022',
+    });
   });
   return movements.sort((left, right) => { if (left.date && right.date && left.date !== right.date) return right.date.localeCompare(left.date); if (left.date && !right.date) return -1; if (!left.date && right.date) return 1; return left.id.localeCompare(right.id); });
 }
@@ -445,9 +485,9 @@ export function buildStockPresentation(input: StockPresentationInput): StockPres
     pendingCases: products.reduce((total, product) => total + product.pendingCases, 0),
     projectedUnits: products.reduce((total, product) => total + product.projectedUnits, 0),
     skuCount: products.length,
-    zeroSkuCount: products.filter(product => product.physicalTotalUnits <= 0).length,
+    zeroSkuCount: products.filter(product => product.hasWinthor && product.physicalTotalUnits <= 0).length,
     launchCount: products.filter(product => product.isLaunch).length,
-    noWinthorCount: products.filter(product => !product.hasWinthor && (product.pendingUnits > 0 || product.pendingCases > 0)).length,
+    noWinthorCount: products.filter(isOperationalNoWinthor).length,
     quantityDifferenceUnits: products.reduce((total, product) => total + product.quantityDifference, 0),
   };
 
@@ -459,6 +499,8 @@ export function buildStockPresentation(input: StockPresentationInput): StockPres
   const validPortfolioConversions = products.filter(product => product.pendingCases > 0 && product.industryUnitsPerCase > 0);
   const expectedPortfolioUnits = validPortfolioConversions.reduce((total, product) => total + product.pendingCases * product.industryUnitsPerCase, 0);
   const calculatedPortfolioUnits = validPortfolioConversions.reduce((total, product) => total + product.pendingUnits, 0);
+  const pendingProducts = products.filter(product => product.pendingCases > 0 || product.pendingUnits > 0);
+  const unvaluedPortfolio = pendingProducts.filter(product => product.pendingUnits <= 0 || product.saleUnit <= 0);
   const portfolioMovements = movements.filter(movement => movement.kind === 'ENTRADA_PREVISTA_CARTEIRA');
   const reservedMovements = movements.filter(movement => movement.kind === 'SAIDA_RESERVADA_PEDIDO' && movement.totalUnits > 0);
 
@@ -471,6 +513,9 @@ export function buildStockPresentation(input: StockPresentationInput): StockPres
       ? numericCheck({ id: 'stock.quantity.industry-conversion', label: 'SKUs da Carteira sem Un/CX indústria', expected: 0, calculated: 0, source: 'Carteira × Lista de Preço Colgate', tolerance: 0 })
       : blockedCheck('stock.quantity.industry-conversion', 'SKUs da Carteira sem Un/CX indústria', 'Carteira × Lista de Preço Colgate', `${missingIndustryConversions.length} SKU(s) continuam em caixas porque falta o fator industrial; unidades não foram inventadas.`, missingIndustryConversions.length),
     numericCheck({ id: 'stock.portfolio.conversion', label: 'Carteira em caixas × Un/CX indústria = unidades', expected: expectedPortfolioUnits, calculated: calculatedPortfolioUnits, source: 'Carteira × Lista de Preço Colgate', tolerance: TOLERANCE, note: `${validPortfolioConversions.length} SKU(s) com conversão industrial comprovada.` }),
+    unvaluedPortfolio.length === 0
+      ? numericCheck({ id: 'stock.portfolio.sale-valuation', label: 'Carteira valorizada exclusivamente por PVENDA1', expected: 0, calculated: 0, source: 'Carteira × PCTABPR Região 11 / PVENDA1', tolerance: 0, note: `${pendingProducts.length} SKU(s) pendente(s) possuem unidades e PVENDA1 suficientes para valorização.` })
+      : blockedCheck('stock.portfolio.sale-valuation', 'Carteira valorizada exclusivamente por PVENDA1', 'Carteira × PCTABPR Região 11 / PVENDA1', `${unvaluedPortfolio.length} SKU(s) da Carteira não podem ser valorizados a venda porque falta conversão em unidades e/ou PVENDA1. Nenhum acréscimo estimado foi usado.`, unvaluedPortfolio.length),
     numericCheck({ id: 'stock.projected.units', label: 'Estoque projetado = disponível + entradas previstas', expected: summary.availableUnits + summary.pendingUnits, calculated: summary.projectedUnits, source: '105 + 8022 A Faturar + Carteira', tolerance: TOLERANCE }),
     numericCheck({ id: 'stock.portfolio.units', label: 'Σ Carteira por SKU = total de entradas previstas', expected: summary.pendingUnits, calculated: portfolioMovements.reduce((total, movement) => total + nonNegative(movement.totalUnits), 0), source: 'Carteira', tolerance: TOLERANCE }),
     numericCheck({ id: 'stock.reserved.units', label: 'Σ reservado por SKU = saídas reservadas do 8022', expected: summary.reservedUnits, calculated: reservedMovements.reduce((total, movement) => total + nonNegative(movement.totalUnits), 0) - reservation.unresolvedReservedUnits, source: '8022 A Faturar', tolerance: TOLERANCE, note: reservation.unresolvedReservedUnits > 0 ? `${reservation.unresolvedReservedUnits} un. do A Faturar não foram conciliadas a SKU do estoque.` : 'Todas as unidades reservadas foram conciliadas.' }),

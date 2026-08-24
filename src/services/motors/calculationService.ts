@@ -291,9 +291,9 @@ export function buildInventoryFromUnified(unified:UnifiedDataLayer, referenceDat
       pendingQty += units;
       pendingCases += cases;
       pendingCost += Math.max(row.netValue,0) * fraction;
-      pendingSale += hasUnits && units > 0 && item.salePricePvenDa1 !== null
-        ? units * item.salePricePvenDa1
-        : Math.max(row.netValue,0) * fraction * (1 + Math.max(config.portfolioSaleMarkup,0));
+      // Regra de fechamento: valor a venda da Carteira só existe quando unidades e PVENDA1 estão comprovados.
+      // Na ausência de um dos dois, preserva-se a quantidade/custo disponível e o valor a venda fica não materializado (zero conhecido), nunca estimado por markup.
+      if (hasUnits && units > 0 && item.salePricePvenDa1 !== null) pendingSale += units * item.salePricePvenDa1;
     });
 
     const internalFactor = Math.max(Number(item.internalUnitsPerCase) || 0,0);
@@ -463,6 +463,9 @@ function toTransactions(unified:UnifiedDataLayer):CanonicalState['transactions']
       value: row.value,
       saleType: row.saleType,
       line: item ? itemLine(item) : '',
+      orderNumber: row.orderWinthor,
+      invoiceNumber: row.invoiceNumber,
+      invoiceDate: row.invoiceDate,
     };
   });
 }

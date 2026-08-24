@@ -11,6 +11,7 @@ export type LineName = (typeof LINE_NAMES)[number];
 export interface ManualConfiguration {
   sellOutTarget: number;
   coverageTargetDays: number;
+  /** @deprecated Mantido apenas para compatibilidade de configurações persistidas. A Carteira a venda usa exclusivamente PVENDA1. */
   portfolioSaleMarkup: number;
   networkTargets: Record<string, number>;
   holidays: string[];
@@ -75,6 +76,10 @@ export interface CanonicalSalesTransaction {
   value: number;
   saleType: string;
   line: LineName | '';
+  /** Identidades documentais preservadas do fato 8022 quando existem. */
+  orderNumber?: string;
+  invoiceNumber?: string;
+  invoiceDate?: string;
 }
 
 export interface CanonicalInventoryProduct {
@@ -281,7 +286,6 @@ export function applyManualConfiguration(base:CanonicalState|null,config:ManualC
   if(!base)return null;
   const sellOutTarget=config.sellOutTarget>0?Math.max(config.sellOutTarget,0):Math.max(base.sellOut.sellOutTarget,0);
   const coverageTargetDays=Math.max(config.coverageTargetDays||0,0);
-  const portfolioSaleMarkup=Math.max(Number(config.portfolioSaleMarkup)||0,0);
   const elapsedEnd=base.referenceDate<base.periodEnd?base.referenceDate:base.periodEnd;
   const businessDaysTotal=configuredBusinessDays(base.periodStart,base.periodEnd,config.holidays)||base.sellOut.businessDaysTotal;
   const businessDaysElapsed=configuredBusinessDays(base.periodStart,elapsedEnd,config.holidays);
@@ -295,20 +299,12 @@ export function applyManualConfiguration(base:CanonicalState|null,config:ManualC
   const networks=base.networks.map(network=>{
     const configured=config.networkTargets[network.key];
     const networkTarget=Number.isFinite(configured)?Math.max(configured,0):Math.max(network.networkTarget,0);
-    return{...network,networkTarget,networkAttainment:ratio(network.total,networkTarget),topAttainment:ratio(network.total,network.topTarget),gapToNetworkTarget:positiveGap(networkTarget,network.total),gapToTopTarget:positiveGap(network.topTarget,network.total)};
+    return{...network,networkTarget,networkAttainment:ratio(network.total,networkTarget),topAttainment:network.topAttainment,gapToNetworkTarget:positiveGap(networkTarget,network.total),gapToTopTarget:network.gapToTopTarget};
   });
   const lines=base.lines.map(line=>{const share=config.lineShares[line.name]??line.share;const target=sellOutTarget*share;return{...line,share,target,attainment:ratio(line.total,target)}});
-  const inventory=base.inventory.map(item=>{
-    const pendingSale=item.saleUnit>0&&item.pendingQty>0?item.pendingQty*item.saleUnit:item.pendingCost*(1+portfolioSaleMarkup);
-    return{...item,pendingSale};
-  });
-  const pendingPurchaseSale=inventory.reduce((sum,item)=>sum+item.pendingSale,0);
-  // A configuração manual pode alterar somente a valorização da Carteira. A parcela disponível
-  // já foi materializada pelo Motor de Estoque depois da reserva 8022 e não pode voltar a físico.
-  const availableSaleValue=Math.max(base.stock.projectedSaleValue-base.stock.pendingPurchaseSale,0);
-  const projectedSaleValue=availableSaleValue+pendingPurchaseSale;
-  const historyAverage=base.history.average3ClosedMonths||0;
-  const coverageProjectedDays=historyAverage>0?Math.round(projectedSaleValue/historyAverage*30):0;
+  // A configuração manual não recalcula Carteira a venda. A valorização foi materializada pelo motor
+  // exclusivamente com unidades comprovadas × PVENDA1 e permanece inalterada entre configurações.
+  const inventory=base.inventory.map(item=>({...item}));
 
   const vendors=base.vendors.map(vendor=>{
     const idealSalesToday=businessDaysTotal>0?vendor.salesTarget*(businessDaysElapsed/businessDaysTotal):0;
@@ -323,5 +319,5 @@ export function applyManualConfiguration(base:CanonicalState|null,config:ManualC
     return{code,name:members[0]?.coordinatorName||code,salesTarget,positivityTarget,invoiced,toInvoice,total,attainment:ratio(total,salesTarget),invoicedPositivation,futurePositivation,totalPositivation,positivityAttainment:ratio(totalPositivation,positivityTarget),vendors:members};
   });
 
-  return{...base,inventory,networks,lines,vendors,coordinators,sellOut:{...base.sellOut,sellOutTarget,attainment:ratio(base.sellOut.total,sellOutTarget),businessDaysTotal,businessDaysElapsed,businessDaysRemaining,invoicedDailyAverage,totalDailyAverage,neededDailyAverage,invoicedTrend,totalTrend},stock:{...base.stock,pendingPurchaseSale,projectedSaleValue,coverageProjectedDays,coverageTargetDays}};
+  return{...base,inventory,networks,lines,vendors,coordinators,sellOut:{...base.sellOut,sellOutTarget,attainment:ratio(base.sellOut.total,sellOutTarget),businessDaysTotal,businessDaysElapsed,businessDaysRemaining,invoicedDailyAverage,totalDailyAverage,neededDailyAverage,invoicedTrend,totalTrend},stock:{...base.stock,coverageTargetDays}};
 }
