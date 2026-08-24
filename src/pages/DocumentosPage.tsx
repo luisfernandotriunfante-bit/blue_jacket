@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useData } from '../store/DataContext';
 import { buildCustomerIntelligence, listCustomerOptions } from '../domain/customerIntelligence';
 import { EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT } from '../domain/customerIntelligenceTypes';
@@ -12,6 +12,7 @@ import { PanelAlert, PanelCard, PanelEmptyState, PanelInfoRow, PanelPage, PanelS
 
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtInt = (value: number) => Math.round(value || 0).toLocaleString('pt-BR');
+const fmtDate = (value: string) => value ? new Date(`${value}T12:00:00`).toLocaleDateString('pt-BR') : '—';
 type GenerationKind = 'painel' | 'redes' | 'estoque' | 'cliente-comercial' | 'cliente-dossie';
 
 export function DocumentosPage() {
@@ -20,11 +21,8 @@ export function DocumentosPage() {
   const [error, setError] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
   const [selectedCustomerCnpj, setSelectedCustomerCnpj] = useState('');
-  const [customerReferenceDate, setCustomerReferenceDate] = useState('');
 
   const unifiedCanonical = canonical && isUnifiedCanonicalState(canonical) ? canonical : null;
-  useEffect(() => { if (unifiedCanonical?.referenceDate && !customerReferenceDate) setCustomerReferenceDate(unifiedCanonical.referenceDate); }, [unifiedCanonical?.referenceDate, customerReferenceDate]);
-
   const customerSupport = useMemo(() => unifiedCanonical ? customerIntelligenceFromUnified(unifiedCanonical) : EMPTY_CUSTOMER_INTELLIGENCE_SUPPORT, [unifiedCanonical]);
   const customerOptions = useMemo(() => unifiedCanonical ? listCustomerOptions(unifiedCanonical, customerSupport) : [], [unifiedCanonical, customerSupport]);
   const filteredCustomerOptions = useMemo(() => {
@@ -33,8 +31,8 @@ export function DocumentosPage() {
     return customerOptions.filter(item => [item.cnpj, item.name, item.network, item.city, item.tier].some(value => String(value || '').toLowerCase().includes(query))).slice(0, 100);
   }, [customerOptions, customerSearch]);
   const customerResult = useMemo(() => unifiedCanonical && selectedCustomerCnpj
-    ? buildCustomerIntelligence(unifiedCanonical, customerSupport, selectedCustomerCnpj, customerReferenceDate || unifiedCanonical.referenceDate)
-    : null, [unifiedCanonical, customerSupport, selectedCustomerCnpj, customerReferenceDate]);
+    ? buildCustomerIntelligence(unifiedCanonical, customerSupport, selectedCustomerCnpj, unifiedCanonical.referenceDate)
+    : null, [unifiedCanonical, customerSupport, selectedCustomerCnpj]);
 
   if (!canonical) {
     return (
@@ -76,7 +74,7 @@ export function DocumentosPage() {
     <PanelPage
       title="Documentos"
       metricLabel="Referência"
-      metricValue={new Date(`${canonical.referenceDate}T12:00:00`).toLocaleDateString('pt-BR')}
+      metricValue={fmtDate(canonical.referenceDate)}
     >
       <div className="panel-stack">
         <div className="panel-grid panel-grid-3">
@@ -137,8 +135,8 @@ export function DocumentosPage() {
           <PanelSectionHeader
             eyebrow="CLIENTES & SORTIMENTO"
             title="Documentos por CNPJ"
-            description="Arquivo Comercial e Dossiê Interno ficam centralizados aqui. Ambos usam exatamente o mesmo motor canônico da tela Clientes & Sortimento e não releem arquivos brutos."
-            action={unifiedCanonical ? <label style={{ display: 'grid', gap: 4 }}><span className="panel-mini-label">Data de análise</span><input className="panel-input" type="date" value={customerReferenceDate || unifiedCanonical.referenceDate} onChange={event => setCustomerReferenceDate(event.target.value)} /></label> : undefined}
+            description="Arquivo Comercial e Dossiê Interno usam a mesma fotografia canônica da tela Clientes & Sortimento. A referência não é editável porque estoque, Carteira, preço e classificação operacional não são snapshots históricos completos."
+            action={unifiedCanonical ? <div style={{ display: 'grid', gap: 4 }}><span className="panel-mini-label">Referência operacional</span><strong>{fmtDate(unifiedCanonical.referenceDate)}</strong></div> : undefined}
           />
           {!unifiedCanonical ? <PanelAlert tone="warning">A fotografia atual ainda não está no contrato UnifiedDataLayer necessário para os documentos por CNPJ.</PanelAlert> : <>
             <div className="panel-grid panel-grid-2" style={{ marginTop: 14 }}>
