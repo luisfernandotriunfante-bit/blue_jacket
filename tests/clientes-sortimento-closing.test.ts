@@ -6,6 +6,7 @@ import { buildCustomerCommercialWorkbook, buildCustomerInternalDossierWorkbook }
 
 const page = () => readFileSync('src/pages/ClientesSortimentoUnifiedPage.tsx', 'utf8');
 const main = () => readFileSync('src/main.tsx', 'utf8');
+const documents = () => readFileSync('src/pages/DocumentosPage.tsx', 'utf8');
 
 function product(overrides:any={}) {
   return {
@@ -40,35 +41,62 @@ test('Clientes & Sortimento mantém hooks estáveis durante a hidratação da ba
   assert.match(source, /const unifiedCanonical = canonical && isUnifiedCanonicalState\(canonical\) \? canonical : null/);
 });
 
-test('navegação preserva exatamente as nove abas de Clientes & Sortimento', () => {
+test('navegação de Clientes & Sortimento possui somente quatro abas funcionais', () => {
   const source = main();
-  for (const label of ['Visão Geral','Sortimento','Oportunidades','Lançamentos','Comprado Fora','Promoções','Preços','Histórico','Exportar']) assert.match(source, new RegExp(label));
+  const start = source.indexOf('const clientesTopTabs');
+  const end = source.indexOf('const topNavigation');
+  const tabs = source.slice(start, end);
+  for (const label of ['Visão Geral','Sortimento','Lançamentos','Promoções']) assert.match(tabs, new RegExp(label));
+  for (const removed of ['Oportunidades','Comprado Fora','Preços','Histórico','Exportar']) assert.doesNotMatch(tabs, new RegExp(removed));
+  assert.equal((tabs.match(/\{ id:/g) || []).length, 4);
 });
 
-test('Comprado Fora não mistura pendência de correspondência com fora confirmado', () => {
+test('Sortimento concentra comprado, não comprado, oportunidade, fora e pendência em filtros da mesma aba', () => {
+  const source = page();
+  assert.match(source, /type AssortmentScope = 'recommended' \| 'bought' \| 'missing' \| 'opportunities' \| 'outside' \| 'pending'/);
+  assert.match(source, /Comprados no sortimento/);
+  assert.match(source, /Não comprados no sortimento/);
+  assert.match(source, /Oportunidades e diagnósticos/);
+  assert.match(source, /Comprados fora/);
+  assert.match(source, /Pendências de correspondência/);
+  assert.match(source, /scopedProducts\[assortmentScope\]/);
+});
+
+test('Comprado Fora continua separado de pendência de correspondência', () => {
   const source = page();
   assert.match(source, /confirmedOutside = result\.products\.filter\(product => product\.bought && product\.classification === 'FORA_DO_SORTIMENTO'\)/);
   assert.match(source, /unresolvedBought = result\.products\.filter\(product => product\.bought && product\.classification === 'PENDENCIA_CORRESPONDENCIA'\)/);
-  assert.match(source, /não são chamados de fora do sortimento até a correspondência ser resolvida/);
+  assert.match(source, /Pendência de correspondência não é chamada de “fora do sortimento”/);
 });
 
-test('tela separa valores 379 e 8022 e bloqueia YTD combinado quando há sobreposição', () => {
+test('histórico e preço ficam integrados à ficha e ao SKU, sem abas próprias', () => {
   const source = page();
-  assert.match(source, /Valor 379/);
-  assert.match(source, /Valor 8022/);
-  assert.match(source, /HISTORICAL_CURRENT_SALES_OVERLAP/);
-  assert.match(source, /YTD consolidado/);
-  assert.match(source, /BLOQUEADO/);
+  assert.match(source, /HISTÓRICO DO CLIENTE/);
+  assert.match(source, /PREÇO DO CLIENTE/);
+  assert.match(source, /function PriceDetail/);
+  assert.match(source, /379: \{fmtBRL\(product\.netValue\)\} · 8022:/);
+  assert.doesNotMatch(source, /const pricing =/);
+  assert.doesNotMatch(source, /const history =/);
+  assert.doesNotMatch(source, /exportView/);
 });
 
-test('Preços e Promoções não fingem composição ou elegibilidade já cumprida', () => {
+test('Promoções não fingem elegibilidade já cumprida', () => {
   const source = page();
-  assert.match(source, /mode === 'pricing'/);
-  assert.match(source, /Preço final/);
-  assert.match(source, /COMPOSIÇÃO FINAL PENDENTE/);
   assert.match(source, /Mín\. quantidade/);
   assert.match(source, /Mín\. valor/);
   assert.match(source, /Mínimos de pedido continuam exibidos como condição/);
+});
+
+test('exportações por CNPJ existem somente em Documentos e usam o mesmo motor canônico', () => {
+  const clientPage = page();
+  const docs = documents();
+  assert.doesNotMatch(clientPage, /downloadCustomerCommercialFile|downloadCustomerInternalDossier/);
+  assert.match(docs, /downloadCustomerCommercialFile/);
+  assert.match(docs, /downloadCustomerInternalDossier/);
+  assert.match(docs, /buildCustomerIntelligence\(unifiedCanonical, customerSupport, selectedCustomerCnpj/);
+  assert.match(docs, /Documentos por CNPJ/);
+  assert.match(docs, /Gerar Arquivo Comercial/);
+  assert.match(docs, /Gerar Dossiê Interno/);
 });
 
 test('arquivo comercial separa fora, pendência e valores das duas fontes', () => {
