@@ -55,6 +55,47 @@ export function latestSnapshotsByCompetence(records: CanonicalSnapshotRecord[]):
   return [...latest.values()].sort((a, b) => a.competence.localeCompare(b.competence));
 }
 
+/** Builds network targets from the last three closed competences, grouped by canonical CNPJ. */
+export function deriveNetworkTargetsFromSnapshots(
+  records: CanonicalSnapshotRecord[],
+  currentCompetence: string,
+  windowSize = 3,
+): Record<string, number> {
+  const closed = latestSnapshotsByCompetence(records)
+    .filter(record => !currentCompetence || record.competence < currentCompetence)
+    .slice(-windowSize);
+  if (!closed.length) return {};
+
+  const values = new Map<string, number>();
+  let historicalValue = 0;
+  for (const snapshot of closed) {
+    const networkByCnpj = new Map(snapshot.canonical.clients.map(client => [client.cnpj, client.network]));
+    for (const transaction of snapshot.canonical.transactions) {
+      const value = Math.max(Number(transaction.value) || 0, 0);
+      const network = networkByCnpj.get(transaction.cnpj) || 'SEM REDE';
+      if (network === 'SEM REDE' || value <= 0) continue;
+      values.set(network, (values.get(network) || 0) + value);
+      historicalValue += value;
+    }
+  }
+  const totalTarget = Math.max(closed.at(-1)?.canonical.networks
+    .filter(network => network.key !== 'SEM REDE')
+    .reduce((sum, network) => sum + (Number(network.networkTarget) || 0), 0) || 0, 0);
+  if (historicalValue <= 0 || totalTarget <= 0) return {};
+
+  const entries = [...values.entries()].sort((a, b) => b[1] - a[1]);
+  const targets: Record<string, number> = {};
+  let assigned = 0;
+  entries.forEach(([network, value], index) => {
+    const target = index === entries.length - 1
+      ? Math.max(totalTarget - assigned, 0)
+      : Math.round(totalTarget * value / historicalValue * 100) / 100;
+    targets[network] = target;
+    assigned += target;
+  });
+  return targets;
+}
+
 const DB_NAME = 'blue-jacket-data';
 const DB_VERSION = 2;
 const STATE_STORE = 'state';

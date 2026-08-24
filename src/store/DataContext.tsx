@@ -4,7 +4,7 @@ import { isUnifiedCanonicalState } from '../services/motors/unifiedEngine';
 import { clearCanonicalState, loadCanonicalState, saveCanonicalState } from './canonicalPersistence';
 import { competenceFromCanonical, loadManualConfiguration, normalizeManualConfiguration, saveManualConfiguration } from './competencePersistence';
 import { getCanonicalSnapshotCompatibilityIssue } from './snapshotCompatibility';
-import { createCanonicalSnapshot, saveCanonicalSnapshot, shouldArchive } from './snapshotHistory';
+import { createCanonicalSnapshot, deriveNetworkTargetsFromSnapshots, listCanonicalSnapshots, saveCanonicalSnapshot, shouldArchive } from './snapshotHistory';
 
 interface DataContextType {
   canonical: CanonicalState | null;
@@ -70,9 +70,10 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     }
 
     const nextCompetence = competenceFromCanonical(data);
+    let archivePromise: Promise<void> = Promise.resolve();
     if (data && canonicalBase && shouldArchive(canonicalBase, data)) {
       const reason = competenceFromCanonical(canonicalBase) !== nextCompetence ? 'MONTH_CLOSE' : 'REPLACED';
-      void saveCanonicalSnapshot(createCanonicalSnapshot(canonicalBase, manualConfig, new Date().toISOString(), reason)).catch(error => {
+      archivePromise = saveCanonicalSnapshot(createCanonicalSnapshot(canonicalBase, manualConfig, new Date().toISOString(), reason)).catch(error => {
         const message = `Snapshot congelado: não foi possível arquivar a fotografia anterior (${error instanceof Error ? error.message : 'erro desconhecido'}).`;
         setDataNotice(message);
         console.error(message, error);
@@ -88,7 +89,19 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       });
       if (nextCompetence && nextCompetence !== activeCompetence) {
         const nextLoad = loadManualConfiguration(localStorage, nextCompetence, { migrateLegacy: false });
-        setManualConfigState(nextLoad.config);
+        if (nextLoad.source === 'DEFAULT') {
+          void archivePromise.then(() => listCanonicalSnapshots()).then(snapshots => {
+            const networkTargets = deriveNetworkTargetsFromSnapshots(snapshots, nextCompetence);
+            const nextConfig = Object.keys(networkTargets).length ? { ...nextLoad.config, networkTargets } : nextLoad.config;
+            setManualConfigState(nextConfig);
+            if (Object.keys(networkTargets).length) saveManualConfiguration(localStorage, nextCompetence, nextConfig);
+          }).catch(error => {
+            setManualConfigState(nextLoad.config);
+            setDataNotice(`Metas proporcionais: não foi possível ler o histórico congelado (${error instanceof Error ? error.message : 'erro desconhecido'}).`);
+          });
+        } else {
+          setManualConfigState(nextLoad.config);
+        }
         setManualConfigPersistenceError(nextLoad.persistenceError || '');
       }
     } else {
