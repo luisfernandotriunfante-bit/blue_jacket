@@ -173,6 +173,33 @@
   line-height: 1.45;
 }
 
+/* Summary cards keep label, value and detail on separate readable lines. */
+.panel-kpi > span,
+.panel-kpi > strong,
+.panel-kpi > small {
+  display: block;
+}
+
+.panel-kpi > span {
+  color: var(--panel-muted-light);
+  font-size: var(--panel-font-caption);
+  line-height: 1.35;
+}
+
+.panel-kpi > strong {
+  margin-top: 8px;
+  color: var(--panel-text);
+  font-size: var(--panel-font-kpi);
+  line-height: 1.1;
+}
+
+.panel-kpi > small {
+  margin-top: 7px;
+  color: var(--panel-muted);
+  font-size: var(--panel-font-label);
+  line-height: 1.4;
+}
+
 .panel-section-header {
   padding-bottom: 16px;
   margin-bottom: 20px;

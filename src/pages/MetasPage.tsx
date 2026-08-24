@@ -155,7 +155,7 @@ function NumberField({ label, value, step, onChange, detail, disabled = false }:
   return (
     <label className="panel-field">
       <span className="panel-field-label panel-field-label-uppercase">{label}</span>
-      <input className="panel-input panel-input-full panel-input-currency" type="number" min="0" step={step} value={value || ''} disabled={disabled} onChange={event => onChange(Number(event.target.value) || 0)} />
+      <input className="panel-input panel-input-full panel-input-currency" type="number" min="0" step={step} value={value > 0 ? Number(value.toFixed(2)) : ''} disabled={disabled} onChange={event => onChange(Number(event.target.value) || 0)} />
       <span className="panel-field-help">{detail}</span>
     </label>
   );
