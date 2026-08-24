@@ -172,11 +172,19 @@ export function parseSales8022(rows: Row[], items: ItemMasterRecord[], rcas: Rca
 export function buildTargets(workbook: XLSX.WorkBook | null, rcas: RcaMasterRecord[], referenceDate: string) {
   const qualityIssues: DataQualityIssue[] = [];
   if (!workbook) return { targets: [] as TargetFactRecord[], qualityIssues };
-  const byLegacy = new Map(rcas.filter(rca => rca.legacyRcaCode).map(rca => [rca.legacyRcaCode, rca]));
+  const byRcaCode = new Map<string, RcaMasterRecord>();
+  rcas.forEach(rca => {
+    if (rca.legacyRcaCode) byRcaCode.set(cleanCode(rca.legacyRcaCode), rca);
+    // Algumas versões da Bússola carregam o código atual, enquanto outras
+    // carregam o legado. Ambos pertencem ao mesmo RCA_MASTER oficial.
+    if (rca.currentRcaCode && !byRcaCode.has(cleanCode(rca.currentRcaCode))) {
+      byRcaCode.set(cleanCode(rca.currentRcaCode), rca);
+    }
+  });
   const competence = referenceDate.slice(0, 7);
   const targets = parseCompassTargets(workbook).map((raw, index) => {
     const legacyRcaCode = cleanCode(raw.oldCode);
-    const rca = byLegacy.get(legacyRcaCode);
+    const rca = byRcaCode.get(legacyRcaCode);
     if (!rca) qualityIssues.push({
       id: `TARGET_RCA:${legacyRcaCode}:${index}`,
       domain: 'TARGET',
