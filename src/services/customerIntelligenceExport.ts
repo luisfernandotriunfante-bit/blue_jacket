@@ -163,10 +163,15 @@ export function downloadCustomerCommercialFile(result: CustomerIntelligenceResul
   XLSX.writeFile(workbook, `Sortimento Comercial - ${safe}.xlsx`);
 }
 
-export function buildCustomerInternalDossierWorkbook(result: CustomerIntelligenceResult): XLSX.WorkBook {
+export interface CustomerInternalDossierOptions {
+  hasSalesOverlap?: boolean;
+}
+
+export function buildCustomerInternalDossierWorkbook(result: CustomerIntelligenceResult, options: CustomerInternalDossierOptions = {}): XLSX.WorkBook {
   const workbook = XLSX.utils.book_new();
   const history379 = result.products.reduce((sum, product) => sum + product.netValue, 0);
   const current8022 = result.products.reduce((sum, product) => sum + product.currentPeriodValue, 0);
+  const hasSalesOverlap = options.hasSalesOverlap === true;
   addSheet(workbook, 'Resumo', [{
     CNPJ: result.customer.cnpj,
     Cliente: result.customer.name,
@@ -181,8 +186,10 @@ export function buildCustomerInternalDossierWorkbook(result: CustomerIntelligenc
     'Assortment %': result.assortmentPercent,
     '379 valor líquido': history379,
     '8022 período atual': current8022,
-    'YTD soma bruta das fontes': result.ytdNetValue,
-    'Nota YTD': 'Se a auditoria apontar sobreposição 379 × 8022, validar antes de usar a soma bruta como consolidado.',
+    'YTD consolidado': hasSalesOverlap ? 'BLOQUEADO' : result.ytdNetValue,
+    'Nota YTD': hasSalesOverlap
+      ? '379 e 8022 possuem movimentos em datas sobrepostas. As fontes permanecem separadas e nenhuma soma consolidada foi materializada.'
+      : 'Sem sobreposição 379 × 8022 detectada na fotografia canônica; o consolidado segue o motor atual.',
     'Lançamentos faltantes': result.launches.missing,
     'Comprados fora': result.boughtOutside,
     'Pendências de correspondência': result.boughtUnresolved,
@@ -198,7 +205,7 @@ export function buildCustomerInternalDossierWorkbook(result: CustomerIntelligenc
   addSheet(workbook, 'Comprados fora', outsideRows(result, 'FORA_DO_SORTIMENTO'));
   addSheet(workbook, 'Pendências correspondência', outsideRows(result, 'PENDENCIA_CORRESPONDENCIA'));
   addSheet(workbook, 'Oportunidades', result.opportunities.map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, Classificação: classificationLabel(product.classification), Lançamento: product.isLaunch ? 'SIM' : 'NÃO', Prioridade: product.opportunityPriority, Motivo: product.opportunityReason, Ação: product.recommendedAction, ...activityColumns(product), ...stockColumns(product), ...priceColumns(product) })));
-  addSheet(workbook, 'Promoções elegíveis', promotionRows(result.promotions));
+  addSheet(workbook, 'Promoções aplicáveis', promotionRows(result.promotions));
   addSheet(workbook, 'Preços', result.products.filter(product => product.isRecommended).map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, ...priceColumns(product) })));
   addSheet(workbook, 'Histórico por produto', result.products.filter(product => product.bought).map(product => ({ Produto: product.description, EAN: product.ean, Winthor: product.winthorCode, Classificação: classificationLabel(product.classification), ...activityColumns(product) })));
   addSheet(workbook, 'Auditoria', result.audit.map(check => ({ ID: check.id, Regra: check.label, Esperado: check.expected ?? '', Calculado: check.calculated ?? '', Status: check.status, Observação: check.note })));
@@ -206,6 +213,6 @@ export function buildCustomerInternalDossierWorkbook(result: CustomerIntelligenc
   return workbook;
 }
 
-export function downloadCustomerInternalDossier(result: CustomerIntelligenceResult) {
-  XLSX.writeFile(buildCustomerInternalDossierWorkbook(result), `Dossiê Interno - ${result.customer.cnpj || 'cliente'}.xlsx`);
+export function downloadCustomerInternalDossier(result: CustomerIntelligenceResult, options: CustomerInternalDossierOptions = {}) {
+  XLSX.writeFile(buildCustomerInternalDossierWorkbook(result, options), `Dossiê Interno - ${result.customer.cnpj || 'cliente'}.xlsx`);
 }
