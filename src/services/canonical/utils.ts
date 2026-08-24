@@ -7,7 +7,14 @@ export function normalizeText(value: unknown): string {
 }
 
 export function cleanDigits(value: unknown): string { return String(value ?? '').replace(/\D/g, '').replace(/^0+/, ''); }
-export function cleanCode(value: unknown): string { return String(value ?? '').trim().replace(/^0+/, ''); }
+export function cleanCode(value: unknown): string {
+  let raw = String(value ?? '').trim();
+  // Relatórios exportados pelo Excel podem serializar códigos inteiros como
+  // texto decimal (ex.: "123.0"). Código Winthor/RCA/SKU não é decimal;
+  // remover somente a parte decimal zerada evita perder correspondências.
+  if (/^\d+\.0+$/.test(raw)) raw = raw.replace(/\.0+$/, '');
+  return raw.replace(/^0+/, '');
+}
 export interface CnpjNormalization {
   raw:string;
   digits:string;
