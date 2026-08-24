@@ -3,7 +3,9 @@ import { TemplateWorkbook, type TemplateCellValue } from './templateWorkbook';
 
 const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 const DAY_NAMES = ['Domingo','Segunda-Feira','Terça-Feira','Quarta-Feira','Quinta-Feira','Sexta-Feira','Sábado'];
-const PANEL_TEMPLATE = './templates/painel-sell-out-padrao.xlsx';
+// O modelo é versionado na URL para impedir que uma cópia antiga do Excel
+// permaneça no cache/service worker depois de uma atualização do sistema.
+const PANEL_TEMPLATE = './templates/painel-sell-out-padrao.xlsx?v=5c2f141';
 
 const ratio = (value:number,target:number) => target > 0 ? value / target : 0;
 const ref = (column:string,row:number) => `${column}${row}`;
