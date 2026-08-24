@@ -66,7 +66,10 @@ test('sem snapshot persistido, uma Carteira posterior a 17/08 usa o checkpoint a
 
 test('Configurações aplica a continuidade antes de recalcular Estoque e persiste a Carteira filtrada', () => {
   const page = fs.readFileSync(new URL('../src/pages/ConfiguracoesPage.tsx', import.meta.url), 'utf8');
-  assert.match(page, /applyPortfolioContinuityToPreparedState\(selectedFiles, prepared\.state\)/);
-  assert.match(page, /saveOperationalSourceState\(operationalState\)/);
+  assert.match(page, /applyPortfolioContinuityToPreparedState\(selectedFiles, prepared\.state, staged\.storage\)/);
+  assert.match(page, /saveOperationalSourceState\(operationalState, staged\.storage\)/);
+  assert.match(page, /processUnifiedFiles/);
+  assert.ok(page.indexOf('applyPortfolioContinuityToPreparedState') < page.indexOf('const result = await processUnifiedFiles'));
+  assert.ok(page.indexOf('const result = await processUnifiedFiles') < page.indexOf('staged.commit()'));
   assert.match(page, /Carteira comparável/);
 });
