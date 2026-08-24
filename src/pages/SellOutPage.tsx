@@ -1,7 +1,6 @@
 import { useData } from '../store/DataContext';
 import { DailyMovementWindow } from '../ui/charts/DailyMovementWindow';
 import {
-  PanelAlert,
   PanelCard,
   PanelEmptyState,
   PanelInfoRow,
@@ -130,7 +129,7 @@ function Resumo() {
           <QuickMetric label="A faturar mês" value={fmtBRL(summary.toInvoice)} />
           <QuickMetric label="Positivação mês" value={fmtInt(summary.totalPositivation)} />
         </div>
-        {Math.abs(dailyDifference) > 0.01 ? <div style={{ marginTop: 14 }}><PanelAlert tone="warning">O Sell Out mensal contém {fmtBRL(Math.abs(dailyDifference))} que não fecha na série diária porque há movimento sem data válida na fonte. O valor permanece no total mensal e não foi atribuído artificialmente a nenhum dia.</PanelAlert></div> : null}
+        {/* Avisos de data, linha e RCA ficam centralizados em Configurações → Auditoria e pendências. */}
       </PanelCard>
 
       <PanelCard>
@@ -265,7 +264,7 @@ function LineSummary() {
       <div className="panel-grid panel-grid-auto">
         {canonical.lines.map(line => <PanelStat key={line.name} label={line.name} value={fmtBRL(line.total)} note={`Meta ${line.target > 0 ? fmtBRL(line.target) : 'não informada'}${line.target > 0 ? ` · ${fmtPct(line.attainment)}` : ''}`} />)}
       </div>
-      {Math.abs(difference) > 0.01 ? <div style={{ marginTop: 14 }}><PanelAlert tone="warning">{difference > 0 ? `${fmtBRL(difference)} do Sell Out permanece sem classificação em uma das cinco linhas. O total foi preservado e nenhuma linha foi inventada.` : `As cinco linhas excedem o Sell Out em ${fmtBRL(Math.abs(difference))}. A reconciliação deve ser tratada antes de considerar a abertura por linha fechada.`}</PanelAlert></div> : null}
+      {/* O valor que permanece sem classificação é reportado na auditoria central. */}
     </PanelCard>
   );
 }
@@ -295,7 +294,7 @@ function Gerencial() {
   return (
     <div className="panel-stack">
       <ManagerialSummary />
-      {(Math.abs(salesOutsideOfficialRca) > 0.01 || targetWithoutOfficialRca > 0.01 || posTargetWithoutOfficialRca > 0.01) ? <PanelAlert tone="warning">A visão por vendedor não fecha integralmente com os totais globais porque existem fatos sem RCA oficial resolvido. {Math.abs(salesOutsideOfficialRca) > 0.01 ? `Venda fora de RCA oficial: ${fmtBRL(Math.abs(salesOutsideOfficialRca))}. ` : ''}{targetWithoutOfficialRca > 0.01 ? `Meta de venda Bússola não atribuída: ${fmtBRL(targetWithoutOfficialRca)}. ` : ''}{posTargetWithoutOfficialRca > 0.01 ? `Meta de positivação não atribuída: ${fmtInt(posTargetWithoutOfficialRca)}.` : ''} Esses valores foram preservados e não redistribuídos.</PanelAlert> : null}
+      {/* Venda fora de RCA oficial e metas não atribuídas são reportadas na auditoria central. */}
       <PanelCard>
         <PanelSectionHeader eyebrow="COORDENAÇÃO" title="Resultado gerencial" description="Consolidação das equipes usando metas da Bússola e movimentos do 8022." />
         {rows.length ? <div className="panel-table-wrap">
