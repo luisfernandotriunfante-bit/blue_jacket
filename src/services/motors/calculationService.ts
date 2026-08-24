@@ -21,6 +21,7 @@ const ratio = (value:number, target:number) => target > 0 ? value / target : 0;
 const gap = (target:number, value:number) => Math.max(target - value, 0);
 const sum = <T>(rows:T[], value:(row:T)=>number) => rows.reduce((total,row) => total + (Number(value(row)) || 0), 0);
 const distinct = (values:string[]) => new Set(values.filter(Boolean)).size;
+const isIsoDate = (value:string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T12:00:00Z`).getTime());
 
 function premiseCompetenceRank(value:string) {
   const normalized = normalizeText(value);
@@ -131,7 +132,7 @@ function buildVendors(unified:UnifiedDataLayer, base:CanonicalState):CanonicalVe
       idealPositivationToday: idealPositivityToday,
       positivityGapToIdeal: gap(idealPositivityToday, pos.total),
       positivityGapToTarget: gap(target.positivity, pos.total),
-      positivityDailyTarget: remaining > 0 ? gap(target.positivity, pos.total) / remaining : gap(target.positivity, pos.total),
+      positivityDailyTarget: remaining > 0 ? gap(target.positivity, pos.total) / remaining : 0,
     };
   });
 }
@@ -183,7 +184,8 @@ function buildClients(unified:UnifiedDataLayer):CanonicalClientResult[] {
 
 function buildDaily(unified:UnifiedDataLayer):CanonicalDailyMovement[] {
   const grouped = new Map<string,SalesFactRecord[]>();
-  unified.salesFacts.forEach(row => {
+  // Fato sem data permanece no Sell Out mensal, mas não é distribuído artificialmente em um dia.
+  unified.salesFacts.filter(row => isIsoDate(row.movementDate)).forEach(row => {
     const rows = grouped.get(row.movementDate) || [];
     rows.push(row);
     grouped.set(row.movementDate, rows);
@@ -469,7 +471,8 @@ function toTransactions(unified:UnifiedDataLayer):CanonicalState['transactions']
 
 export function projectCanonicalFromUnified(base:CanonicalState, unified:UnifiedDataLayer, config:ManualConfiguration):CanonicalState {
   const summary = calculateUnifiedSummary(unified);
-  const sellOutTarget = config.sellOutTarget > 0 ? config.sellOutTarget : base.sellOut.sellOutTarget;
+  // Meta T&C manual é independente da indústria e zero é um valor explícito de "não informada".
+  const sellOutTarget = Math.max(Number(config.sellOutTarget)||0,0);
   const remaining = Math.max(base.sellOut.businessDaysRemaining,0);
   const elapsed = Math.max(base.sellOut.businessDaysElapsed,0);
   const totalDays = Math.max(base.sellOut.businessDaysTotal,0);
@@ -489,7 +492,7 @@ export function projectCanonicalFromUnified(base:CanonicalState, unified:Unified
     ticketAverage: summary.totalPositivation > 0 ? actualTotal / summary.totalPositivation : 0,
     invoicedDailyAverage: elapsed > 0 ? summary.invoiced / elapsed : 0,
     totalDailyAverage: elapsed > 0 ? actualTotal / elapsed : 0,
-    neededDailyAverage: remaining > 0 ? gap(sellOutTarget,actualTotal) / remaining : gap(sellOutTarget,actualTotal),
+    neededDailyAverage: remaining > 0 ? gap(sellOutTarget,actualTotal) / remaining : 0,
     invoicedTrend: elapsed > 0 ? summary.invoiced / elapsed * totalDays : 0,
     totalTrend: elapsed > 0 ? actualTotal / elapsed * totalDays : 0,
   };

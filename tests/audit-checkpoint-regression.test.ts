@@ -13,11 +13,13 @@ test('checkpoint: configuração manual continua isolada por competência',()=>{
   assert.doesNotMatch(context,/localStorage\.setItem\('bj_manual_config'/);
 });
 
-test('checkpoint: Meta T&C continua separada da Meta Indústria na camada canônica atual',()=>{
+test('checkpoint: Meta T&C continua independente e zero não revive snapshot anterior',()=>{
   const canonical=read('src/domain/canonical.ts');
   const rules=read('src/domain/targetRules.ts');
-  assert.match(canonical,/sellOutTarget\s*=\s*config\.sellOutTarget\s*>\s*0\s*\?\s*Math\.max\(config\.sellOutTarget,\s*0\)\s*:\s*Math\.max\(base\.sellOut\.sellOutTarget,\s*0\)/);
+  assert.match(canonical,/sellOutTarget\s*=\s*Math\.max\(Number\(config\.sellOutTarget\)\|\|0,0\)/);
+  assert.doesNotMatch(canonical,/sellOutTarget\s*=.*base\.sellOut\.sellOutTarget/);
   assert.doesNotMatch(canonical,/sellOutTarget\s*=.*industryTarget/);
+  assert.match(rules,/resolveSellOutTarget/);
   assert.match(rules,/redistributeNetworkTotal/);
   assert.match(rules,/redistributeSingleNetwork/);
 });

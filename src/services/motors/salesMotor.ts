@@ -88,7 +88,8 @@ export function parseSales8022(rows: Row[], items: ItemMasterRecord[], rcas: Rca
     const sku = cleanCode(cell(row, idx(header, 'CODIGO FABRICANTE')));
     const ean = cleanDigits(cell(row, idx(header, 'EAN PRODUTO')) || cell(row, idx(header, 'EAN CADASTRO')));
     const item = itemIndex.byWinthor.get(winthor) || itemIndex.bySku.get(sku) || itemIndex.byEan.get(ean);
-    const date = toIsoDate(cell(row, idx(header, 'DATA MOVIMENTO')));
+    const rawMovementDate = cell(row, idx(header, 'DATA MOVIMENTO'));
+    const date = toIsoDate(rawMovementDate);
 
     facts.push({
       salesFactId: `8022:${date}:${cleanCode(cell(row, idx(header, 'NUMERO PED. WINTHOR')))}:${winthor}:${rowIndex}`,
@@ -120,6 +121,16 @@ export function parseSales8022(rows: Row[], items: ItemMasterRecord[], rcas: Rca
       source: '8022',
     });
 
+    if (!date) qualityIssues.push({
+      id: `8022_DATE:${rowIndex}`,
+      domain: 'SALES',
+      severity: 'WARNING',
+      code: 'SALES_MOVEMENT_DATE_UNRESOLVED',
+      message: 'Venda preservada no Sell Out mensal, mas sem data de movimento válida; não participa da série diária.',
+      source: '8022',
+      entityKey: String(rawMovementDate ?? '').trim() || `linha ${rowIndex + 1}`,
+      details: { row: rowIndex + 1, value },
+    });
     if (!cnpj) qualityIssues.push({
       id: `8022_CNPJ:${rowIndex}`,
       domain: 'SALES',
