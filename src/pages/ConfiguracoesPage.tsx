@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useData } from '../store/DataContext';
 import { detectSource } from '../services/canonical/utils';
 import {
@@ -15,6 +15,7 @@ import { isUnifiedCanonicalState, processUnifiedFiles } from '../services/motors
 import type { SourceAudit, SourceKind } from '../domain/canonical';
 import { ReconciliationAuditPanel } from '../ui/audit/ReconciliationAuditPanel';
 import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
+import { listCanonicalSnapshots, type CanonicalSnapshotRecord } from '../store/snapshotHistory';
 
 type SourceGroup = 'Rotina diária' | 'Mensal / competência' | 'Apoio / quando mudar' | 'Histórico';
 type SourceUi = {
@@ -101,7 +102,14 @@ export function ConfiguracoesPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
   const [operationalRevision, setOperationalRevision] = useState(0);
+  const [frozenSnapshots, setFrozenSnapshots] = useState<CanonicalSnapshotRecord[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    void listCanonicalSnapshots().then(rows => { if (active) setFrozenSnapshots(rows); }).catch(error => console.error('Não foi possível ler snapshots congelados.', error));
+    return () => { active = false; };
+  }, [canonical?.generatedAt]);
 
   const addFiles = (newFiles: File[]) => {
     setSuccess(false);
@@ -196,6 +204,7 @@ export function ConfiguracoesPage() {
     </PanelCard>
 
     {portfolioContinuity ? <PortfolioContinuityPanel snapshot={portfolioContinuity} /> : null}
+    <FrozenSnapshotsPanel snapshots={frozenSnapshots} />
     {operationalState.receiptItems.length > 0 ? <ReceiptValidationPanel key={`${operationalState.entry218FileName}:${operationalRevision}`} state={operationalState} /> : null}
 
     {GROUPS.map(group => <PanelCard key={group.key}><PanelSectionHeader eyebrow={group.key.toUpperCase()} title={group.title} description={group.description} action={<span className="panel-badge">{SOURCES.filter(source => source.group === group.key).length} arquivos</span>} /><div style={{ display: 'grid', gap: '8px', marginTop: '15px' }}>{SOURCES.filter(source => source.group === group.key).map(source => <SourceCard key={source.id} source={source} audit={source.kind ? audits.get(source.kind) : undefined} operationalState={operationalState} unifiedLoaded={isUnifiedLoaded(source)} queued={queued.get(source.id)} onAddFile={file => addFiles([file])} />)}</div></PanelCard>)}
@@ -204,6 +213,10 @@ export function ConfiguracoesPage() {
     {qualitySummary.length > 0 ? <PanelCard><PanelSectionHeader eyebrow="AUDITORIA DOS MOTORES" title="Qualidade da fotografia" description="Pendências são agrupadas por causa. A contagem preserva todas as ocorrências sem repetir milhares de linhas iguais na tela." action={<span className="panel-badge">{fmtNumber(qualityCounts.total)} ocorrência(s)</span>} /><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '14px' }}><span className="panel-badge" style={{ color: '#fca5a5' }}>ERROS · {fmtNumber(qualityCounts.ERROR)}</span><span className="panel-badge" style={{ color: '#fcd34d' }}>ALERTAS · {fmtNumber(qualityCounts.WARNING)}</span><span className="panel-badge">INFORMAÇÕES · {fmtNumber(qualityCounts.INFO)}</span><span className="panel-badge">CAUSAS · {fmtNumber(qualitySummary.length)}</span></div><div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{qualitySummary.slice(0, 30).map(issue => <div key={issue.key} style={{ color: issue.severity === 'ERROR' ? '#fca5a5' : issue.severity === 'WARNING' ? '#fcd34d' : 'var(--panel-muted)', fontSize: '.78rem', padding: '10px 11px', border: '1px solid rgba(255,255,255,.08)', borderRadius: '9px', display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap' }}><div style={{ minWidth: 0, flex: '1 1 620px' }}><strong>{issue.code}</strong> · {issue.message}{issue.source ? <div style={{ fontSize: '.66rem', marginTop: '4px', color: 'var(--panel-muted)' }}>Fonte: {issue.source}</div> : null}</div><span className="panel-badge">{fmtNumber(issue.count)} ocorrência(s)</span></div>)}</div>{qualitySummary.length > 30 ? <PanelAlert tone="info">Exibindo as 30 causas prioritárias de {fmtNumber(qualitySummary.length)}. Nenhuma ocorrência foi descartada do motor; apenas a apresentação foi resumida.</PanelAlert> : null}</PanelCard> : null}
     {canonical?.warnings.length ? <PanelCard><PanelSectionHeader eyebrow="VALIDAÇÃO" title="Pendências conhecidas" description="Somente situações que ainda precisam de dado ou conciliação." /><div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{canonical.warnings.map((warning, index) => <div key={`${warning}-${index}`} style={{ color: 'var(--panel-amber-soft)', fontSize: '.82rem', padding: '10px 12px', border: '1px solid rgba(245,158,11,0.2)', background: 'rgba(245,158,11,0.06)', borderRadius: '10px' }}>{warning}</div>)}</div></PanelCard> : null}
   </PanelPage>;
+}
+
+function FrozenSnapshotsPanel({ snapshots }: { snapshots: CanonicalSnapshotRecord[] }) {
+  return <PanelCard><PanelSectionHeader eyebrow="FOTOGRAFIAS CONGELADAS" title="Continuidade da base inteira" description="Cada substituição arquiva a fotografia canônica anterior com estoque, vendas, clientes, redes, metas, fontes e auditoria. O snapshot não é reescrito pelos relatórios seguintes." action={<span className="panel-badge">{snapshots.length} versão(ões)</span>} />{snapshots.length ? <div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{snapshots.slice().reverse().slice(0, 12).map(snapshot => <div key={snapshot.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', padding: '9px 11px', border: '1px solid rgba(255,255,255,.08)', borderRadius: '9px' }}><div><strong>{snapshot.competence}</strong><div style={{ color: 'var(--panel-muted)', fontSize: '.7rem', marginTop: '3px' }}>Referência {snapshot.referenceDate} · fechado em {fmtDateTime(snapshot.closedAt)}</div></div><span className="panel-badge">{snapshot.reason === 'MONTH_CLOSE' ? 'FECHAMENTO MENSAL' : 'SUBSTITUIÇÃO PRESERVADA'}</span></div>)}</div> : <PanelAlert tone="info">Ainda não há uma versão anterior arquivada. A próxima substituição de competência ou fotografia criará o primeiro congelamento.</PanelAlert>}</PanelCard>;
 }
 
 function PortfolioContinuityPanel({ snapshot }: { snapshot: NonNullable<ReturnType<typeof loadPortfolioContinuityResult>['snapshot']> }) {

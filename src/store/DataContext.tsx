@@ -4,6 +4,7 @@ import { isUnifiedCanonicalState } from '../services/motors/unifiedEngine';
 import { clearCanonicalState, loadCanonicalState, saveCanonicalState } from './canonicalPersistence';
 import { competenceFromCanonical, loadManualConfiguration, normalizeManualConfiguration, saveManualConfiguration } from './competencePersistence';
 import { getCanonicalSnapshotCompatibilityIssue } from './snapshotCompatibility';
+import { createCanonicalSnapshot, saveCanonicalSnapshot, shouldArchive } from './snapshotHistory';
 
 interface DataContextType {
   canonical: CanonicalState | null;
@@ -69,6 +70,14 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     }
 
     const nextCompetence = competenceFromCanonical(data);
+    if (data && canonicalBase && shouldArchive(canonicalBase, data)) {
+      const reason = competenceFromCanonical(canonicalBase) !== nextCompetence ? 'MONTH_CLOSE' : 'REPLACED';
+      void saveCanonicalSnapshot(createCanonicalSnapshot(canonicalBase, manualConfig, new Date().toISOString(), reason)).catch(error => {
+        const message = `Snapshot congelado: não foi possível arquivar a fotografia anterior (${error instanceof Error ? error.message : 'erro desconhecido'}).`;
+        setDataNotice(message);
+        console.error(message, error);
+      });
+    }
     setCanonicalBase(data);
     if (data) {
       setDataNotice('');

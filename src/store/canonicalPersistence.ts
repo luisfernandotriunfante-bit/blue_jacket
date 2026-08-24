@@ -1,7 +1,7 @@
 import type { CanonicalState } from '../domain/canonical';
 
 const DB_NAME = 'blue-jacket-data';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'state';
 const CANONICAL_KEY = 'canonical';
 
@@ -17,6 +17,7 @@ function openDatabase(): Promise<IDBDatabase> {
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
+      if (!db.objectStoreNames.contains('snapshots')) db.createObjectStore('snapshots', { keyPath: 'id' });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error('Falha ao abrir IndexedDB.'));
