@@ -20,6 +20,7 @@ import { classifyLine, normalizeText } from '../canonical/utils';
 const ratio = (value:number, target:number) => target > 0 ? value / target : 0;
 const gap = (target:number, value:number) => Math.max(target - value, 0);
 const sum = <T>(rows:T[], value:(row:T)=>number) => rows.reduce((total,row) => total + (Number(value(row)) || 0), 0);
+const formatMoney = (value:number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
 const distinct = (values:string[]) => new Set(values.filter(Boolean)).size;
 const isIsoDate = (value:string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T12:00:00Z`).getTime());
 
@@ -500,8 +501,20 @@ export function projectCanonicalFromUnified(base:CanonicalState, unified:Unified
   const coordinators = buildCoordinators(vendors);
   const history = buildHistory(unified,base.referenceDate);
   const inventoryProjection = buildInventoryFromUnified(unified,base.referenceDate,config);
-  const warnings = [...base.warnings.filter(w => !w.startsWith('Motor unificado:'))];
+  const warnings = [...base.warnings.filter(w => !w.startsWith('Motor unificado:') && !w.startsWith('Sell Out por linha:') && !w.startsWith('Sell Out diário:') && !w.startsWith('Sell Out por vendedor:') && !w.startsWith('Bússola:') && !w.startsWith('Roteiro Ativo:') && !w.startsWith('Distribuição das linhas:'))];
   if (unified.qualityIssues.length) warnings.push(`Motor unificado: ${unified.qualityIssues.filter(i=>i.severity==='ERROR').length} erro(s), ${unified.qualityIssues.filter(i=>i.severity==='WARNING').length} alerta(s) e ${unified.qualityIssues.filter(i=>i.severity==='INFO').length} informação(ões) de qualidade; fatos não resolvidos foram preservados.`);
+  const lineTotal = sum(buildLines(unified, sellOutTarget, config), line => line.total);
+  const lineDifference = actualTotal - lineTotal;
+  if (Math.abs(lineDifference) > 0.01) warnings.push(`Sell Out por linha: ${formatMoney(Math.abs(lineDifference))} permanece sem classificação em uma das cinco linhas; o total foi preservado e nenhuma linha foi inventada.`);
+  const vendorTotal = sum(vendors, vendor => vendor.total);
+  const vendorDifference = actualTotal - vendorTotal;
+  if (Math.abs(vendorDifference) > 0.01) warnings.push(`Sell Out por vendedor: ${formatMoney(Math.abs(vendorDifference))} permanece fora de RCA oficial; o total foi preservado e não foi redistribuído.`);
+  const invalidDateCount = unified.qualityIssues.filter(issue => issue.code === 'SALES_MOVEMENT_DATE_UNRESOLVED').length;
+  if (invalidDateCount) warnings.push(`Sell Out diário: ${invalidDateCount} movimento(s) sem data válida permanecem somente no total mensal e não foram atribuídos artificialmente a um dia.`);
+  if (!unified.sources.some(source => source.sourceType === 'BUSSOLA')) warnings.push('Bússola: fonte não carregada; Meta da indústria e Meta de positivação permanecem indisponíveis.');
+  if (!unified.sources.some(source => source.sourceType === 'ROTEIRO_ATIVO')) warnings.push('Roteiro Ativo: fonte não carregada; Meta Tops permanece indisponível.');
+  const configuredLineShare = Object.values(config.lineShares || {}).reduce((total, value) => total + (Number(value) || 0), 0);
+  if (Math.abs(configuredLineShare - 1) >= 0.0001) warnings.push(`Distribuição das linhas: soma atual em ${(configuredLineShare * 100).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%; ajuste as cinco linhas para fechar em 100%.`);
   return {
     ...base,
     transactions: toTransactions(unified),
