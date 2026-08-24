@@ -37,7 +37,7 @@ test('checkpoint: exportação de Redes usa o contrato canônico atual sem 319 o
 test('checkpoint: auditoria oficial é a reconciliação canônica em três níveis',()=>{
   const page=read('src/pages/ConfiguracoesPage.tsx');
   const presentation=read('src/domain/reconciliationPresentation.ts');
-  assert.match(page,/canonical\.reconciliation\?\.checks\|\|\[\]/);
+  assert.match(page,/canonical\.reconciliation\?\.checks\s*\|\|\s*\[\]/);
   assert.match(presentation,/INTERNAL:'CONSISTÊNCIA INTERNA'/);
   assert.match(presentation,/SOURCE:'RECONCILIAÇÃO DE FONTES'/);
   assert.match(presentation,/SPREADSHEET:'REGRESSÃO CONTRA PLANILHA'/);
