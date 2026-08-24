@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useData } from '../store/DataContext';
 import { LINE_NAMES } from '../domain/canonical';
 import { redistributeNetworkTotal, redistributeSingleNetwork } from '../domain/targetRules';
-import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader, PanelStat } from '../ui/pattern/PanelVisual';
+import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader, PanelSectionNav, PanelStat } from '../ui/pattern/PanelVisual';
 
 const brl = (value: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
 const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
@@ -62,8 +62,9 @@ export function MetasPage() {
     <PanelPage title="Metas" metricLabel="Meta Sell Out T&C" metricValue={hasSellOutTarget ? brl(canonical.sellOut.sellOutTarget) : '—'}>
       <div className="panel-stack">
         {configurationWarning ? <PanelAlert tone="error">{configurationWarning} A alteração continua visível nesta sessão, mas não deve ser considerada salva até a persistência voltar a funcionar.</PanelAlert> : null}
+        <PanelSectionNav items={[{ id: 'metas-referencias', label: 'Referências oficiais' }, { id: 'metas-parametros', label: 'Parâmetros' }, { id: 'metas-calendario', label: 'Calendário' }, { id: 'metas-linhas', label: 'Linhas comerciais' }, { id: 'metas-redes', label: 'Metas por rede' }]} />
 
-        <PanelCard>
+        <div id="metas-referencias"><PanelCard>
           <PanelSectionHeader eyebrow="REFERÊNCIAS OFICIAIS" title="Metas recebidas das fontes" description="Somente leitura. O realizado continua vindo do motor de Vendas/Operação; ausência de fonte não é convertida em meta zero." />
           <div className="panel-grid panel-grid-auto">
             <PanelStat label="Meta indústria · Bússola" value={hasCompassTargets ? brl(canonical.industryTarget) : '—'} />
@@ -75,9 +76,9 @@ export function MetasPage() {
           {!hasCompassTargets ? <div style={{ marginTop: 12 }}><PanelAlert tone="warning">Bússola não carregada nesta fotografia. Meta da indústria e meta de positivação permanecem indisponíveis; o sistema não assume zero.</PanelAlert></div> : null}
           {!hasActiveRoute ? <div style={{ marginTop: 12 }}><PanelAlert tone="warning">Roteiro Ativo não carregado nesta fotografia. A Meta Tops permanece indisponível; o sistema não assume zero.</PanelAlert></div> : null}
           {hasCompassTargets && (unassignedSalesTarget > 0.01 || unassignedPositivityTarget > 0) ? <div style={{ marginTop: 12 }}><PanelAlert tone="warning">Existe parcela da Bússola sem RCA oficial resolvido. Ela continua compondo a meta da indústria, mas não é redistribuída artificialmente entre vendedores.</PanelAlert></div> : null}
-        </PanelCard>
+        </PanelCard></div>
 
-        <PanelCard>
+        <div id="metas-parametros"><PanelCard>
           <PanelSectionHeader eyebrow="AJUSTÁVEIS" title="Parâmetros gerais" description="Alterações são versionadas pela competência ativa e passam a valer em todas as telas e exportações canônicas." />
           <div className="panel-grid panel-grid-auto">
             <NumberField label="Meta Sell Out (T&C)" value={manualConfig.sellOutTarget} step={1000} onChange={value => setField('sellOutTarget', value)} detail="Meta manual e independente da Meta Indústria. Zero significa meta T&C não informada." />
@@ -85,9 +86,9 @@ export function MetasPage() {
             <NumberField label="Meta de cobertura (dias)" value={manualConfig.coverageTargetDays} step={1} onChange={value => setField('coverageTargetDays', value)} detail="Referência usada nas visões e alertas de estoque." />
             <NumberField label="Acréscimo de venda da Carteira (%)" value={manualConfig.portfolioSaleMarkup * 100} step={0.01} onChange={setPortfolioMarkup} detail="Fallback de valorização quando não há PVENDA1 aplicável; não altera o valor bruto da Carteira." />
           </div>
-        </PanelCard>
+        </PanelCard></div>
 
-        <PanelCard>
+        <div id="metas-calendario"><PanelCard>
           <PanelSectionHeader eyebrow="CALENDÁRIO" title="Feriados e dias não trabalhados" description="Datas excluídas do cálculo de dias úteis, médias diárias, tendência e necessidade por dia." action={<span className="panel-badge">{manualConfig.holidays.length} DATA(S)</span>} />
           <div className="panel-grid panel-grid-3" style={{ marginBottom: 14 }}>
             <PanelStat label="Dias úteis do mês" value={canonical.sellOut.businessDaysTotal.toLocaleString('pt-BR')} />
@@ -104,9 +105,9 @@ export function MetasPage() {
           <div className="panel-chips" style={{ marginTop: 14 }}>
             {manualConfig.holidays.map(date => <button type="button" className="panel-chip" key={date} onClick={() => removeHoliday(date)} title="Clique para remover">{new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR')} ×</button>)}
           </div>
-        </PanelCard>
+        </PanelCard></div>
 
-        <PanelCard>
+        <div id="metas-linhas"><PanelCard>
           <PanelSectionHeader eyebrow="LINHAS COMERCIAIS" title="Distribuição da Meta T&C" description="Percentuais editáveis usados para calcular a meta das cinco linhas." action={<span className={`panel-badge ${Math.abs(lineTotal - 1) < 0.0001 ? 'panel-badge-green' : 'panel-badge-amber'}`}>TOTAL · {pct(lineTotal)}</span>} />
           <div className="panel-grid panel-grid-auto">
             {LINE_NAMES.map(name => (
@@ -121,9 +122,9 @@ export function MetasPage() {
             ))}
           </div>
           {Math.abs(lineTotal - 1) >= 0.0001 ? <div style={{ marginTop: 12 }}><PanelAlert tone="warning">A distribuição das linhas está em {pct(lineTotal)}. Para distribuir integralmente a Meta T&C, o total deve fechar em 100%.</PanelAlert></div> : null}
-        </PanelCard>
+        </PanelCard></div>
 
-        <PanelCard>
+        <div id="metas-redes"><PanelCard>
           <PanelSectionHeader eyebrow="META REDES" title="Manutenção por rede" description="Editar uma rede não altera a Meta Redes Geral: o saldo é redistribuído proporcionalmente entre as outras redes. SEM REDE nunca recebe meta." action={<span className="panel-badge">TOTAL · {brl(networkTotal)}</span>} />
           {networkRows.length ? (
             <>
@@ -145,7 +146,7 @@ export function MetasPage() {
               </div>
             </>
           ) : <PanelEmptyState variant="compact" title="Nenhuma rede canônica disponível" description="A Meta Redes Geral só pode ser distribuída quando a fotografia possui redes reais resolvidas. SEM REDE não é usado como destinatário de meta." />}
-        </PanelCard>
+        </PanelCard></div>
       </div>
     </PanelPage>
   );

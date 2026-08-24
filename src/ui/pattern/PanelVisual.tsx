@@ -137,6 +137,14 @@ export function PanelTabs<T extends string>({ tabs, activeId, onChange, ariaLabe
   )
 }
 
+export function PanelSectionNav({ items, ariaLabel = 'Índice da página' }: { items: Array<{ id: string; label: string }>; ariaLabel?: string }) {
+  return (
+    <nav className="panel-section-nav" aria-label={ariaLabel}>
+      {items.map(item => <a key={item.id} href={`#${item.id}`} className="panel-section-nav-link">{item.label}</a>)}
+    </nav>
+  );
+}
+
 export function PanelStat({ label, value, note, tone = 'default' }: { label: ReactNode; value: ReactNode; note?: ReactNode; tone?: PanelKpiTone }) {
   const toneClass = tone === 'default' ? '' : ` panel-stat-${tone}`
   return (
