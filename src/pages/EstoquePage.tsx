@@ -11,6 +11,7 @@ import {
   StockPortfolioMovement,
   StockProductView,
 } from '../domain/stockModel';
+import { hasConsolidatedPortfolioRows, hasPendingPortfolio, prioritizeStockAlerts } from '../domain/stockUi';
 import { isUnifiedCanonicalState } from '../services/motors/unifiedEngine';
 import { loadStockAlertConfiguration, saveStockAlertConfiguration } from '../store/stockPreferences';
 import { PanelCard, PanelEmptyState, PanelKpi, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
@@ -71,7 +72,6 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
   const inventory = canonical?.inventory || [];
   const unified = isUnifiedCanonicalState(canonical) ? canonical.unified : null;
   const hasStock105 = Boolean(canonical?.sources.some(source => source.kind === 'stock105' && source.loaded));
-  const stockCodeProducts = useMemo(() => inventory.map(item => ({ codigo: item.code, factoryCode: item.factoryCode, ean: item.ean })), [inventory]);
 
   const presentation = useMemo(() => buildStockPresentation({
     inventory,
@@ -87,6 +87,8 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
     alertConfiguration,
   }), [inventory, canonical, unified, hasStock105, alertConfiguration]);
 
+  const stockCodeProducts = useMemo(() => presentation.products.map(item => ({ codigo: item.code, factoryCode: item.factoryCode, ean: item.ean })), [presentation.products]);
+
   const updateAlertConfiguration = (patch: Partial<StockAlertConfiguration>) => {
     setAlertConfiguration(current => {
       const next = { ...current, ...patch };
@@ -100,7 +102,8 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
     quantity: product.positionUnits,
     soldUnits: product.soldUnits,
     coverageDays: product.coverageDays,
-    pendingQty: product.pendingUnits,
+    // A classificação usa presença na Carteira como condição; caixas sem conversão continuam sendo Carteira real.
+    pendingQty: hasPendingPortfolio(product) ? 1 : 0,
     coverageTargetDays: canonical?.stock.coverageTargetDays || 0,
   })])), [presentation.products, canonical?.stock.coverageTargetDays]);
 
@@ -118,7 +121,7 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
         .some(value => String(value || '').toLowerCase().includes(search))) return false;
       if (importedCodes.size && !productMatchesStockCodeList({ codigo: product.code, factoryCode: product.factoryCode, ean: product.ean }, importedCodes)) return false;
       if (activeFilter === 'lancamento' && !product.isLaunch) return false;
-      if (activeFilter === 'sem-winthor' && (product.hasWinthor || product.pendingUnits <= 0)) return false;
+      if (activeFilter === 'sem-winthor' && (product.hasWinthor || !hasPendingPortfolio(product))) return false;
       if (statusFilter !== 'todos' && riskStatusByCode.get(product.code) !== statusFilter) return false;
       return true;
     });
@@ -155,12 +158,13 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
     const externalCatalog = Math.max(presentation.summary.skuCount - winthorSkus, 0);
     const quantityDivergences = presentation.products.filter(product => Math.abs(product.quantityDifference) > 0.001).length;
     const reservationConfirmed = presentation.reservation.mode === 'POSICAO_BRUTA';
-    const priorityAlerts = presentation.alerts.slice(0, 30);
+    const priorityAlerts = prioritizeStockAlerts(presentation.alerts, 30);
+    const hiddenAlerts = Math.max(presentation.alerts.length - priorityAlerts.length, 0);
     const physicalPackingNote = `${formatNumber(presentation.summary.physicalCases, 2)} cx completas + ${formatNumber(presentation.summary.looseUnits)} avulsas${presentation.summary.unconvertedPhysicalUnits > 0 ? ` · ${formatNumber(presentation.summary.unconvertedPhysicalUnits)} un. sem Un/CX interno` : ''}`;
 
     return <div className="panel-stack">
       <div className="stock-financial-grid">
-        <PanelKpi label="Estoque a venda" value={formatCurrency(canonical.stock.saleValue)} detail="Potencial do estoque atual pela referência de venda" tone="red" />
+        <PanelKpi label="Estoque a venda" value={formatCurrency(canonical.stock.saleValue)} detail="Valor do físico atual pelo PVENDA1" tone="red" />
         <PanelKpi label="Estoque a custo" value={formatCurrency(canonical.stock.costValue)} detail="Valor de aquisição da posição atual" />
         <PanelKpi label="Carteira a venda" value={formatCurrency(canonical.stock.pendingPurchaseSale)} detail={`${formatNumber(presentation.summary.pendingCases, 2)} cx previstas`} tone="blue" />
         <PanelKpi label="Carteira a custo" value={formatCurrency(canonical.stock.pendingPurchaseCost)} detail={`Projeção a custo: ${formatCurrency(projectedCost)}`} tone="purple" />
@@ -184,9 +188,9 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
       <PanelCard>
         <PanelSectionHeader eyebrow="SAÚDE" title="Situação do estoque" description={`${formatNumber(winthorSkus)} SKUs Winthor · ${formatNumber(externalCatalog)} item(ns) adicionais de catálogo/Carteira.`} />
         <div className="stock-health-grid">
-          <div className="stock-stat stock-stat-red"><div className="stock-stat-label">Ruptura</div><div className="stock-stat-value">{formatNumber(riskCounts.ruptura)}</div><div className="stock-stat-note">Estoque zerado</div></div>
-          <div className="stock-stat stock-stat-amber"><div className="stock-stat-label">Risco</div><div className="stock-stat-value">{formatNumber(riskCounts.risco)}</div><div className="stock-stat-note">Cobertura abaixo da meta</div></div>
-          <div className="stock-stat"><div className="stock-stat-label">Sem giro</div><div className="stock-stat-value">{formatNumber(riskCounts.semGiro)}</div><div className="stock-stat-note">Sem venda faturada no ritmo atual</div></div>
+          <div className="stock-stat stock-stat-red"><div className="stock-stat-label">Ruptura</div><div className="stock-stat-value">{formatNumber(riskCounts.ruptura)}</div><div className="stock-stat-note">Estoque físico zerado</div></div>
+          <div className="stock-stat stock-stat-amber"><div className="stock-stat-label">Risco</div><div className="stock-stat-value">{formatNumber(riskCounts.risco)}</div><div className="stock-stat-note">Cobertura abaixo da meta e sem Carteira</div></div>
+          <div className="stock-stat"><div className="stock-stat-label">Sem giro</div><div className="stock-stat-value">{formatNumber(riskCounts.semGiro)}</div><div className="stock-stat-note">Sem faturamento no ritmo atual</div></div>
           <div className="stock-stat stock-stat-amber"><div className="stock-stat-label">Sem Winthor</div><div className="stock-stat-value">{formatNumber(presentation.summary.noWinthorCount)}</div><div className="stock-stat-note">Somente itens presentes na Carteira</div></div>
           <div className="stock-stat stock-stat-purple"><div className="stock-stat-label">Lançamentos</div><div className="stock-stat-value">{formatNumber(presentation.summary.launchCount)}</div><div className="stock-stat-note">Lista oficial por EAN</div></div>
           <div className="stock-stat"><div className="stock-stat-label">Divergências</div><div className="stock-stat-value">{formatNumber(quantityDivergences)}</div><div className="stock-stat-note">Conversão física por SKU</div></div>
@@ -194,7 +198,7 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
       </PanelCard>
 
       <PanelCard>
-        <PanelSectionHeader eyebrow="ALERTAS" title={`Central de alertas · ${presentation.alerts.length}`} description="Mostra situações que pedem ação comercial, de cadastro ou de estoque. A auditoria técnica completa não ocupa mais a Visão Geral." />
+        <PanelSectionHeader eyebrow="ALERTAS" title={`Central de alertas · ${presentation.alerts.length}`} description={`Até 30 alertas são exibidos por prioridade: críticos, atenção e informação.${hiddenAlerts > 0 ? ` ${hiddenAlerts} alerta(s) adicional(is) permanecem fora do recorte visual.` : ''}`} />
         {priorityAlerts.length === 0 ? <div className="panel-mini-note">Nenhum alerta detectado com os dados atuais.</div> : (
           <div className="panel-table-wrap" style={{ maxHeight: '420px' }}><table className="panel-table">
             <thead><tr><th>Nível</th><th>Alerta</th><th>SKU</th><th>Produto</th><th>Detalhe</th></tr></thead>
@@ -217,14 +221,15 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
   const renderProductDetails = (product: StockProductView) => {
     const timeline = presentation.movements.filter(movement => movement.sku === product.code).slice(0, 50);
     const status = riskStatusByCode.get(product.code) || 'ok';
+    const productInPortfolio = hasPendingPortfolio(product);
     return <PanelCard style={{ marginTop: '16px', borderLeft: '4px solid var(--panel-red)' }}>
       <PanelSectionHeader eyebrow="FICHA DO SKU" title={product.description} description={`${product.code} · ${product.ean || 'SEM EAN'}${product.brand ? ` · ${product.brand}` : ''}`} action={<button className="panel-secondary-button" onClick={() => setSelectedCode('')}>Fechar</button>} />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px', marginBottom: '18px' }}>
         {[
-          ['Código Winthor', product.code], ['Código fabricante', product.factoryCode || '—'], ['EAN', product.ean || '—'], ['Marca', product.brand || '—'], ['Linha / sublinha', [product.line, product.subcategory].filter(Boolean).join(' · ') || '—'], ['Un/CX interno', product.unitsPerCase > 0 ? formatNumber(product.unitsPerCase, 2) : '—'], ['Un/CX indústria', product.industryUnitsPerCase > 0 ? formatNumber(product.industryUnitsPerCase, 2) : '—'], ['Posição 105', `${formatNumber(product.positionUnits)} un.`], ['Caixas físicas', formatNumber(product.physicalCases, 2)], ['Unidades avulsas', formatNumber(product.looseUnits)], ['Total físico', `${formatNumber(product.physicalTotalUnits)} un.`], ['Caixas equivalentes', product.equivalentCases === null ? '—' : formatNumber(product.equivalentCases, 2)], ['Reservado', `${formatNumber(product.reservedUnits)} un.`], ['Disponível', `${formatNumber(product.availableUnits)} un.`], ['Carteira', `${formatNumber(product.pendingUnits)} un. · ${formatNumber(product.pendingCases, 2)} cx`], ['Projetado', `${formatNumber(product.projectedUnits)} un.`], ['Venda mês', `${formatNumber(product.soldUnits)} un.`], ['Média diária', `${formatNumber(product.averageDailyUnits, 1)} un./dia`], ['Cobertura', formatDays(product.coverageDays)], ['Cobertura projetada', formatDays(product.projectedCoverageDays)], ['Custo unitário', product.costUnit > 0 ? formatCurrency(product.costUnit) : '—'], ['Total a custo', formatCurrency(product.positionCostValue)], ['Venda referência', product.saleUnit > 0 ? formatCurrency(product.saleUnit) : '—'], ['Potencial de venda', formatCurrency(product.positionSaleValue)], ['Peso bruto · auditoria 8013', product.grossKg > 0 ? `${formatNumber(product.grossKg, 2)} kg` : '—'],
+          ['Código Winthor', product.code], ['Código fabricante', product.factoryCode || '—'], ['EAN', product.ean || '—'], ['Marca', product.brand || '—'], ['Linha / sublinha', [product.line, product.subcategory].filter(Boolean).join(' · ') || '—'], ['Un/CX interno', product.unitsPerCase > 0 ? formatNumber(product.unitsPerCase, 2) : '—'], ['Un/CX indústria', product.industryUnitsPerCase > 0 ? formatNumber(product.industryUnitsPerCase, 2) : '—'], ['Posição 105', `${formatNumber(product.positionUnits)} un.`], ['Caixas físicas', formatNumber(product.physicalCases, 2)], ['Unidades avulsas', formatNumber(product.looseUnits)], ['Total físico', `${formatNumber(product.physicalTotalUnits)} un.`], ['Caixas equivalentes', product.equivalentCases === null ? '—' : formatNumber(product.equivalentCases, 2)], ['Reservado', `${formatNumber(product.reservedUnits)} un.`], ['Disponível', `${formatNumber(product.availableUnits)} un.`], ['Carteira', `${formatNumber(product.pendingUnits)} un. · ${formatNumber(product.pendingCases, 2)} cx`], ['Projetado', `${formatNumber(product.projectedUnits)} un.`], ['Faturado mês', `${formatNumber(product.soldUnits)} un.`], ['Média diária faturada', `${formatNumber(product.averageDailyUnits, 1)} un./dia`], ['Cobertura ritmo faturado', formatDays(product.coverageDays)], ['Cobertura projetada', formatDays(product.projectedCoverageDays)], ['Custo unitário', product.costUnit > 0 ? formatCurrency(product.costUnit) : '—'], ['Valor físico a custo', formatCurrency(product.positionCostValue)], ['PVENDA1', product.saleUnit > 0 ? formatCurrency(product.saleUnit) : '—'], ['Valor físico a venda', formatCurrency(product.positionSaleValue)], ['Peso bruto · auditoria 8013', product.grossKg > 0 ? `${formatNumber(product.grossKg, 2)} kg` : '—'],
         ].map(([label, value]) => <div key={label} className="panel-mini-stat"><div className="panel-mini-label">{label}</div><div className="panel-mini-value" style={{ fontSize: '1rem' }}>{value}</div></div>)}
       </div>
-      <div className="panel-badges" style={{ marginBottom: '18px' }}>{riskBadge(status)}{product.isLaunch && <span className="panel-badge panel-badge-purple">LANÇAMENTO</span>}{!product.hasWinthor && product.pendingUnits > 0 && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}{product.alerts.map(alert => <span key={alert.id} title={alert.message}>{alertBadge(alert)}</span>)}</div>
+      <div className="panel-badges" style={{ marginBottom: '18px' }}>{riskBadge(status)}{product.isLaunch && <span className="panel-badge panel-badge-purple">LANÇAMENTO</span>}{!product.hasWinthor && productInPortfolio && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}{product.alerts.map(alert => <span key={alert.id} title={alert.message}>{alertBadge(alert)}</span>)}</div>
       <PanelSectionHeader eyebrow="LINHA DO TEMPO" title={`Movimentos comprovados · ${timeline.length}`} description="Movimentos vêm da base canônica: Carteira, 8022 e recebimentos 218. Devoluções, transferências e ajustes entram quando houver fonte detalhada correspondente." />
       <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Data</th><th>Status</th><th>Movimento</th><th className="is-right">Caixas</th><th className="is-right">Total un.</th><th className="is-right">Valor</th><th>Origem</th></tr></thead>
         <tbody>{timeline.length ? timeline.map(movement => <tr key={movement.id}><td>{movement.date || '—'}</td><td>{movement.status}</td><td>{movement.movement}</td><td className="is-right">{formatNumber(movement.cases, 2)}</td><td className="is-right">{formatNumber(movement.totalUnits)}</td><td className="is-right">{formatCurrency(movement.value)}</td><td>{movement.origin}</td></tr>) : <tr><td colSpan={7} className="is-muted">Nenhum movimento comprovado nas fontes atuais.</td></tr>}</tbody>
@@ -234,19 +239,19 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
 
   const renderProducts = () => <div className="panel-stack">
     <PanelCard>
-      <PanelSectionHeader eyebrow="PRODUTOS" title={`Posição por SKU · ${filteredProducts.length} de ${presentation.products.length}`} description="A tabela usa físico 105, Un/CX interno 8013, reserva 8022, Carteira convertida pelo Un/CX indústria, venda da competência, cobertura e preços canônicos no mesmo SKU." />
+      <PanelSectionHeader eyebrow="PRODUTOS" title={`Posição por SKU · ${filteredProducts.length} de ${presentation.products.length}`} description="A tabela usa físico 105, Un/CX interno 8013, reserva 8022, Carteira convertida pelo Un/CX indústria, faturado da competência, cobertura no ritmo faturado e PVENDA1 no mesmo SKU." />
       <div className="panel-toolbar" style={{ marginBottom: '12px' }}>
         <div className="panel-chips"><button className={`panel-chip${activeFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setActiveFilter('todos')}>Todos · {presentation.products.length}</button><button className={`panel-chip${activeFilter === 'lancamento' ? ' is-active' : ''}`} onClick={() => setActiveFilter('lancamento')}>Lançamentos · {presentation.summary.launchCount}</button><button className={`panel-chip is-warning${activeFilter === 'sem-winthor' ? ' is-active' : ''}`} onClick={() => setActiveFilter('sem-winthor')}>Sem Winthor · {presentation.summary.noWinthorCount}</button></div>
         <input className="panel-input panel-input-search" value={searchTerm} placeholder="Buscar código, EAN, fabricante, produto..." onChange={event => setSearchTerm(event.target.value)} />
       </div>
       <div className="panel-toolbar" style={{ marginBottom: '12px' }}><div className="panel-chips"><button className={`panel-chip${statusFilter === 'todos' ? ' is-active' : ''}`} onClick={() => setStatusFilter('todos')}>Situação · Todas</button><button className={`panel-chip${statusFilter === 'ruptura' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ruptura')}>Ruptura · {riskCounts.ruptura}</button><button className={`panel-chip${statusFilter === 'risco' ? ' is-active' : ''}`} onClick={() => setStatusFilter('risco')}>Risco · {riskCounts.risco}</button><button className={`panel-chip${statusFilter === 'sem-giro' ? ' is-active' : ''}`} onClick={() => setStatusFilter('sem-giro')}>Sem giro · {riskCounts.semGiro}</button><button className={`panel-chip${statusFilter === 'ok' ? ' is-active' : ''}`} onClick={() => setStatusFilter('ok')}>OK · {riskCounts.ok}</button></div><span style={{ color: 'var(--panel-muted)', fontSize: '0.72rem' }}>Meta de cobertura: <strong style={{ color: 'var(--panel-text)' }}>{canonical.stock.coverageTargetDays} dias</strong></span></div>
       <div className="panel-toolbar" style={{ marginBottom: '18px' }}><StockCodeListFilter products={stockCodeProducts} codes={importedCodes} onChange={setImportedCodes} /><button className="panel-secondary-button" onClick={() => { setSearchTerm(''); setActiveFilter('todos'); setStatusFilter('todos'); setImportedCodes(new Set()); }}>Limpar filtros</button></div>
-      <div className="panel-table-wrap stock-table-compact"><table className="panel-table"><thead><tr><th>Código</th><th>Produto</th><th className="is-right">Un/CX int.</th><th className="is-right">Un/CX ind.</th><th className="is-right">Posição 105</th><th className="is-right">Cx físicas</th><th className="is-right">Avulsas</th><th className="is-right">Físico un.</th><th className="is-right">Reservado</th><th className="is-right">Disponível</th><th className="is-right">Carteira cx</th><th className="is-right">Carteira un.</th><th className="is-right">Projetado</th><th className="is-right">Venda mês</th><th className="is-right">Cobertura</th><th className="is-right">Custo un.</th><th className="is-right">Total custo</th><th className="is-right">Venda ref.</th><th className="is-right">Potencial</th><th className="is-right">Peso 8013 kg</th><th>Situação</th><th></th></tr></thead>
-        <tbody>{filteredProducts.map(product => { const status = riskStatusByCode.get(product.code) || 'ok'; return <tr key={product.code}>
+      <div className="panel-table-wrap stock-table-compact"><table className="panel-table"><thead><tr><th>Código</th><th>Produto</th><th className="is-right">Un/CX int.</th><th className="is-right">Un/CX ind.</th><th className="is-right">Posição 105</th><th className="is-right">Cx físicas</th><th className="is-right">Avulsas</th><th className="is-right">Físico un.</th><th className="is-right">Reservado</th><th className="is-right">Disponível</th><th className="is-right">Carteira cx</th><th className="is-right">Carteira un.</th><th className="is-right">Projetado</th><th className="is-right">Faturado mês (un.)</th><th className="is-right">Cobertura ritmo faturado</th><th className="is-right">Custo un.</th><th className="is-right">Valor físico a custo</th><th className="is-right">PVENDA1</th><th className="is-right">Valor físico a venda</th><th className="is-right">Peso 8013 kg</th><th>Situação</th><th></th></tr></thead>
+        <tbody>{filteredProducts.length ? filteredProducts.map(product => { const status = riskStatusByCode.get(product.code) || 'ok'; const productInPortfolio = hasPendingPortfolio(product); return <tr key={product.code}>
           <td className="is-strong">{product.code.startsWith('EAN-') ? '—' : product.code}</td>
-          <td className="stock-product-cell"><div className="stock-product-name">{product.description}</div><div className="stock-product-meta">EAN: {product.ean || '—'} · Fab: {product.factoryCode || '—'}{product.brand ? ` · ${product.brand}` : ''}</div><div className="panel-badges" style={{ marginTop: '5px' }}>{product.isLaunch && <span className="panel-badge panel-badge-purple">LANÇAMENTO</span>}{!product.hasWinthor && product.pendingUnits > 0 && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}</div></td>
+          <td className="stock-product-cell"><div className="stock-product-name">{product.description}</div><div className="stock-product-meta">EAN: {product.ean || '—'} · Fab: {product.factoryCode || '—'}{product.brand ? ` · ${product.brand}` : ''}</div><div className="panel-badges" style={{ marginTop: '5px' }}>{product.isLaunch && <span className="panel-badge panel-badge-purple">LANÇAMENTO</span>}{!product.hasWinthor && productInPortfolio && <span className="panel-badge panel-badge-amber">SEM WINTHOR</span>}</div></td>
           <td className="is-right">{product.unitsPerCase > 0 ? formatNumber(product.unitsPerCase, 2) : '—'}</td><td className="is-right">{product.industryUnitsPerCase > 0 ? formatNumber(product.industryUnitsPerCase, 2) : '—'}</td><td className="is-right">{formatNumber(product.positionUnits)}</td><td className="is-right">{formatNumber(product.physicalCases, 2)}</td><td className="is-right">{formatNumber(product.looseUnits)}</td><td className="is-right is-strong">{formatNumber(product.physicalTotalUnits)}</td><td className="is-right">{formatNumber(product.reservedUnits)}</td><td className="is-right is-green">{formatNumber(product.availableUnits)}</td><td className="is-right">{formatNumber(product.pendingCases, 2)}</td><td className="is-right is-blue">{formatNumber(product.pendingUnits)}</td><td className="is-right is-strong">{formatNumber(product.projectedUnits)}</td><td className="is-right">{formatNumber(product.soldUnits)}</td><td className="is-right">{formatDays(product.coverageDays)}</td><td className="is-right is-muted">{product.costUnit > 0 ? formatCurrency(product.costUnit) : '—'}</td><td className="is-right">{formatCurrency(product.positionCostValue)}</td><td className="is-right">{product.saleUnit > 0 ? formatCurrency(product.saleUnit) : '—'}</td><td className="is-right is-strong">{formatCurrency(product.positionSaleValue)}</td><td className="is-right">{product.grossKg > 0 ? formatNumber(product.grossKg, 2) : '—'}</td><td>{riskBadge(status)}</td><td><button className="panel-secondary-button" onClick={() => setSelectedCode(product.code)}>Detalhes</button></td>
-        </tr>; })}</tbody>
+        </tr>; }) : <tr><td colSpan={22}><PanelEmptyState variant="compact" title="Nenhum produto encontrado" description="Revise a busca, a lista importada ou os filtros de catálogo e situação." /></td></tr>}</tbody>
       </table></div>
       {selectedProduct ? renderProductDetails(selectedProduct) : null}
     </PanelCard>
@@ -254,13 +259,13 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
 
   const renderMovements = () => {
     const portfolioMovements = presentation.movements.filter(movement => movement.kind === 'ENTRADA_PREVISTA_CARTEIRA');
-    const detailedPortfolio = portfolioMovements.some(movement => Number((movement as StockPortfolioMovement).sourceRow) > 0);
+    const hasConsolidatedPortfolio = hasConsolidatedPortfolioRows(portfolioMovements as StockPortfolioMovement[]);
     return <div className="panel-stack"><PanelCard>
       <PanelSectionHeader eyebrow="ENTRADAS E SAÍDAS" title={`${direction === 'ENTRADA' ? 'Entradas' : 'Saídas'} · ${movements.length}`} description="Entradas mostram Carteira prevista e recebimentos 218 realizados; Saídas mostram o 8022 faturado e reservado. Tudo nasce dos fatos canônicos." action={<input className="panel-input panel-input-search" value={movementSearch} placeholder="Filtrar SKU, produto, parceiro, origem..." onChange={event => setMovementSearch(event.target.value)} />} />
       <div className="panel-chips" style={{ marginBottom: '18px' }}><button className={`panel-chip${direction === 'ENTRADA' ? ' is-active' : ''}`} onClick={() => setDirection('ENTRADA')}>Entradas</button><button className={`panel-chip${direction === 'SAIDA' ? ' is-active' : ''}`} onClick={() => setDirection('SAIDA')}>Saídas</button></div>
       {direction === 'ENTRADA' ? <>
-        {!detailedPortfolio && portfolioMovements.length > 0 ? <div className="stock-inline-note" style={{ marginTop: 0, marginBottom: '14px' }}><span>A carga atual da Carteira foi salva antes do detalhamento linha a linha. Na próxima carga da Carteira, Order Qty e Bill Qty serão preservados separadamente.</span><span className="panel-badge panel-badge-amber">CONSOLIDADO</span></div> : null}
-        <div className="panel-table-wrap stock-table-compact"><table className="panel-table"><thead><tr><th>Status</th><th className="is-right">Linha fonte</th><th>SKU</th><th>Produto</th><th className="is-right">Order Qty</th><th className="is-right">Bill Qty</th><th className="is-right">Total cx</th><th className="is-right">Un/CX</th><th className="is-right">Total un.</th><th className="is-right">Custo</th><th className="is-right">Venda proj.</th><th>Origem</th></tr></thead><tbody>
+        {hasConsolidatedPortfolio ? <div className="stock-inline-note" style={{ marginTop: 0, marginBottom: '14px' }}><span>Há linha(s) da Carteira ainda consolidadas, sem o detalhamento original de Order Qty e Bill Qty. Linhas novas detalhadas continuam preservadas normalmente.</span><span className="panel-badge panel-badge-amber">CONSOLIDADO PARCIAL</span></div> : null}
+        <div className="panel-table-wrap stock-table-compact"><table className="panel-table"><thead><tr><th>Status</th><th className="is-right">Linha fonte</th><th>SKU</th><th>Produto</th><th className="is-right">Order Qty</th><th className="is-right">Bill Qty</th><th className="is-right">Total cx</th><th className="is-right">Un/CX Carteira</th><th className="is-right">Total un.</th><th className="is-right">Custo</th><th className="is-right">Venda proj.</th><th>Origem</th></tr></thead><tbody>
           {movements.length ? movements.map(movement => { const detail = movement as StockPortfolioMovement; const badge = movement.stage === 'REALIZADA' ? 'panel-badge panel-badge-green' : movement.stage === 'RESERVADA' ? 'panel-badge panel-badge-amber' : 'panel-badge panel-badge-blue'; return <tr key={movement.id}><td><span className={badge}>{movement.status}</span></td><td className="is-right">{detail.sourceRow || '—'}</td><td className="is-strong">{movement.sku.startsWith('PORTFOLIO-') ? '—' : movement.sku}</td><td className="stock-product-cell"><div className="stock-product-name">{movement.product}</div><div className="stock-product-meta">{movement.ean || 'Sem EAN'} · {movement.partner}</div></td><td className="is-right">{detail.sourceRow ? formatNumber(detail.orderQtyCases || 0, 2) : '—'}</td><td className="is-right">{detail.sourceRow ? formatNumber(detail.billQtyCases || 0, 2) : '—'}</td><td className="is-right is-strong">{formatNumber(movement.cases, 2)}</td><td className="is-right">{detail.unitsPerCase ? formatNumber(detail.unitsPerCase, 2) : '—'}</td><td className="is-right is-blue">{formatNumber(movement.totalUnits)}</td><td className="is-right">{formatCurrency(movement.value)}</td><td className="is-right">{detail.saleValue ? formatCurrency(detail.saleValue) : '—'}</td><td>{movement.origin}</td></tr>; }) : <tr><td colSpan={12} className="is-muted">Nenhuma entrada comprovada com os filtros atuais.</td></tr>}
         </tbody></table></div>
       </> : <div className="panel-table-wrap stock-table-compact"><table className="panel-table"><thead><tr><th>Data</th><th>Status</th><th>SKU</th><th>Produto</th><th>Cliente</th><th>CNPJ</th><th className="is-right">Caixas</th><th className="is-right">Avulsas</th><th className="is-right">Total un.</th><th className="is-right">Valor</th><th>Origem</th></tr></thead><tbody>
@@ -270,5 +275,5 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
   };
 
   const title = view === 'products' ? 'Produtos' : view === 'movements' ? 'Entradas e Saídas' : 'Estoque';
-  return <PanelPage title={title} metricLabel="Valor potencial de venda" metricValue={formatCurrency(canonical.stock.saleValue)}>{view === 'products' ? renderProducts() : view === 'movements' ? renderMovements() : renderOverview()}</PanelPage>;
+  return <PanelPage title={title} metricLabel="Estoque físico a venda" metricValue={formatCurrency(canonical.stock.saleValue)}>{view === 'products' ? renderProducts() : view === 'movements' ? renderMovements() : renderOverview()}</PanelPage>;
 }
