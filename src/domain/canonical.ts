@@ -237,8 +237,7 @@ export interface CanonicalLineResult { name:LineName; share:number; target:numbe
 export interface CanonicalStockSummary {
   costValue:number; saleValue:number; pendingPurchaseCost:number; pendingPurchaseSale:number; projectedCostValue:number; projectedSaleValue:number;
   physicalUnits:number; physicalCases:number; grossKg:number;
-  coverageCurrentDays:number; coverageProjectedDays:number;
-  coverageCostCurrentDays:number; coverageCostProjectedDays:number;
+  coverageCurrentDays:number; coverageProjectedDays:number; coverageCostCurrentDays:number; coverageCostProjectedDays:number;
   coverageTargetDays:number;
 }
 
@@ -279,23 +278,25 @@ function configuredBusinessDays(start:string,end:string,holidays:string[]){
 
 export function applyManualConfiguration(base:CanonicalState|null,config:ManualConfiguration):CanonicalState|null{
   if(!base)return null;
-  const sellOutTarget=config.sellOutTarget>0?Math.max(config.sellOutTarget,0):Math.max(base.sellOut.sellOutTarget,0);
+  // Meta T&C manual é autoritativa. Zero significa explicitamente "não informada" e nunca revive valor antigo do snapshot.
+  const sellOutTarget=Math.max(Number(config.sellOutTarget)||0,0);
   const coverageTargetDays=Math.max(config.coverageTargetDays||0,0);
   const portfolioSaleMarkup=Math.max(Number(config.portfolioSaleMarkup)||0,0);
   const elapsedEnd=base.referenceDate<base.periodEnd?base.referenceDate:base.periodEnd;
-  const businessDaysTotal=configuredBusinessDays(base.periodStart,base.periodEnd,config.holidays)||base.sellOut.businessDaysTotal;
+  const businessDaysTotal=configuredBusinessDays(base.periodStart,base.periodEnd,config.holidays);
   const businessDaysElapsed=configuredBusinessDays(base.periodStart,elapsedEnd,config.holidays);
   const businessDaysRemaining=Math.max(businessDaysTotal-businessDaysElapsed,0);
   const invoicedDailyAverage=businessDaysElapsed>0?base.sellOut.invoiced/businessDaysElapsed:0;
   const totalDailyAverage=businessDaysElapsed>0?base.sellOut.total/businessDaysElapsed:0;
   const invoicedTrend=invoicedDailyAverage*businessDaysTotal;
   const totalTrend=totalDailyAverage*businessDaysTotal;
-  const neededDailyAverage=businessDaysRemaining>0?positiveGap(sellOutTarget,base.sellOut.total)/businessDaysRemaining:positiveGap(sellOutTarget,base.sellOut.total);
+  const neededDailyAverage=businessDaysRemaining>0?positiveGap(sellOutTarget,base.sellOut.total)/businessDaysRemaining:0;
 
   const networks=base.networks.map(network=>{
     const configured=config.networkTargets[network.key];
     const networkTarget=Number.isFinite(configured)?Math.max(configured,0):Math.max(network.networkTarget,0);
-    return{...network,networkTarget,networkAttainment:ratio(network.total,networkTarget),topAttainment:ratio(network.total,network.topTarget),gapToNetworkTarget:positiveGap(networkTarget,network.total),gapToTopTarget:positiveGap(network.topTarget,network.total)};
+    // Meta manual da rede não altera a população Top; métricas Top permanecem as calculadas exclusivamente nos CNPJs Top.
+    return{...network,networkTarget,networkAttainment:ratio(network.total,networkTarget),gapToNetworkTarget:positiveGap(networkTarget,network.total)};
   });
   const lines=base.lines.map(line=>{const share=config.lineShares[line.name]??line.share;const target=sellOutTarget*share;return{...line,share,target,attainment:ratio(line.total,target)}});
   const inventory=base.inventory.map(item=>{
@@ -314,7 +315,7 @@ export function applyManualConfiguration(base:CanonicalState|null,config:ManualC
     const idealSalesToday=businessDaysTotal>0?vendor.salesTarget*(businessDaysElapsed/businessDaysTotal):0;
     const idealPositivationToday=businessDaysTotal>0?vendor.positivityTarget*(businessDaysElapsed/businessDaysTotal):0;
     const positivityGapToTarget=positiveGap(vendor.positivityTarget,vendor.totalPositivation);
-    return{...vendor,idealSalesToday,salesGapToIdeal:positiveGap(idealSalesToday,vendor.total),salesGapToTarget:positiveGap(vendor.salesTarget,vendor.total),idealPositivationToday,positivityGapToIdeal:positiveGap(idealPositivationToday,vendor.totalPositivation),positivityGapToTarget,positivityDailyTarget:businessDaysRemaining>0?positivityGapToTarget/businessDaysRemaining:positivityGapToTarget};
+    return{...vendor,idealSalesToday,salesGapToIdeal:positiveGap(idealSalesToday,vendor.total),salesGapToTarget:positiveGap(vendor.salesTarget,vendor.total),idealPositivationToday,positivityGapToIdeal:positiveGap(idealPositivationToday,vendor.totalPositivation),positivityGapToTarget,positivityDailyTarget:businessDaysRemaining>0?positivityGapToTarget/businessDaysRemaining:0};
   });
   const coordinatorGroups=new Map<string,CanonicalVendorResult[]>();
   vendors.forEach(vendor=>{const key=vendor.coordinatorCode||vendor.coordinatorName||'SEM_COORDENADOR';const rows=coordinatorGroups.get(key)||[];rows.push(vendor);coordinatorGroups.set(key,rows)});
