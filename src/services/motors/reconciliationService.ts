@@ -178,12 +178,18 @@ function sourceChecks(unified: UnifiedDataLayer): CanonicalReconciliationCheck[]
       })
     : blocked('SOURCE_8022_RCA_IDENTITY', 'SOURCE', '8022 encontra RCA_MASTER oficial', '8022 × NOVOS RCAS', 'Carregue 8022 e Novos RCAs para executar o teste.'));
 
-  const unassignedTargets = unified.targets.filter(row => row.assignmentStatus === 'UNRESOLVED_RCA').length;
+  const unresolvedTargetRows = unified.targets.filter(row => row.assignmentStatus === 'UNRESOLVED_RCA');
+  const unassignedTargets = unresolvedTargetRows.length;
+  const unresolvedTargetCodes = Array.from(new Set(unresolvedTargetRows.map(row => row.legacyRcaCode).filter(Boolean)));
+  const unresolvedTargetPreview = unresolvedTargetCodes.slice(0, 8).join(', ');
+  const unresolvedTargetSuffix = unresolvedTargetCodes.length > 8 ? ` e mais ${unresolvedTargetCodes.length - 8}` : '';
   checks.push(has('BUSSOLA') && has('NOVOS_RCAS')
     ? numericCheck({
         id: 'SOURCE_TARGET_RCA_IDENTITY', level: 'SOURCE', label: 'Bússola encontra RCA legado oficial',
         expected: 0, calculated: unassignedTargets, source: 'Bússola × NOVOS RCAS', statusWhenDifferent: 'BLOCKED',
-        note: unassignedTargets ? 'Meta não mapeada permanece em Meta Indústria como não atribuída; não é redistribuída.' : 'Todas as metas carregadas foram atribuídas por código legado oficial.',
+        note: unassignedTargets
+          ? `Há ${unassignedTargets} meta(s) sem RCA oficial. Código(s) legados não encontrados: ${unresolvedTargetPreview || 'não informado'}${unresolvedTargetSuffix}. Atualize a Bússola ou preserve o código legado no NOVOS RCAS e reprocesse o lote; a meta permanece em Meta Indústria e não é redistribuída.`
+          : 'Todas as metas carregadas foram atribuídas por código legado oficial.',
       })
     : blocked('SOURCE_TARGET_RCA_IDENTITY', 'SOURCE', 'Bússola encontra RCA legado oficial', 'Bússola × NOVOS RCAS', 'Carregue Bússola e Novos RCAs para executar o teste.'));
 
