@@ -8,7 +8,7 @@ import { EstoquePage } from './pages/EstoquePage'
 import { LancamentosPage } from './pages/LancamentosPage'
 import { ConfiguracoesPage } from './pages/ConfiguracoesPage'
 import { MetasPage } from './pages/MetasPage'
-import { SellOutPage } from './pages/SellOutPage'
+import { SELL_OUT_TABS, SellOutPage } from './pages/SellOutPage'
 import { DocumentosPage } from './pages/DocumentosPage'
 import { CriacaoComboPage } from './pages/CriacaoComboPage'
 import { ClientesSortimentoPage, type ClientesSortimentoView } from './pages/ClientesSortimentoUnifiedPage'
@@ -18,6 +18,7 @@ import './ui/theme/foundation.css'
 function App() {
   const [activeTab, setActiveTab] = useState('estoque')
   const [activeEstoqueTopTab, setActiveEstoqueTopTab] = useState('overview')
+  const [activeSellOutTopTab, setActiveSellOutTopTab] = useState('resumo')
   const [activeAtividadesTopTab, setActiveAtividadesTopTab] = useState('combo')
   const [activeClientesTopTab, setActiveClientesTopTab] = useState<ClientesSortimentoView>('overview')
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -83,6 +84,8 @@ function App() {
 
   const topNavigation = activeTab === 'estoque' ? (
     <TopTabs tabs={estoqueTopTabs} activeId={activeEstoqueTopTab} onChange={setActiveEstoqueTopTab} />
+  ) : activeTab === 'sellout' ? (
+    <TopTabs tabs={SELL_OUT_TABS} activeId={activeSellOutTopTab} onChange={setActiveSellOutTopTab} ariaLabel="Navegação do Sell Out" />
   ) : activeTab === 'atividades' ? (
     <TopTabs tabs={atividadesTopTabs} activeId={activeAtividadesTopTab} onChange={setActiveAtividadesTopTab} />
   ) : activeTab === 'sortimento' ? (
@@ -96,7 +99,7 @@ function App() {
     <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
       {activeTab === 'estoque' ? (
         activeEstoqueTopTab === 'launches' ? <LancamentosPage /> : <EstoquePage view={estoqueView} />
-      ) : activeTab === 'sellout' ? <SellOutPage />
+      ) : activeTab === 'sellout' ? <SellOutPage view={activeSellOutTopTab as 'resumo' | 'redes' | 'gerencial'} />
       : activeTab === 'sortimento' ? <ClientesSortimentoPage view={activeClientesTopTab} />
       : activeTab === 'atividades' && activeAtividadesTopTab === 'combo' ? <CriacaoComboPage />
       : activeTab === 'relatorios' ? <DocumentosPage />

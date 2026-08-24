@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { useData } from '../store/DataContext';
 import { DailyMovementWindow } from '../ui/charts/DailyMovementWindow';
 import {
@@ -9,7 +8,6 @@ import {
   PanelPage,
   PanelSectionHeader,
   PanelStat,
-  PanelTabs,
 } from '../ui/pattern/PanelVisual';
 
 const fmtBRL = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -19,7 +17,12 @@ const fmtPct2 = (value: number) => `${((value || 0) * 100).toLocaleString('pt-BR
 const fmtDate = (value: string) => value ? new Date(`${value}T12:00:00`).toLocaleDateString('pt-BR') : '—';
 const validIsoDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T12:00:00Z`).getTime());
 
-type TabId = 'resumo' | 'redes' | 'gerencial';
+export type SellOutView = 'resumo' | 'redes' | 'gerencial';
+export const SELL_OUT_TABS = [
+  { id: 'resumo', label: 'Resumo' },
+  { id: 'redes', label: 'Redes' },
+  { id: 'gerencial', label: 'Gerencial' },
+];
 type MetricRow = { label: string; value: string; detail?: string; accent?: boolean; };
 type NetworkPanelRow = { key: string; name: string; target: number; invoiced: number; toInvoice: number; total: number; invoicedTrend: number; totalTrend: number; clients: number; };
 
@@ -77,9 +80,8 @@ function NetworkCard({ network, featured = false }: { network: NetworkPanelRow; 
   );
 }
 
-export function SellOutPage() {
+export function SellOutPage({ view = 'resumo' }: { view?: SellOutView }) {
   const { canonical } = useData();
-  const [activeTab, setActiveTab] = useState<TabId>('resumo');
   const hasSalesSource = Boolean(canonical?.sources.some(source => source.kind === 'sales8022' && source.loaded));
 
   if (!canonical || !hasSalesSource) {
@@ -90,17 +92,10 @@ export function SellOutPage() {
     );
   }
 
-  const tabs: Array<{ id: TabId; label: string }> = [
-    { id: 'resumo', label: 'Resumo' },
-    { id: 'redes', label: 'Redes' },
-    { id: 'gerencial', label: 'Gerencial' },
-  ];
-
   return (
     <PanelPage title="Sell Out" metricLabel="Total do período" metricValue={fmtBRL(canonical.sellOut.total)}>
       <div className="panel-stack">
-        <PanelTabs tabs={tabs} activeId={activeTab} onChange={setActiveTab} ariaLabel="Visões do Sell Out" />
-        {activeTab === 'resumo' ? <Resumo /> : activeTab === 'redes' ? <Redes /> : <Gerencial />}
+        {view === 'resumo' ? <Resumo /> : view === 'redes' ? <Redes /> : <Gerencial />}
       </div>
     </PanelPage>
   );

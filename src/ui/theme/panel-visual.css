@@ -8,7 +8,7 @@
 
 .panel-page-header {
   min-height: 118px;
-  padding: 28px 40px 24px;
+  padding: 28px 40px 24px 84px;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -722,7 +722,7 @@
 @media (max-width: 760px) {
   .panel-page-header {
     min-height: 104px;
-    padding: 24px 20px 20px;
+    padding: 24px 20px 20px 64px;
     align-items: flex-start;
     flex-direction: column;
   }
