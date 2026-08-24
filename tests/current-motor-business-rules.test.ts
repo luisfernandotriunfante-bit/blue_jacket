@@ -90,6 +90,16 @@ test('Bússola preserva meta sem RCA resolvido e mapeia somente pelo código leg
   assert.equal(result.targets.find(row=>row.legacyRcaCode==='999')?.assignmentStatus,'UNRESOLVED_RCA');
 });
 
+test('Bússola resolve RCA oficial pelo código atual e por código Excel decimal',()=>{
+  const header=Array(22).fill(''); header[16]='META PNA';
+  const current=Array(22).fill(''); current[0]='FLAVIO';current[1]='1701.0';current[3]='MCD';current[4]='RCA A';current[7]='COLGATE';current[16]=1000;current[21]=10;
+  const workbook=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet([header,current]),'Metas');
+  const rcas=[{rcaCanonicalId:'RCA:1701',currentRcaCode:'1701',legacyRcaCode:'701',rcaName:'RCA A',coordinatorCode:'1',coordinatorName:'FLAVIO',isColgate:true,effectiveFrom:'',effectiveTo:'',source:'NOVOS_RCAS'}] as any;
+  const result=buildTargets(workbook,rcas,'2026-08-23');
+  assert.equal(result.targets[0]?.assignmentStatus,'RESOLVED');
+  assert.equal(result.qualityIssues.some(issue=>issue.code==='TARGET_UNASSIGNED_RCA'),false);
+});
+
 test('códigos inteiros serializados pelo Excel preservam a correspondência dos motores',()=>{
   const rows286=[['11',123,'Produto','','','','','',0,0,0,0,0,0,0,0,0,'7891000000011','MAT1']];
   const rows105=[['Código','Descrição','Qt.Est.','Custo','PVenda'],['123.0','Produto',10,5,10]];
