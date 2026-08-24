@@ -27,9 +27,12 @@ export function redistributeNetworkTotal(rows:NetworkTargetInput[],requestedTota
 }
 
 export function redistributeSingleNetwork(rows:NetworkTargetInput[],key:string,requestedValue:number):Record<string,number>{
+  const current=Object.fromEntries(rows.map(row=>[row.key,Math.max(Number(row.target)||0,0)]));
   const total=rows.reduce((sum,row)=>sum+Math.max(Number(row.target)||0,0),0);
-  if(!rows.some(row=>row.key===key))return Object.fromEntries(rows.map(row=>[row.key,Math.max(Number(row.target)||0,0)]));
-  if(total<=0)return{...Object.fromEntries(rows.map(row=>[row.key,Math.max(Number(row.target)||0,0)])),[key]:Math.max(Number(requestedValue)||0,0)};
+  if(!rows.some(row=>row.key===key))return current;
+  // A edição individual nunca cria nem altera a Meta Redes Geral. Quando o total
+  // ainda é zero, ele precisa ser inicializado pelo campo geral antes da edição por rede.
+  if(total<=0)return current;
 
   const edited=Math.min(Math.max(Number(requestedValue)||0,0),total);
   const others=rows.filter(row=>row.key!==key);
