@@ -145,6 +145,18 @@ export function PanelSectionNav({ items, ariaLabel = 'Índice da página' }: { i
   );
 }
 
+export function PanelDisclosure({ eyebrow, title, description, action, defaultOpen = false, children }: PropsWithChildren<{ eyebrow: string; title: string; description?: ReactNode; action?: ReactNode; defaultOpen?: boolean }>) {
+  return (
+    <details className="panel-disclosure" open={defaultOpen}>
+      <summary className="panel-disclosure-summary">
+        <span className="panel-disclosure-copy"><span className="panel-eyebrow">{eyebrow}</span><strong>{title}</strong>{description ? <span>{description}</span> : null}</span>
+        <span className="panel-disclosure-action">{action}<span className="panel-disclosure-chevron" aria-hidden="true">⌄</span></span>
+      </summary>
+      <div className="panel-disclosure-content">{children}</div>
+    </details>
+  );
+}
+
 export function PanelStat({ label, value, note, tone = 'default' }: { label: ReactNode; value: ReactNode; note?: ReactNode; tone?: PanelKpiTone }) {
   const toneClass = tone === 'default' ? '' : ` panel-stat-${tone}`
   return (

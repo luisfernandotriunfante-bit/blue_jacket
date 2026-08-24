@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useData } from '../store/DataContext';
 import { LINE_NAMES } from '../domain/canonical';
 import { redistributeNetworkTotal, redistributeSingleNetwork } from '../domain/targetRules';
-import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader, PanelSectionNav, PanelStat } from '../ui/pattern/PanelVisual';
+import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader, PanelTabs, PanelStat } from '../ui/pattern/PanelVisual';
 
 const brl = (value: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
 const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
@@ -10,6 +10,7 @@ const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
 export function MetasPage() {
   const { canonical, manualConfig, setManualConfig } = useData();
   const [holidayDate, setHolidayDate] = useState('');
+  const [activeView, setActiveView] = useState<'overview' | 'distribution' | 'calendar'>('overview');
 
   if (!canonical) {
     return (
@@ -62,9 +63,9 @@ export function MetasPage() {
     <PanelPage title="Metas" metricLabel="Meta Sell Out T&C" metricValue={hasSellOutTarget ? brl(canonical.sellOut.sellOutTarget) : '—'}>
       <div className="panel-stack">
         {configurationWarning ? <PanelAlert tone="error">{configurationWarning} A alteração continua visível nesta sessão, mas não deve ser considerada salva até a persistência voltar a funcionar.</PanelAlert> : null}
-        <PanelSectionNav items={[{ id: 'metas-referencias', label: 'Referências oficiais' }, { id: 'metas-parametros', label: 'Parâmetros' }, { id: 'metas-calendario', label: 'Calendário' }, { id: 'metas-linhas', label: 'Linhas comerciais' }, { id: 'metas-redes', label: 'Metas por rede' }]} />
+        <PanelTabs tabs={[{ id: 'overview', label: 'Visão geral e parâmetros' }, { id: 'distribution', label: 'Distribuição comercial' }, { id: 'calendar', label: 'Calendário' }]} activeId={activeView} onChange={setActiveView} ariaLabel="Áreas de Metas" />
 
-        <div id="metas-referencias"><PanelCard>
+        {activeView === 'overview' ? <><div id="metas-referencias"><PanelCard>
           <PanelSectionHeader eyebrow="REFERÊNCIAS OFICIAIS" title="Metas recebidas das fontes" description="Somente leitura. O realizado continua vindo do motor de Vendas/Operação; ausência de fonte não é convertida em meta zero." />
           <div className="panel-grid panel-grid-auto">
             <PanelStat label="Meta indústria · Bússola" value={hasCompassTargets ? brl(canonical.industryTarget) : '—'} />
@@ -86,9 +87,9 @@ export function MetasPage() {
             <NumberField label="Meta de cobertura (dias)" value={manualConfig.coverageTargetDays} step={1} onChange={value => setField('coverageTargetDays', value)} detail="Referência usada nas visões e alertas de estoque." />
             <NumberField label="Acréscimo de venda da Carteira (%)" value={manualConfig.portfolioSaleMarkup * 100} step={0.01} onChange={setPortfolioMarkup} detail="Fallback de valorização quando não há PVENDA1 aplicável; não altera o valor bruto da Carteira." />
           </div>
-        </PanelCard></div>
+        </PanelCard></div></> : null}
 
-        <div id="metas-calendario"><PanelCard>
+        {activeView === 'calendar' ? <div id="metas-calendario"><PanelCard>
           <PanelSectionHeader eyebrow="CALENDÁRIO" title="Feriados e dias não trabalhados" description="Datas excluídas do cálculo de dias úteis, médias diárias, tendência e necessidade por dia." action={<span className="panel-badge">{manualConfig.holidays.length} DATA(S)</span>} />
           <div className="panel-grid panel-grid-3" style={{ marginBottom: 14 }}>
             <PanelStat label="Dias úteis do mês" value={canonical.sellOut.businessDaysTotal.toLocaleString('pt-BR')} />
@@ -105,9 +106,9 @@ export function MetasPage() {
           <div className="panel-chips" style={{ marginTop: 14 }}>
             {manualConfig.holidays.map(date => <button type="button" className="panel-chip" key={date} onClick={() => removeHoliday(date)} title="Clique para remover">{new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR')} ×</button>)}
           </div>
-        </PanelCard></div>
+        </PanelCard></div> : null}
 
-        <div id="metas-linhas"><PanelCard>
+        {activeView === 'distribution' ? <><div id="metas-linhas"><PanelCard>
           <PanelSectionHeader eyebrow="LINHAS COMERCIAIS" title="Distribuição da Meta T&C" description="Percentuais editáveis usados para calcular a meta das cinco linhas." action={<span className={`panel-badge ${Math.abs(lineTotal - 1) < 0.0001 ? 'panel-badge-green' : 'panel-badge-amber'}`}>TOTAL · {pct(lineTotal)}</span>} />
           <div className="panel-grid panel-grid-auto">
             {LINE_NAMES.map(name => (
@@ -146,7 +147,7 @@ export function MetasPage() {
               </div>
             </>
           ) : <PanelEmptyState variant="compact" title="Nenhuma rede canônica disponível" description="A Meta Redes Geral só pode ser distribuída quando a fotografia possui redes reais resolvidas. SEM REDE não é usado como destinatário de meta." />}
-        </PanelCard></div>
+        </PanelCard></div></> : null}
       </div>
     </PanelPage>
   );
