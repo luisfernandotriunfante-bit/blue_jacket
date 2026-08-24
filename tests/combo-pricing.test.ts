@@ -16,7 +16,7 @@ test('desconto compara preço praticado com preço de tabela', () => {
   assert.equal(comboDiscount(0, 10), null);
 });
 
-test('combo aceita EAN, código Winthor ou fábrica e exige preço válido do 105', () => {
+test('combo aceita EAN, código Winthor ou fábrica e exige Winthor + PVENDA1 válido', () => {
   const products = [
     { codigo: '507', descricao: 'A', ean: '7891000000001', factoryCode: '11100071', vendaUnitario: 10, hasWinthor: true },
     { codigo: '508', descricao: 'B', ean: '7891000000002', factoryCode: '11100072', vendaUnitario: 0, hasWinthor: true },
