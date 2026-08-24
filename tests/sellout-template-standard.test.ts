@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import * as XLSX from 'xlsx';
-import { parseRcaMap } from '../src/services/motors/sourceParsers';
+import { parseCompassTargets, parseRcaMap } from '../src/services/motors/sourceParsers';
 
 test('Painel Sell Out mantém o padrão julho para todas as gerações', () => {
   const templatePath = 'public/templates/painel-sell-out-padrao.xlsx';
@@ -46,4 +46,15 @@ test('NOVOS RCAS preenche coordenador, RCA e nome nas colunas corretas', () => {
     { newCode: '433', oldCode: '130', name: 'CLT - JOSE LUCA', coordinatorCode: '62', coordinatorName: 'THIAGO' },
     { newCode: '752', oldCode: '752', name: 'CLT - DEYSIANE', coordinatorCode: '56', coordinatorName: 'FLAVIO' },
   ]);
+});
+
+test('meta da Bússola encontra o RCA pelo código legado correto', () => {
+  const workbook = XLSX.utils.book_new();
+  const rows = [
+    [], [],
+    ['Supervisor', 'St', 'Pas.', '', 'Nome', 'Cidade', 'CNPJ', 'Indústria', 'Gerente', 'YTD25', 'YTD26', 'Indicador', 'Meta R$', 'Média', 'Mês Ant.', 'Posit. Mês Ant', 'Meta PNA', 'Faturado', 'A Faturar', 'Real PNA', '%', 'Meta. Pos. Ind.'],
+    ['Thiago', 130, 2, 'MCD', 'Jose Lucas', '', '', 'Colgate', '', 0, 0, 0, 0, 0, 0, 0, 3000, 0, 0, 0, 0, 2000],
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Metas');
+  assert.deepEqual(parseCompassTargets(workbook), [{ oldCode: '130', name: 'Jose Lucas', supervisorName: 'THIAGO', salesTarget: 3000, positivityTarget: 2000 }]);
 });
