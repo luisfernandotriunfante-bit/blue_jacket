@@ -6,6 +6,7 @@ export type StockRiskInput = {
   soldUnits: number;
   coverageDays: number | null;
   pendingQty: number;
+  pendingCases?: number;
   coverageTargetDays: number;
 };
 
@@ -16,6 +17,9 @@ export type StockRiskInput = {
  * - SEM GIRO: há estoque, mas não houve saída faturada suficiente para calcular cobertura;
  * - RISCO: cobertura abaixo da meta e sem o item na carteira Colgate;
  * - OK: demais itens com giro.
+ *
+ * A existência de Carteira é factual mesmo quando o Un/CX indústria ainda não permite
+ * convertê-la em unidades. Por isso pendingCases também impede classificar o SKU como risco.
  */
 export function classifyStockRisk(input: StockRiskInput): StockRiskStatus {
   if (input.hasWinthor !== true) return 'sem-winthor';
@@ -28,8 +32,10 @@ export function classifyStockRisk(input: StockRiskInput): StockRiskStatus {
 
   const coverageTargetDays = Math.max(Number(input.coverageTargetDays) || 0, 0);
   const pendingQty = Math.max(Number(input.pendingQty) || 0, 0);
+  const pendingCases = Math.max(Number(input.pendingCases) || 0, 0);
+  const hasPendingPortfolio = pendingQty > 0 || pendingCases > 0;
 
-  if (coverageTargetDays > 0 && input.coverageDays < coverageTargetDays && pendingQty <= 0) return 'risco';
+  if (coverageTargetDays > 0 && input.coverageDays < coverageTargetDays && !hasPendingPortfolio) return 'risco';
   return 'ok';
 }
 
