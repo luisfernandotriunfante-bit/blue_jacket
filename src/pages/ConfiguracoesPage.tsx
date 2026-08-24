@@ -9,7 +9,8 @@ import {
   type OperationalSourceState,
   type SupplementalSourceKind,
 } from '../services/operationalSources';
-import { applyPortfolioContinuityToPreparedState, loadPortfolioContinuity } from '../services/portfolioContinuityFiles';
+import { applyPortfolioContinuityToPreparedState, loadPortfolioContinuityResult } from '../services/portfolioContinuityFiles';
+import { createStagedStorage } from '../services/stagedStorage';
 import { isUnifiedCanonicalState, processUnifiedFiles } from '../services/motors/unifiedEngine';
 import type { SourceAudit, SourceKind } from '../domain/canonical';
 import { ReconciliationAuditPanel } from '../ui/audit/ReconciliationAuditPanel';
@@ -43,10 +44,8 @@ const SOURCES: SourceUi[] = [
   { id: 'purchasePortfolio', kind: 'purchasePortfolio', unifiedSourceType: 'CARTEIRA_COLGATE', label: 'Carteira Colgate', description: 'Colgate → Milênio. Pedidos e faturamento da indústria; nunca é Sell Out.', frequency: 'Diário', group: 'Rotina diária', required: true },
   { id: 'stock8013', kind: 'stock8013', unifiedSourceType: '8013', label: 'Estoque 8013', description: 'Un/CX interno e medidas logísticas para auditoria; não substitui o físico do 105.', frequency: 'Diário', group: 'Rotina diária' },
   { id: 'entryNotes218', supplementalKind: 'entryNotes218', unifiedSourceType: '218', label: 'Entrada de Notas 218', description: 'Autoridade do recebimento físico no Winthor. Dá baixa no pipeline Colgate por NF + item.', frequency: 'Diário / conforme recebimento', group: 'Rotina diária', required: true },
-
   { id: 'compassTargets', kind: 'compassTargets', unifiedSourceType: 'BUSSOLA', label: 'Bússola de Metas', description: 'Meta PNA e Meta. Pos. Ind. Colgate. O realizado continua vindo do 8022.', frequency: 'Nova competência / mês', group: 'Mensal / competência' },
   { id: 'activeRoute', kind: 'activeRoute', unifiedSourceType: 'ROTEIRO_TOP', label: 'Roteiro Ativo Top Varejistas', description: 'Snapshot mensal dos Top Varejistas, rede/bandeira/gestor/categoria e meta Top. Não define RCA.', frequency: 'Nova competência / mês', group: 'Mensal / competência' },
-
   { id: 'winthorTablePrices', supplementalKind: 'winthorTablePrices', unifiedSourceType: 'PCTABPR', label: 'Tabela de Preços Winthor · PCTABPR', description: 'Lê obrigatoriamente a aba bruta pctabpr, filtra NUMREGIAO=11 e usa PVENDA1 como preço de referência.', frequency: 'Quando houver alteração de preços', group: 'Apoio / quando mudar', required: true },
   { id: 'items286', kind: 'items286', unifiedSourceType: '286', label: 'Cadastro de Itens 286', description: 'Autoridade do Código Winthor atual, EAN interno e relações cadastrais do item.', frequency: 'Quando o cadastro mudar', group: 'Apoio / quando mudar' },
   { id: 'priceList', kind: 'priceList', unifiedSourceType: 'LISTA_PRECO_COLGATE', label: 'Lista de Preço Colgate', description: 'Autoridade dos identificadores e embalagem logística da indústria: SKU, EAN, DUN, Un/CX e CX/Pal.', frequency: 'Quando a indústria atualizar', group: 'Apoio / quando mudar' },
@@ -55,7 +54,6 @@ const SOURCES: SourceUi[] = [
   { id: 'premises', kind: 'premises', unifiedSourceType: 'PREMISSAS', label: 'Base de Premissas', description: 'Autoridade de Ambiente, Faixa, Perfil, Rede Premissas, cluster e demais classificações comerciais.', frequency: 'Quando a indústria atualizar', group: 'Apoio / quando mudar' },
   { id: 'customerPortfolio', unifiedSourceType: 'CARTEIRA_CLIENTES', label: 'Carteira de Clientes', description: 'Cadastro operacional atual e relação muitos-para-muitos cliente × representante.', frequency: 'Quando houver nova fotografia', group: 'Apoio / quando mudar' },
   { id: 'officialAssortment', unifiedSourceType: 'SORTIMENTO_OFICIAL', label: 'Sortimento Oficial', description: 'Competências oficiais, migrações e descontinuações. Clientes & Sortimento consome esta fonte da base unificada.', frequency: 'Quando houver nova competência', group: 'Apoio / quando mudar', required: true },
-
   { id: 'history379_2025', kind: 'history379_2025', unifiedSourceType: '379', label: 'Histórico 379 · 2025', description: 'Fato transacional histórico de vendas/devoluções de 2025.', frequency: 'Histórico / eventual', group: 'Histórico' },
   { id: 'history379_2026', kind: 'history379_2026', unifiedSourceType: '379', label: 'Histórico 379 · 2026', description: 'Fato transacional histórico de 2026 antes da migração.', frequency: 'Após fechamento / histórico', group: 'Histórico' },
   { id: 'purchase310', unifiedSourceType: '310', label: '310 total 2026', description: 'Somente reconciliação/visão acumulada CNPJ × produto. Valor Compras já é líquido das devoluções.', frequency: 'Histórico / quando atualizar', group: 'Histórico' },
@@ -74,6 +72,7 @@ const fmtSize = (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 
 const fmtMoney = (value: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
 const fmtNumber = (value: number, digits = 0) => new Intl.NumberFormat('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(Number(value) || 0);
 const normalizedName = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+const isYearSpecificHistory = (source: SourceUi) => source.id === 'history379_2025' || source.id === 'history379_2026';
 
 function supplementalFileName(source: SourceUi, state: OperationalSourceState) {
   if (source.supplementalKind === 'winthorTablePrices') return state.tablePriceFileName;
@@ -82,14 +81,14 @@ function supplementalFileName(source: SourceUi, state: OperationalSourceState) {
   return '';
 }
 
-function sourceForFile(fileName: string) {
-  const raw=normalizedName(fileName);
-  if(raw.includes('CARTEIRA')&&raw.includes('CLIENT'))return SOURCES.find(source=>source.id==='customerPortfolio');
-  if(/(^|\D)310(\D|$)/.test(raw))return SOURCES.find(source=>source.id==='purchase310');
-  if(raw.includes('SORTIMENTO'))return SOURCES.find(source=>source.id==='officialAssortment');
-  if((raw.includes('COLGATE')&&(raw.includes('PRECO')||raw.includes('PRICE'))) || raw.includes('LISTA PRECO'))return SOURCES.find(source=>source.id==='priceList');
+export function sourceForFile(fileName: string) {
+  const raw = normalizedName(fileName);
   const supplemental = supplementalSourceKind(fileName);
   if (supplemental) return SOURCES.find(source => source.supplementalKind === supplemental);
+  if (raw.includes('CARTEIRA') && raw.includes('CLIENT')) return SOURCES.find(source => source.id === 'customerPortfolio');
+  if (/(^|\D)310(\D|$)/.test(raw)) return SOURCES.find(source => source.id === 'purchase310');
+  if (raw.includes('SORTIMENTO')) return SOURCES.find(source => source.id === 'officialAssortment');
+  if ((raw.includes('COLGATE') && (raw.includes('PRECO') || raw.includes('PRICE'))) || raw.includes('LISTA PRECO')) return SOURCES.find(source => source.id === 'priceList');
   const kind = detectSource(fileName);
   return SOURCES.find(source => source.kind === kind);
 }
@@ -127,24 +126,42 @@ export function ConfiguracoesPage() {
     if (!selectedFiles.length) return;
     setIsProcessing(true); setSuccess(false); setErrorMessage('');
     try {
-      const prepared = await prepareOperationalSources(selectedFiles);
-      const continuity = await applyPortfolioContinuityToPreparedState(selectedFiles, prepared.state);
+      if (typeof localStorage === 'undefined') throw new Error('Persistência das fontes operacionais indisponível neste navegador.');
+      const staged = createStagedStorage(localStorage);
+      const prepared = await prepareOperationalSources(selectedFiles, staged.storage);
+      const continuity = await applyPortfolioContinuityToPreparedState(selectedFiles, prepared.state, staged.storage);
       const operationalState = continuity?.state || prepared.state;
-      if (continuity) saveOperationalSourceState(operationalState);
-      const result = await processUnifiedFiles({ allFiles:selectedFiles, engineFiles:prepared.engineFiles, operational:operationalState, config:manualConfig, previous:canonical, continuityWarning:continuity?.warning });
+      if (continuity) saveOperationalSourceState(operationalState, staged.storage);
+      const result = await processUnifiedFiles({ allFiles: selectedFiles, engineFiles: prepared.engineFiles, operational: operationalState, config: manualConfig, previous: canonical, continuityWarning: continuity?.warning });
+      staged.commit();
       setCanonical(result.canonical);
-      setOperationalRevision(value => value + 1); setSuccess(true); setSelectedFiles([]);
+      setOperationalRevision(value => value + 1);
+      setSuccess(true);
+      setSelectedFiles([]);
     } catch (error) {
-      console.error(error); setErrorMessage(error instanceof Error ? error.message : 'Não foi possível processar os arquivos.');
-    } finally { setIsProcessing(false); }
+      console.error(error);
+      setErrorMessage(error instanceof Error ? error.message : 'Não foi possível processar os arquivos.');
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const audits = useMemo(() => new Map((canonical?.sources || []).map(source => [source.kind, source])), [canonical]);
-  const unifiedSources = useMemo(() => new Set(isUnifiedCanonicalState(canonical) ? canonical.unified.sources.map(source=>source.sourceType) : []), [canonical]);
+  const unifiedSources = useMemo(() => new Set(isUnifiedCanonicalState(canonical) ? canonical.unified.sources.map(source => source.sourceType) : []), [canonical]);
   const operationalState = useMemo(() => loadOperationalSourceState(), [operationalRevision]);
-  const portfolioContinuity = useMemo(() => loadPortfolioContinuity(), [operationalRevision]);
+  const portfolioContinuityResult = useMemo(() => loadPortfolioContinuityResult(), [operationalRevision]);
+  const portfolioContinuity = portfolioContinuityResult.snapshot;
   const queued = useMemo(() => new Map(selectedFiles.map(file => [sourceForFile(file.name)?.id || `unknown:${file.name}`, file])), [selectedFiles]);
-  const loadedCount = SOURCES.filter(source => source.unifiedSourceType ? unifiedSources.has(source.unifiedSourceType) : source.supplementalKind ? Boolean(supplementalFileName(source, operationalState)) : Boolean(source.kind && audits.get(source.kind)?.loaded)).length;
+  const isUnifiedLoaded = (source: SourceUi) => Boolean(source.unifiedSourceType && unifiedSources.has(source.unifiedSourceType) && !isYearSpecificHistory(source));
+  const isLoaded = (source: SourceUi) => isYearSpecificHistory(source)
+    ? Boolean(source.kind && audits.get(source.kind)?.loaded)
+    : source.unifiedSourceType
+      ? unifiedSources.has(source.unifiedSourceType)
+      : source.supplementalKind
+        ? Boolean(supplementalFileName(source, operationalState))
+        : Boolean(source.kind && audits.get(source.kind)?.loaded);
+  const loadedCount = SOURCES.filter(isLoaded).length;
+
   const qualitySummary = useMemo<QualityIssueSummary[]>(() => {
     if (!isUnifiedCanonicalState(canonical)) return [];
     const grouped = new Map<string, QualityIssueSummary>();
@@ -164,9 +181,11 @@ export function ConfiguracoesPage() {
 
   return <PanelPage title="Configurações" metricLabel="Fontes registradas" metricValue={`${loadedCount}/${SOURCES.length}`}>
     {dataNotice ? <PanelAlert tone="warning"><div style={{ display: 'flex', gap: '16px', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap' }}><div><strong>Base salva precisa ser reconstruída</strong><div style={{ marginTop: '4px', maxWidth: '1100px' }}>{dataNotice}</div></div><button className="panel-secondary-button" onClick={clearDataNotice}>Entendi</button></div></PanelAlert> : null}
+    {operationalState.persistenceError ? <PanelAlert tone="warning"><strong>Persistência das fontes operacionais</strong><div style={{ marginTop: 4 }}>{operationalState.persistenceError}</div></PanelAlert> : null}
+    {portfolioContinuityResult.error ? <PanelAlert tone="warning"><strong>Persistência da continuidade da Carteira</strong><div style={{ marginTop: 4 }}>{portfolioContinuityResult.error}</div></PanelAlert> : null}
 
     <PanelCard>
-      <PanelSectionHeader eyebrow="ATUALIZAÇÃO" title="Atualizar arquivos" description="Todas as fontes entram pelo mesmo pipeline. Arquivo bruto alimenta motor; somente a base canônica unificada alimenta cálculos, telas e exportações." action={<span className="panel-badge">MOTORES CANÔNICOS</span>} />
+      <PanelSectionHeader eyebrow="ATUALIZAÇÃO" title="Atualizar arquivos" description="Todas as fontes entram pelo mesmo pipeline. O lote só é persistido depois que a nova base canônica é calculada com sucesso; uma falha não deixa fontes parciais para a próxima execução." action={<span className="panel-badge">MOTORES CANÔNICOS</span>} />
       <input type="file" multiple accept=".xls,.xlsx,.xlsb,.txt" style={{ display: 'none' }} ref={fileInputRef} onChange={event => { if (event.target.files?.length) addFiles(Array.from(event.target.files)); event.target.value = ''; }} />
       <div className={`panel-dropzone panel-dropzone-compact${isDragging ? ' is-dragging' : ''}`} onDragOver={event => { event.preventDefault(); setIsDragging(true); }} onDragLeave={event => { event.preventDefault(); setIsDragging(false); }} onDrop={event => { event.preventDefault(); setIsDragging(false); if (event.dataTransfer.files?.length) addFiles(Array.from(event.dataTransfer.files)); }} onClick={() => fileInputRef.current?.click()} style={{ marginTop: '16px' }}>
         <div><div className="panel-dropzone-icon" style={{ margin: '0 auto 7px' }}>⬆</div><strong style={{ color: 'white' }}>Arraste arquivos aqui ou clique para selecionar vários</strong><div style={{ color: 'var(--panel-muted)', fontSize: '.72rem', marginTop: '5px' }}>As fontes que não forem substituídas permanecem na base canônica.</div></div>
@@ -179,15 +198,15 @@ export function ConfiguracoesPage() {
     {portfolioContinuity ? <PortfolioContinuityPanel snapshot={portfolioContinuity} /> : null}
     {operationalState.receiptItems.length > 0 ? <ReceiptValidationPanel key={`${operationalState.entry218FileName}:${operationalRevision}`} state={operationalState} /> : null}
 
-    {GROUPS.map(group => <PanelCard key={group.key}><PanelSectionHeader eyebrow={group.key.toUpperCase()} title={group.title} description={group.description} action={<span className="panel-badge">{SOURCES.filter(source => source.group === group.key).length} arquivos</span>} /><div style={{ display: 'grid', gap: '8px', marginTop: '15px' }}>{SOURCES.filter(source => source.group === group.key).map(source => <SourceCard key={source.id} source={source} audit={source.kind ? audits.get(source.kind) : undefined} operationalState={operationalState} unifiedLoaded={Boolean(source.unifiedSourceType&&unifiedSources.has(source.unifiedSourceType))} queued={queued.get(source.id)} onAddFile={file => addFiles([file])} />)}</div></PanelCard>)}
+    {GROUPS.map(group => <PanelCard key={group.key}><PanelSectionHeader eyebrow={group.key.toUpperCase()} title={group.title} description={group.description} action={<span className="panel-badge">{SOURCES.filter(source => source.group === group.key).length} arquivos</span>} /><div style={{ display: 'grid', gap: '8px', marginTop: '15px' }}>{SOURCES.filter(source => source.group === group.key).map(source => <SourceCard key={source.id} source={source} audit={source.kind ? audits.get(source.kind) : undefined} operationalState={operationalState} unifiedLoaded={isUnifiedLoaded(source)} queued={queued.get(source.id)} onAddFile={file => addFiles([file])} />)}</div></PanelCard>)}
 
-    {canonical ? <ReconciliationAuditPanel checks={canonical.reconciliation?.checks||[]} /> : null}
-    {qualitySummary.length > 0 ? <PanelCard><PanelSectionHeader eyebrow="AUDITORIA DOS MOTORES" title="Qualidade da fotografia" description="Pendências são agrupadas por causa. A contagem preserva todas as ocorrências sem repetir milhares de linhas iguais na tela." action={<span className="panel-badge">{fmtNumber(qualityCounts.total)} ocorrência(s)</span>} /><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '14px' }}><span className="panel-badge" style={{ color: '#fca5a5' }}>ERROS · {fmtNumber(qualityCounts.ERROR)}</span><span className="panel-badge" style={{ color: '#fcd34d' }}>ALERTAS · {fmtNumber(qualityCounts.WARNING)}</span><span className="panel-badge">INFORMAÇÕES · {fmtNumber(qualityCounts.INFO)}</span><span className="panel-badge">CAUSAS · {fmtNumber(qualitySummary.length)}</span></div><div style={{display:'grid',gap:'8px',marginTop:'14px'}}>{qualitySummary.slice(0,30).map(issue=><div key={issue.key} style={{color:issue.severity==='ERROR'?'#fca5a5':issue.severity==='WARNING'?'#fcd34d':'var(--panel-muted)',fontSize:'.78rem',padding:'10px 11px',border:'1px solid rgba(255,255,255,.08)',borderRadius:'9px',display:'flex',gap:'10px',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap'}}><div style={{minWidth:0,flex:'1 1 620px'}}><strong>{issue.code}</strong> · {issue.message}{issue.source ? <div style={{fontSize:'.66rem',marginTop:'4px',color:'var(--panel-muted)'}}>Fonte: {issue.source}</div> : null}</div><span className="panel-badge">{fmtNumber(issue.count)} ocorrência(s)</span></div>)}</div>{qualitySummary.length > 30 ? <PanelAlert tone="info">Exibindo as 30 causas prioritárias de {fmtNumber(qualitySummary.length)}. Nenhuma ocorrência foi descartada do motor; apenas a apresentação foi resumida.</PanelAlert> : null}</PanelCard> : null}
+    {canonical ? <ReconciliationAuditPanel checks={canonical.reconciliation?.checks || []} /> : null}
+    {qualitySummary.length > 0 ? <PanelCard><PanelSectionHeader eyebrow="AUDITORIA DOS MOTORES" title="Qualidade da fotografia" description="Pendências são agrupadas por causa. A contagem preserva todas as ocorrências sem repetir milhares de linhas iguais na tela." action={<span className="panel-badge">{fmtNumber(qualityCounts.total)} ocorrência(s)</span>} /><div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '14px' }}><span className="panel-badge" style={{ color: '#fca5a5' }}>ERROS · {fmtNumber(qualityCounts.ERROR)}</span><span className="panel-badge" style={{ color: '#fcd34d' }}>ALERTAS · {fmtNumber(qualityCounts.WARNING)}</span><span className="panel-badge">INFORMAÇÕES · {fmtNumber(qualityCounts.INFO)}</span><span className="panel-badge">CAUSAS · {fmtNumber(qualitySummary.length)}</span></div><div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{qualitySummary.slice(0, 30).map(issue => <div key={issue.key} style={{ color: issue.severity === 'ERROR' ? '#fca5a5' : issue.severity === 'WARNING' ? '#fcd34d' : 'var(--panel-muted)', fontSize: '.78rem', padding: '10px 11px', border: '1px solid rgba(255,255,255,.08)', borderRadius: '9px', display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap' }}><div style={{ minWidth: 0, flex: '1 1 620px' }}><strong>{issue.code}</strong> · {issue.message}{issue.source ? <div style={{ fontSize: '.66rem', marginTop: '4px', color: 'var(--panel-muted)' }}>Fonte: {issue.source}</div> : null}</div><span className="panel-badge">{fmtNumber(issue.count)} ocorrência(s)</span></div>)}</div>{qualitySummary.length > 30 ? <PanelAlert tone="info">Exibindo as 30 causas prioritárias de {fmtNumber(qualitySummary.length)}. Nenhuma ocorrência foi descartada do motor; apenas a apresentação foi resumida.</PanelAlert> : null}</PanelCard> : null}
     {canonical?.warnings.length ? <PanelCard><PanelSectionHeader eyebrow="VALIDAÇÃO" title="Pendências conhecidas" description="Somente situações que ainda precisam de dado ou conciliação." /><div style={{ display: 'grid', gap: '8px', marginTop: '14px' }}>{canonical.warnings.map((warning, index) => <div key={`${warning}-${index}`} style={{ color: 'var(--panel-amber-soft)', fontSize: '.82rem', padding: '10px 12px', border: '1px solid rgba(245,158,11,0.2)', background: 'rgba(245,158,11,0.06)', borderRadius: '10px' }}>{warning}</div>)}</div></PanelCard> : null}
   </PanelPage>;
 }
 
-function PortfolioContinuityPanel({ snapshot }: { snapshot: ReturnType<typeof loadPortfolioContinuity> extends infer T ? NonNullable<T> : never }) {
+function PortfolioContinuityPanel({ snapshot }: { snapshot: NonNullable<ReturnType<typeof loadPortfolioContinuityResult>['snapshot']> }) {
   const mode = snapshot.mode === 'BASELINE' ? 'BASELINE INICIAL' : snapshot.mode === 'APPROVED_2026_08_17' ? 'CHECKPOINT APROVADO 17/08' : 'CONTINUIDADE AUTOMÁTICA';
   return <PanelCard><PanelSectionHeader eyebrow="CARTEIRA COMPARÁVEL" title="Continuidade entre snapshots" description="Mantém pedidos já acompanhados e acrescenta somente pedidos realmente novos. O resultado entra no Motor de Vendas/Operação, não é cálculo de tela." action={<span className="panel-badge">{mode}</span>} /><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: '10px', marginTop: '15px' }}><div className="panel-kpi"><span>Carteira bruta do arquivo</span><strong>{fmtMoney(snapshot.rawCost)}</strong><small>{fmtNumber(snapshot.rawCases, 2)} cx · {snapshot.rawRows} linhas</small></div><div className="panel-kpi"><span>Carteira comparável</span><strong>{fmtMoney(snapshot.validatedCost)}</strong><small>{fmtNumber(snapshot.validatedCases, 2)} cx · {snapshot.validatedRows} linhas</small></div><div className="panel-kpi"><span>Histórico retroativo excluído</span><strong>{fmtMoney(snapshot.excludedHistoricalCost)}</strong><small>{fmtNumber(snapshot.excludedHistoricalCases, 2)} cx · {snapshot.excludedHistoricalRows} linhas</small></div><div className="panel-kpi"><span>Pedidos acompanhados</span><strong>{fmtNumber(snapshot.orderNumbers.length)}</strong><small>Snapshot {snapshot.snapshotDate || '—'}</small></div></div></PanelCard>;
 }
@@ -199,7 +218,7 @@ function ReceiptValidationPanel({ state }: { state: OperationalSourceState }) {
   return <PanelCard><PanelSectionHeader eyebrow="VALIDAÇÃO DE RECEBIMENTO" title="Auditoria item a item do 218" description="O 218 é a autoridade de recebimento. Esta tabela é somente auditoria; a baixa canônica ocorre dentro do Motor de Vendas/Operação." action={<span className="panel-badge">{eligibleItems.length} itens</span>} /><div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', margin: '14px 0' }}><span className="panel-badge">12.322 histórico · {state.legacyInvoices.length} NFs · {fmtMoney(legacyTotal)}</span><span className="panel-badge">218 atual · {eligibleItems.length} itens</span><span className="panel-badge">Valor dos itens · {fmtMoney(eligibleValue)}</span></div><div className="panel-table-wrap" style={{ maxHeight: '520px' }}><table className="panel-table"><thead><tr><th>Status</th><th>Entrada</th><th>NF</th><th>Código</th><th>Produto</th><th className="is-right">Quantidade</th><th className="is-right">Valor unit.</th><th className="is-right">Valor item</th></tr></thead><tbody>{state.receiptItems.map((item, index) => <tr key={`${item.invoice}:${item.sku}:${index}`}><td>{item.entryDate >= '2026-08-01' ? <span className="panel-badge panel-badge-green">MOTOR 218</span> : <span className="panel-badge">FORA DA VIGÊNCIA</span>}</td><td>{item.entryDate || '—'}</td><td className="is-strong">{item.invoice}</td><td>{item.sku}</td><td>{item.product}</td><td className="is-right">{fmtNumber(item.units)}</td><td className="is-right">{fmtMoney(item.unitPrice)}</td><td className="is-right is-strong">{fmtMoney(item.units * item.unitPrice)}</td></tr>)}</tbody></table></div></PanelCard>;
 }
 
-function SourceCard({ source, audit, operationalState, unifiedLoaded, queued, onAddFile }: { source: SourceUi; audit?: SourceAudit; operationalState: OperationalSourceState; unifiedLoaded:boolean; queued?: File; onAddFile: (file: File) => void }) {
+function SourceCard({ source, audit, operationalState, unifiedLoaded, queued, onAddFile }: { source: SourceUi; audit?: SourceAudit; operationalState: OperationalSourceState; unifiedLoaded: boolean; queued?: File; onAddFile: (file: File) => void }) {
   const supplementalName = supplementalFileName(source, operationalState);
   const loaded = unifiedLoaded || (source.supplementalKind ? Boolean(supplementalName) : Boolean(audit?.loaded));
   const status = queued ? 'NA FILA' : loaded ? 'ATUALIZADO' : 'NÃO CARREGADO';
