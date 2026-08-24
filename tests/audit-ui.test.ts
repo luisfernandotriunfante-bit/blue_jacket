@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 test('Configurações usa checks canônicos da reconciliação',()=>{
   const page=readFileSync('src/pages/ConfiguracoesPage.tsx','utf8');
-  assert.match(page,/ReconciliationAuditPanel checks=\{canonical\.reconciliation\?\.checks\|\|\[\]\}/);
+  assert.match(page,/ReconciliationAuditPanel checks=\{canonical\.reconciliation\?\.checks\s*\|\|\s*\[\]\}/);
   assert.doesNotMatch(page,/type ConsistencyCheck/);
   assert.doesNotMatch(page,/consistency\.map/);
 });
