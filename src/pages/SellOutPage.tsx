@@ -12,8 +12,9 @@ const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: '
 const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFractionDigits: 1 });
 const number = new Intl.NumberFormat('pt-BR');
 const percentValue = (input: number | null) => input === null ? '—' : percent.format(input);
+const textValue = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
 
-function Alerts({ model }: { model: SellOutViewModel }) { return <>{model.audits.map(audit => <PanelAlert key={audit.code} tone="warning"><strong>{audit.code}</strong> — {audit.message} {audit.action}</PanelAlert>)}</>; }
+function Alerts({ model }: { model: SellOutViewModel }) { return <>{model.audits.map(audit => <PanelAlert key={audit.code} tone="warning"><strong>{audit.code}</strong> — {audit.message} {audit.code === 'UNRESOLVED_RCA_IN_VIEW' ? ' O código antigo pode estar vazio; esta pendência significa que o código atual do 8022 não foi resolvido de forma única no master atual. Veja o diagnóstico em Gerencial → Pendentes.' : audit.action}</PanelAlert>)}</>; }
 
 function Summary({ model }: { model: SellOutViewModel }) { return <>
   <div className="panel-grid panel-grid-auto"><PanelKpi label="Faturado" value={currency.format(model.totals.invoiced)} tone="green" detail="SALE · status FATURADO" /><PanelKpi label="A faturar" value={currency.format(model.totals.toInvoice)} tone="amber" detail="SALE · status A FATURAR" /><PanelKpi label="Sell Out" value={currency.format(model.totals.realized)} tone="blue" detail={`${model.sourceFacts.sales} fatos SALE`} /><PanelKpi label="Meta de vendas" value={currency.format(model.totals.salesTarget)} tone="purple" detail={`Atingimento ${percentValue(model.totals.salesAchievement)}`} /><PanelKpi label="Clientes positivos" value={number.format(model.totals.positiveCustomers)} detail={`Meta ${number.format(model.totals.positivityTarget)} · ${percentValue(model.totals.positivityAchievement)}`} /><PanelKpi label="Dias com venda" value={number.format(model.totals.daysWithSales)} detail="Calendário dos fatos SALE" /></div>
@@ -28,9 +29,33 @@ function Networks({ model, m2, m3 }: { model: SellOutViewModel; m2: CanonicalLis
   <PanelCard><PanelSectionHeader eyebrow="TOP REDES" title="Realizado por rede" description="Rede vem de M2. Cliente sem rede não é erro e não é forçado para nenhuma rede." action={<><button className="panel-button" onClick={() => exportTopNetworksExcel(networks)}>Exportar Excel</button> <button className="panel-button" onClick={() => exportTopNetworksJson(networks)}>Exportar JSON</button></>} /><div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Rede</th><th>Clientes</th><th>Faturado</th><th>A faturar</th><th>Total</th><th>Participação</th><th>Status</th></tr></thead><tbody>{networks.rows.map(row => <tr key={row.network}><td>{row.network}</td><td>{number.format(row.customers)}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{percent.format(row.share)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div></PanelCard>
 </>; }
 
-function VendorTable({ rows }: { rows: SellOutRow[] }) { return <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>RCA</th><th>Cód. atual</th><th>Cód. antigo</th><th>Meta</th><th>Faturado</th><th>A faturar</th><th>Total</th><th>Clientes positivos</th><th>Positivação</th><th>Status</th></tr></thead><tbody>{rows.map(row => <tr key={row.key}><td>{row.rcaName ?? row.label}</td><td>{row.rcaCurrentCode ?? '—'}</td><td>{row.rcaLegacyCode ?? '—'}</td><td>{currency.format(row.salesTarget)}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{number.format(row.positiveCustomers)}</td><td>{percentValue(row.positivityAchievement)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div>; }
+function VendorTable({ rows }: { rows: SellOutRow[] }) { return <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>RCA</th><th>Cód. atual</th><th>Cód. antigo</th><th>Meta</th><th>Faturado</th><th>A faturar</th><th>Total</th><th>Clientes positivos</th><th>Positivação</th><th>Status</th></tr></thead><tbody>{rows.map(row => <tr key={row.key}><td>{row.rcaName ?? row.label}</td><td>{row.rcaCurrentCode ?? row.rawRcaCode ?? '—'}</td><td>{row.rcaLegacyCode ?? '—'}</td><td>{currency.format(row.salesTarget)}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{number.format(row.positiveCustomers)}</td><td>{percentValue(row.positivityAchievement)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div>; }
 
-function Management({ model }: { model: SellOutViewModel }) {
+function PendingRcaDiagnostics({ model, m2, m3 }: { model: SellOutViewModel; m2: CanonicalList; m3: CanonicalList }) {
+  const diagnostics = useMemo(() => {
+    const customers = new Map<string, Record<string, unknown>>();
+    for (const customer of m2.records) { const cnpj = textValue(customer.cnpj); if (cnpj && !customers.has(cnpj)) customers.set(cnpj, customer); }
+    return model.vendorRows.filter(row => row.resolutionStatus === 'UNRESOLVED').map(row => {
+      const code = row.rawRcaCode ?? 'SEM_RCA';
+      const sales = m3.records.filter(fact => fact.fact_type === 'SALE' && !textValue(fact.rca_canonical_id) && (textValue(fact.transaction_rca_code) ?? 'SEM_RCA') === code);
+      const reason = textValue(sales.find(fact => textValue(fact.audit_flags))?.audit_flags) ?? 'RCA_UNRESOLVED';
+      const samples = new Map<string, string>();
+      for (const sale of sales) {
+        const cnpj = textValue(sale.cnpj);
+        if (!cnpj || samples.has(cnpj)) continue;
+        const customer = customers.get(cnpj);
+        const name = textValue(customer?.trade_name) ?? textValue(customer?.customer_name) ?? cnpj;
+        samples.set(cnpj, `${name} · ${cnpj}`);
+        if (samples.size >= 5) break;
+      }
+      return { code, reason, lines: sales.length, realized: row.realized, positiveCustomers: row.positiveCustomers, samples: [...samples.values()] };
+    });
+  }, [model, m2, m3]);
+  if (!diagnostics.length) return null;
+  return <PanelCard><PanelSectionHeader eyebrow="CONCILIAÇÃO RCA" title="RCAs atuais pendentes no 8022" description="Ausência de código antigo NÃO gera esta pendência. Os códigos abaixo vieram diretamente do 8022 e não foram encontrados de forma única como RCA atual em NOVOS RCAS. Use os clientes abaixo para identificar o vendedor e corrigir o master sem chute." /><div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Cód. atual no 8022</th><th>Motivo</th><th>Linhas SALE</th><th>Sell Out</th><th>Clientes positivos</th><th>Clientes de referência</th></tr></thead><tbody>{diagnostics.map(item => <tr key={item.code}><td><strong>{item.code}</strong></td><td>{item.reason === 'AMBIGUOUS_RCA_CODE' ? 'Código duplicado/ambíguo em NOVOS RCAS' : item.reason === 'RCA_UNRESOLVED' ? 'Código atual ausente em NOVOS RCAS' : item.reason}</td><td>{number.format(item.lines)}</td><td>{currency.format(item.realized)}</td><td>{number.format(item.positiveCustomers)}</td><td>{item.samples.length ? item.samples.join(' | ') : 'Sem cliente identificado para conciliação'}</td></tr>)}</tbody></table></div></PanelCard>;
+}
+
+function Management({ model, m2, m3 }: { model: SellOutViewModel; m2: CanonicalList; m3: CanonicalList }) {
   const [status, setStatus] = useState<'ALL' | 'RESOLVED' | 'UNRESOLVED'>('ALL');
   const [supervisor, setSupervisor] = useState('ALL');
   const supervisors = useMemo(() => [...new Map(model.vendorRows.map(row => { const key = row.supervisorCode ?? row.supervisorName ?? 'SEM_SUPERVISOR'; return [key, { key, code: row.supervisorCode, name: row.supervisorName }]; })).values()].sort((a, b) => (a.name ?? 'ZZZ').localeCompare(b.name ?? 'ZZZ') || (a.code ?? '').localeCompare(b.code ?? '')), [model]);
@@ -41,6 +66,7 @@ function Management({ model }: { model: SellOutViewModel }) {
     return [...map.values()].sort((a, b) => (a.name ?? 'ZZZ').localeCompare(b.name ?? 'ZZZ') || (a.code ?? '').localeCompare(b.code ?? ''));
   }, [filtered]);
   return <>
+    <PendingRcaDiagnostics model={model} m2={m2} m3={m3} />
     <PanelCard><PanelSectionHeader eyebrow="GERENCIAL" title="Vendedores separados por supervisor" description="Nome, código RCA atual e código legado vêm do mesmo master NOVOS RCAS usado pelo motor canônico." action={<div style={{display:'flex',gap:12,flexWrap:'wrap'}}><label className="panel-muted">Supervisor <select value={supervisor} onChange={event => setSupervisor(event.target.value)}><option value="ALL">Todos</option>{supervisors.map(item => <option key={item.key} value={item.key}>{item.name ?? 'Sem supervisor'}{item.code ? ` · ${item.code}` : ''}</option>)}</select></label><label className="panel-muted">RCA <select value={status} onChange={event => setStatus(event.target.value as typeof status)}><option value="ALL">Todos</option><option value="RESOLVED">Resolvidos</option><option value="UNRESOLVED">Pendentes</option></select></label></div>} /></PanelCard>
     {groups.map(group => <PanelCard key={group.code ?? group.name ?? 'SEM_SUPERVISOR'}><PanelSectionHeader eyebrow="SUPERVISOR" title={`${group.name ?? 'Sem supervisor'}${group.code ? ` · Cód. ${group.code}` : ''}`} description={`${number.format(group.rows.length)} RCA(s) nesta supervisão`} /><VendorTable rows={group.rows} /></PanelCard>)}
   </>;
@@ -54,5 +80,5 @@ export function SellOutPage({ view = 'resumo' }: { view?: SellOutView }) {
   if (!lists) return <PanelPage title="Sell Out"><PanelEmptyState variant="page" title="Carregando bundle canônico" description="Leitura passiva de M2 e M3; nenhum parser ou motor é acionado." /></PanelPage>;
   const baseModel = buildSellOutViewModel(lists);
   const model: SellOutViewModel = { ...baseModel, motorBuildId: activeCanonical.motorBuildId, stagingManifestHash: activeCanonical.stagingManifestHash };
-  return <PanelPage title="Sell Out" metricLabel="Build canônico" metricValue={activeCanonical.motorBuildId}><PanelAlert tone="success">BUILD ATIVO: {activeCanonical.motorBuildId}<br />stagingManifestHash: {activeCanonical.stagingManifestHash}</PanelAlert><div className="panel-stack"><Alerts model={model} />{view === 'redes' ? <Networks model={model} m2={lists.m2} m3={lists.m3} /> : view === 'gerencial' ? <Management model={model} /> : <Summary model={model} />}</div></PanelPage>;
+  return <PanelPage title="Sell Out" metricLabel="Build canônico" metricValue={activeCanonical.motorBuildId}><PanelAlert tone="success">BUILD ATIVO: {activeCanonical.motorBuildId}<br />stagingManifestHash: {activeCanonical.stagingManifestHash}</PanelAlert><div className="panel-stack"><Alerts model={model} />{view === 'redes' ? <Networks model={model} m2={lists.m2} m3={lists.m3} /> : view === 'gerencial' ? <Management model={model} m2={lists.m2} m3={lists.m3} /> : <Summary model={model} />}</div></PanelPage>;
 }
