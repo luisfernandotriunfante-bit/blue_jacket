@@ -23,6 +23,12 @@ export type TopRetailNetworksViewModel = Omit<TopNetworksViewModel, 'rows' | 'to
     overallSellOut: number;
     gap: number | null;
   };
+  progress: {
+    networkAchievement: number | null;
+    customerCoverage: number | null;
+    sellOutShare: number | null;
+    gapShare: number | null;
+  };
 };
 
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
@@ -91,8 +97,6 @@ export function buildTopRetailNetworksViewModel({
     groupManager.set(groupKey, managerCnpj ?? groupManager.get(groupKey) ?? null);
     groupCodeByKey.set(groupKey, groupCode ?? groupCodeByKey.get(groupKey) ?? null);
 
-    // O nome exibido vem do CNPJ gestor quando ele faz parte do Roteiro.
-    // Assim variações de grafia/capitalização das lojas não criam redes separadas.
     if (!groupDisplayName.has(groupKey) || (managerCnpj && cnpj === managerCnpj)) {
       groupDisplayName.set(groupKey, sourceNetwork);
     }
@@ -160,7 +164,6 @@ export function buildTopRetailNetworksViewModel({
     };
   }).sort((a, b) => b.realized - a.realized || a.network.localeCompare(b.network));
 
-  // Ajuste de centavos: a soma das metas por grupo gestor precisa ser exatamente a Meta Redes manual.
   if (networkTargetTotal !== null && referenceTotal > 0 && rows.length) {
     const assigned = round(rows.reduce((sum, row) => sum + (row.networkTarget ?? 0), 0));
     const difference = round(networkTargetTotal - assigned);
@@ -201,6 +204,12 @@ export function buildTopRetailNetworksViewModel({
   const calculatedNetworkTargetTotal = networkTargetTotal !== null && referenceTotal > 0
     ? round(rows.reduce((sum, row) => sum + (row.networkTarget ?? 0), 0))
     : null;
+  const customersWithSales = new Set(storeRows.map(row => row.cnpj).filter(Boolean)).size;
+  const gap = calculatedNetworkTargetTotal === null ? null : round(calculatedNetworkTargetTotal - realized);
+  const networkAchievement = calculatedNetworkTargetTotal && calculatedNetworkTargetTotal > 0 ? realized / calculatedNetworkTargetTotal : null;
+  const customerCoverage = routeCustomers.size > 0 ? customersWithSales / routeCustomers.size : null;
+  const sellOutShare = overallSellOut > 0 ? realized / overallSellOut : null;
+  const gapShare = calculatedNetworkTargetTotal && calculatedNetworkTargetTotal > 0 && gap !== null ? Math.max(gap, 0) / calculatedNetworkTargetTotal : null;
 
   return {
     motorBuildId: APPROVED_CANONICAL_BUILD.motorBuildId,
@@ -214,7 +223,7 @@ export function buildTopRetailNetworksViewModel({
     totals: {
       networks: rows.length,
       customers: routeCustomers.size,
-      customersWithSales: new Set(storeRows.map(row => row.cnpj).filter(Boolean)).size,
+      customersWithSales,
       realized,
       invoiced: invoicedTotal,
       toInvoice: toInvoiceTotal,
@@ -223,7 +232,13 @@ export function buildTopRetailNetworksViewModel({
       industryTarget,
       sellOutTarget,
       overallSellOut,
-      gap: calculatedNetworkTargetTotal === null ? null : round(calculatedNetworkTargetTotal - realized),
+      gap,
+    },
+    progress: {
+      networkAchievement,
+      customerCoverage,
+      sellOutShare,
+      gapShare,
     },
     reconciliation: {
       rowsEqualTotal: Math.abs(realized - rows.reduce((sum, row) => sum + row.realized, 0)) < 0.01,

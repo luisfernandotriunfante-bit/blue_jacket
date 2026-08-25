@@ -62,20 +62,15 @@ export function TopRetailNetworksPage() {
     generatedAt: new Date().toISOString(),
   });
   const model = { ...built, motorBuildId: activeCanonical.motorBuildId, stagingManifestHash: activeCanonical.stagingManifestHash };
-  const metaAchievement = model.totals.networkTarget && model.totals.networkTarget > 0 ? model.totals.realized / model.totals.networkTarget : null;
-  const clientAchievement = model.totals.customers > 0 ? model.totals.customersWithSales / model.totals.customers : null;
-  const sellOutShare = model.totals.overallSellOut > 0 ? model.totals.realized / model.totals.overallSellOut : null;
-  const gapShare = model.totals.networkTarget && model.totals.networkTarget > 0 && model.totals.gap !== null
-    ? Math.max(model.totals.gap, 0) / model.totals.networkTarget
-    : null;
+  const { networkAchievement, customerCoverage, sellOutShare, gapShare } = model.progress;
 
   return <PanelPage title="Sell Out"><div className="panel-stack sellout-page-stack">
     <div className="sellout-metric-grid" style={{ width: '100%', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
       <MetricCard
         label="Meta Redes"
         value={model.totals.networkTarget === null ? 'Definir em Metas' : currency.format(model.totals.networkTarget)}
-        progress={metaAchievement}
-        progressLabel={metaAchievement === null ? 'Meta Redes não definida' : `${percent.format(metaAchievement)} atingido`}
+        progress={networkAchievement}
+        progressLabel={networkAchievement === null ? 'Meta Redes não definida' : `${percent.format(networkAchievement)} atingido`}
         info="Meta Redes Geral definida manualmente na aba Metas. As metas individuais são distribuídas pela representatividade mensal dos clientes do Roteiro Ativo, usando Meta T&C e Meta Indústria como referência de peso."
       />
       <MetricCard
@@ -88,8 +83,8 @@ export function TopRetailNetworksPage() {
       <MetricCard
         label="Clientes × com venda"
         value={`${number.format(model.totals.customers)} × ${number.format(model.totals.customersWithSales)}`}
-        progress={clientAchievement}
-        progressLabel={clientAchievement === null ? 'Sem clientes no roteiro' : `${percent.format(clientAchievement)} com venda`}
+        progress={customerCoverage}
+        progressLabel={customerCoverage === null ? 'Sem clientes no roteiro' : `${percent.format(customerCoverage)} com venda`}
         info="Primeiro número: CNPJs do Roteiro Ativo. Segundo: quantos desses CNPJs tiveram venda no 8022/M3."
       />
       <MetricCard
