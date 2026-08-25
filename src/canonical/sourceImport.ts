@@ -8,9 +8,11 @@ const DB_VERSION = 1;
 const STAGING_STORE = 'staging';
 const BUILDS_STORE = 'builds';
 const LISTS_STORE = 'lists';
-const PARSER_VERSION = 'browser-v1';
+const DEFAULT_PARSER_VERSION = 'browser-v1';
+const SOURCE_PARSER_VERSIONS: Record<string, string> = { '310 total 2026.txt': 'browser-v2-rca310' };
 const SCHEMA_VERSION = 'v1';
-const ENGINE_VERSION = 'browser-stage3-v1';
+const ENGINE_VERSION = 'browser-stage3-rca-v2';
+const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
 
 export const REQUIRED_SOURCE_IDS = [...new Set(SOURCE_IDS)];
 
@@ -175,10 +177,11 @@ export async function requestPersistentSourceStorage() {
 
 async function stageOne(source: string, file: File, onProgress?: (progress: SourceUpdateProgress) => void, index = 1, total = 1) {
   const label = SOURCE_LABELS[source] ?? source;
+  const parserVersion = parserVersionFor(source);
   onProgress?.({ source, label, index, total, phase: 'HASHING', message: `Calculando hash de ${file.name}` });
   const hash = await fileHash(file);
   const previous = await loadSourceStaging(source);
-  if (previous?.manifest.fileHash === hash && previous.manifest.status === 'VALID') return { status: 'UNCHANGED' as const, manifest: previous.manifest };
+  if (previous?.manifest.fileHash === hash && previous.manifest.status === 'VALID' && previous.manifest.parserVersion === parserVersion && previous.manifest.schemaVersion === SCHEMA_VERSION) return { status: 'UNCHANGED' as const, manifest: previous.manifest };
 
   onProgress?.({ source, label, index, total, phase: 'PARSING', message: `Validando ${file.name}` });
   const parsed = await parseSource(source, file);
@@ -189,7 +192,7 @@ async function stageOne(source: string, file: File, onProgress?: (progress: Sour
     source,
     fileName: file.name,
     fileHash: hash,
-    parserVersion: PARSER_VERSION,
+    parserVersion,
     schemaVersion: SCHEMA_VERSION,
     parsedRows: parsed.rows.length,
     warnings: parsed.audits.filter(audit => audit.severity === 'WARNING' || audit.severity === 'INFO').length,
@@ -231,11 +234,16 @@ async function saveGeneratedBuild(active: ActiveCanonicalBundle, lists: Record<C
 
 export async function buildCanonicalFromStoredSources(onProgress?: (progress: SourceUpdateProgress) => void) {
   const stages: StoredStage[] = [];
+  const outdated: string[] = [];
   for (const source of REQUIRED_SOURCE_IDS) {
     const stage = await loadSourceStaging(source);
-    if (stage?.manifest.status === 'VALID') stages.push(stage);
+    if (stage?.manifest.status === 'VALID') {
+      if (stage.manifest.parserVersion !== parserVersionFor(source) || stage.manifest.schemaVersion !== SCHEMA_VERSION) outdated.push(source);
+      else stages.push(stage);
+    }
   }
-  const missing = REQUIRED_SOURCE_IDS.filter(source => !stages.some(stage => stage.source === source));
+  const missing = REQUIRED_SOURCE_IDS.filter(source => !stages.some(stage => stage.source === source) && !outdated.includes(source));
+  if (outdated.length) throw new Error(`SOURCES_OUTDATED:${outdated.join('|')}`);
   if (missing.length) throw new Error(`SOURCES_MISSING:${missing.join('|')}`);
   onProgress?.({ source: 'ALL', label: 'Motores canônicos', index: REQUIRED_SOURCE_IDS.length, total: REQUIRED_SOURCE_IDS.length, phase: 'BUILDING', message: 'Gerando M1, M2, M3 e M4 exclusivamente dos stagings persistidos' });
   const manifestHash = await stagingManifestHash(stages);
@@ -293,4 +301,4 @@ export async function loadGeneratedCanonicalManifest(buildId: string) {
   return { status: 'VALID', generatedAt: build.generatedAt, lists };
 }
 
-export const sourceImportTestHelpers = { normalizedFileName, sha256Bytes };
+export const sourceImportTestHelpers = { normalizedFileName, sha256Bytes, parserVersionFor };

@@ -1,89 +1,262 @@
 import contract from './contracts/blueJacketContractV1.json' with { type: 'json' };
+import { createRcaResolver, type RcaResolution } from './rcaResolver';
 import type { CanonicalAudit, CanonicalBundle, CanonicalList, ParsedSource, RawTyped } from './types';
 
-type Id=CanonicalList['id']; type Schema={field:string;type:string}[];
-const schemas=contract.motor_schemas as Record<Id,Schema>;
-const value=(row:Record<string,RawTyped>,...names:string[])=>{for(const n of names){const v=row[n]?.typed;if(v!==undefined&&v!==null&&v!=='')return v}return null};
-const rows=(sources:ParsedSource[],name:string)=>sources.find(x=>x.source===name)?.rows??[];
-const now=()=>new Date().toISOString(); const competence=()=>new Date().toISOString().slice(0,7);
-const blank=(id:Id)=>Object.fromEntries(schemas[id].map(x=>[x.field,null])) as Record<string,unknown>;
-const issue=(code:string,message:string,source='motor',severity:CanonicalAudit['severity']='WARNING'):CanonicalAudit=>({code,severity,source,file:'',message,action:'Revisar a fonte e resolver o vínculo antes de utilizar o registro dependente.'});
-function list(id:Id,records:Array<Record<string,unknown>>,sources:string[],audits:CanonicalAudit[]):CanonicalList{return {id,records,sources,generatedAt:now(),competence:competence(),snapshotDate:new Date().toISOString().slice(0,10),warnings:audits.filter(a=>a.severity==='WARNING'||a.severity==='INFO'),errors:audits.filter(a=>a.severity==='BLOCKED'||a.severity==='BLOCKED_DEPENDENT_CALC')}}
+type Id = CanonicalList['id'];
+type Schema = { field: string; type: string }[];
+type RcaAuditBucket = { resolution: RcaResolution; source: string; count: number };
 
-export function buildM1(sources:ParsedSource[]){const audits:CanonicalAudit[]=[];const base=[...rows(sources,'cadastro-itens-286.xls'),...rows(sources,'posicao-estoque-105.xls')];const seen=new Set<string>();const records=base.map(r=>{const winthor=String(value(r,'winthor_code','product_code','item_code','code')??'');const ean=String(value(r,'ean','internal_ean','ean_internal')??'');const id=winthor||ean;if(!id||seen.has(id))return null;seen.add(id);const out=blank('M1_ITEM_ESTOQUE');Object.assign(out,{snapshot_date:new Date().toISOString().slice(0,10),competence:competence(),item_canonical_id:`ITEM:${id}`,winthor_code:winthor||null,internal_ean:ean||null,industry_ean:ean||null,description_internal:value(r,'description','product_description','description_internal'),physical_stock_units:value(r,'physical_stock','stock','quantity','quantity_stock'),source_system:'Winthor',source_file:'286/105',source_row:value(r,'__source_row')});if(!winthor||!ean)audits.push(issue('ITEM_UNRESOLVED',`Item ${id} sem ${!winthor?'código Winthor':'EAN'}.`));return out}).filter(Boolean) as Array<Record<string,unknown>>;
- const price=new Map(rows(sources,'pctabpr 13.xlsx').map(r=>[String(value(r,'product_code','winthor_code','codprod')??''),value(r,'official_price','p_venda_1','pvenda1')]));for(const r of records)r.official_price=price.get(String(r.winthor_code))??null;
- return list('M1_ITEM_ESTOQUE',records,['cadastro-itens-286.xls','posicao-estoque-105.xls','estoque-8013.xls','pctabpr 13.xlsx','Lista_de_Preco (8).xlsx','lançamentos.xlsx',"Sortimento Recomendado - Q3'26.xlsx"],audits)}
-export function buildM2(sources:ParsedSource[]){const audits:CanonicalAudit[]=[];const rcas=rows(sources,'NOVOS RCAS.xlsx');const resolve=(code:unknown)=>{const c=String(code??'');const matches=rcas.filter(r=>[value(r,'current_rca_code_principal','current_rca_code_auxiliar'),value(r,'legacy_rca_code_principal','legacy_rca_code_auxiliar')].map(String).includes(c));if(matches.length>1){audits.push(issue('AMBIGUOUS_RCA_CODE',`RCA ${c} possui mais de uma vigência/cadastro candidato.`));return null}return matches[0]};const records=rows(sources,'Nova Base de Premissas - Q3.xlsx').map(r=>{const cnpj=String(value(r,'customer_cnpj','cnpj','customer_document')??'');const rca=resolve(value(r,'rca_code','seller_code'));const out=blank('M2_CLIENTE_RCA');Object.assign(out,{competence:competence(),snapshot_date:new Date().toISOString().slice(0,10),customer_canonical_id:cnpj?`CUSTOMER:${cnpj}`:null,customer_cnpj:cnpj||null,customer_name:value(r,'customer_name','name'),city:value(r,'city'),state:value(r,'state','uf'),network:value(r,'network'),environment:value(r,'environment'),profile:value(r,'profile'),rca_current_code:rca?value(rca,'current_rca_code_principal','current_rca_code_auxiliar'):null,rca_legacy_code:rca?value(rca,'legacy_rca_code_principal','legacy_rca_code_auxiliar'):null,rca_name:rca?value(rca,'rca_name_raw_principal','rca_name_raw_auxiliar'):null,source_system:'Premissas',source_file:'Nova Base de Premissas - Q3.xlsx',source_row:value(r,'__source_row')});if(cnpj.length!==14)audits.push(issue('INVALID_CNPJ',`Cliente ${String(value(r,'customer_name')??'')} sem CNPJ de 14 dígitos.`));return out});return list('M2_CLIENTE_RCA',records,['Nova Base de Premissas - Q3.xlsx','NOVOS RCAS.xlsx','relatorio_carteira_clientes.xls',"08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"],audits)}
-export function buildM3(sources:ParsedSource[]){const audits:CanonicalAudit[]=[];const build=(source:string,fact:string)=>rows(sources,source).map(r=>{const out=blank('M3_MOVIMENTO_VENDAS');Object.assign(out,{competence:competence(),snapshot_date:new Date().toISOString().slice(0,10),fact_type:fact,movement_date:value(r,'movement_date','billing_date','receipt_date','invoice_issue_date','order_date'),invoice_number:value(r,'invoice_number','invoice_raw'),order_number:value(r,'order_number','industry_order_number'),item_code:value(r,'item_code','product_code','industry_material','receipt_item_code'),ean:value(r,'ean','ean_commercial'),quantity:value(r,'quantity','quantity_raw','order_qty','received_units'),order_qty:value(r,'order_qty'),bill_qty:value(r,'bill_qty'),net_value:value(r,'net_value','value','value_raw','invoice_total'),target_sales_pna:value(r,'sales_target_pna'),target_positive_industry:value(r,'positivity_target'),source_system:source,source_file:source,source_row:value(r,'__source_row')});return out});const records=[...build('vendas-8022.xls','SALE'),...build('CARTEIRA 24.08.xlsx','INBOUND_ORDER'),...build('entrada-notas-218.xls','RECEIPT'),...build('Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx','TARGET')];return list('M3_MOVIMENTO_VENDAS',records,['vendas-8022.xls','CARTEIRA 24.08.xlsx','entrada-notas-218.xls','Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'],audits)}
-export function buildM4(sources:ParsedSource[]){const audits:CanonicalAudit[]=[];const movements=[...rows(sources,'379 25.txt'),...rows(sources,'379 26.txt')];const records=movements.map(r=>{const kind=value(r,'movement_class');const out=blank('M4_HISTORICO_TRANSICAO');Object.assign(out,{competence:competence(),movement_date:value(r,'movement_date'),invoice_number:value(r,'invoice_number'),invoice_series:value(r,'invoice_series'),legacy_product_code:value(r,'legacy_product_code'),customer_document:value(r,'customer_document'),legacy_rca_code:value(r,'legacy_rca_code'),operation_code:value(r,'operation_code'),cfop:value(r,'cfop'),quantity:value(r,'quantity_raw'),value:value(r,'value_raw'),discount:value(r,'discount_raw'),net_weight:value(r,'net_weight'),gross_weight:value(r,'gross_weight'),movement_class:kind,source_system:'379',source_file:'379',source_row:value(r,'__source_row')});if(kind==='OTHER')audits.push(issue('UNKNOWN_OPERATION_CFOP',`Par ${value(r,'operation_code')}/${value(r,'cfop')} preservado como OTHER/PENDING.`));return out});for(const r of rows(sources,'12.322.txt')){const out=blank('M4_HISTORICO_TRANSICAO');Object.assign(out,{competence:competence(),invoice_number:value(r,'invoice_raw'),movement_date:value(r,'invoice_issue_date'),supplier_document:value(r,'supplier_document'),value:value(r,'invoice_value'),discount:value(r,'discount'),source_system:'12.322',source_file:'12.322.txt',source_row:value(r,'__source_row'),historical_granularity:'INVOICE'});records.push(out)}return list('M4_HISTORICO_TRANSICAO',records,['379 25.txt','379 26.txt','310 total 2026.txt','12.322.txt'],audits)}
-export function buildCanonicalBundle(parsedSources:ParsedSource[]):CanonicalBundle { const rejected=parsedSources.some(s=>s.audits.some(a=>a.severity==='BLOCKED'));if(rejected)throw new Error('SOURCE_REJECTED_KEEP_PREVIOUS: uma ou mais fontes falharam validação estrutural.');const lists={M1_ITEM_ESTOQUE:buildM1(parsedSources),M2_CLIENTE_RCA:buildM2(parsedSources),M3_MOVIMENTO_VENDAS:buildM3(parsedSources),M4_HISTORICO_TRANSICAO:buildM4(parsedSources)};return {version:'v1',generatedAt:now(),lists,parsedSources}; }
+const schemas = contract.motor_schemas as Record<Id, Schema>;
+const value = (row: Record<string, RawTyped>, ...names: string[]) => {
+  for (const name of names) {
+    const candidate = row[name]?.typed;
+    if (candidate !== undefined && candidate !== null && candidate !== '') return candidate;
+  }
+  return null;
+};
+const rows = (sources: ParsedSource[], name: string) => sources.find(item => item.source === name)?.rows ?? [];
+const now = () => new Date().toISOString();
+const competence = () => new Date().toISOString().slice(0, 7);
+const blank = (id: Id) => Object.fromEntries(schemas[id].map(field => [field.field, null])) as Record<string, unknown>;
+const issue = (code: string, message: string, source = 'motor', severity: CanonicalAudit['severity'] = 'WARNING'): CanonicalAudit => ({
+  code,
+  severity,
+  source,
+  file: '',
+  message,
+  action: 'Revisar a fonte e resolver o vínculo antes de utilizar o registro dependente.',
+});
+function list(id: Id, records: Array<Record<string, unknown>>, sources: string[], audits: CanonicalAudit[]): CanonicalList {
+  return {
+    id,
+    records,
+    sources,
+    generatedAt: now(),
+    competence: competence(),
+    snapshotDate: new Date().toISOString().slice(0, 10),
+    warnings: audits.filter(audit => audit.severity === 'WARNING' || audit.severity === 'INFO'),
+    errors: audits.filter(audit => audit.severity === 'BLOCKED' || audit.severity === 'BLOCKED_DEPENDENT_CALC'),
+  };
+}
 
-/**
- * Stage 3 entry point.  It deliberately accepts only already-normalized staging
- * rows; there is no file, workbook, SheetJS, or parser dependency here.
- * The legacy `buildCanonicalBundle` is retained for compatibility with the
- * isolated parser tests, while this build supplements M4 with the 310 YTD
- * aggregation at its native (document x product) grain.
- */
-export function buildCanonicalBundleFromStaging(parsedSources:ParsedSource[]):CanonicalBundle {
- const bundle=buildCanonicalBundle(parsedSources);
- const snapshot=new Date().toISOString().slice(0,10); const comp=competence();
- const fieldOnly=(id:Id,r:Record<string,unknown>)=>Object.fromEntries(schemas[id].map(s=>[s.field,r[s.field]??null]));
- // M1: source authority is applied field-by-field; no description joins.
- const stock105=new Map(rows(parsedSources,'posicao-estoque-105.xls').map(r=>[String(value(r,'winthor_code')??''),r]));
- const pVenda=new Map(rows(parsedSources,'pctabpr 13.xlsx').map(r=>[String(value(r,'codprod')??''),value(r,'pvenda1')]));
- const launches=new Map(rows(parsedSources,'lançamentos.xlsx').map(r=>[String(value(r,'launch_winthor_code')??''),r]));
- const items=new Map<string,Record<string,unknown>>();
- for(const r of [...rows(parsedSources,'cadastro-itens-286.xls'),...rows(parsedSources,'posicao-estoque-105.xls')]){const code=String(value(r,'winthor_code')??'');if(!code||items.has(code))continue;const s=stock105.get(code);const l=launches.get(code);items.set(code,fieldOnly('M1_ITEM_ESTOQUE',{snapshot_date:snapshot,competence:comp,item_canonical_id:`ITEM:${code}`,winthor_code:code,manufacturer_code:value(r,'manufacturer_code'),internal_ean:value(r,'internal_ean'),description_internal:value(r,'description_286','description_105'),pack_internal:value(r,'pack_286','pack_105'),physical_stock_units:value(s??r,'physical_stock_units'),stock_286_physical:value(r,'physical_286'),stock_286_blocked:value(r,'blocked_286'),stock_286_reserved:value(r,'reserved_286'),stock_286_available:value(r,'available_286'),cost_unit_105:value(s??r,'unit_cost_real'),sale_price_105:value(s??r,'sale_price_105'),pVenda1_region11:pVenda.get(code)??null,is_launch:l?true:false,launch_status:l?value(l,'launch_status'):null,has_winthor:true,mapping_status:'WINTHOR',source_lineage:'286|105|PCTABPR|Lançamentos'}));}
- bundle.lists.M1_ITEM_ESTOQUE=list('M1_ITEM_ESTOQUE',[...items.values()],['cadastro-itens-286.xls','posicao-estoque-105.xls','estoque-8013.xls','pctabpr 13.xlsx','Lista_de_Preco (8).xlsx','lançamentos.xlsx',"Sortimento Recomendado - Q3'26.xlsx"],[]);
- // M2: canonical key is CNPJ only. Premissas and customer portfolio enrich one record.
- const portfolio=new Map(rows(parsedSources,'relatorio_carteira_clientes.xls').map(r=>[String(value(r,'customer_cnpj')??''),r])); const m2=new Map<string,Record<string,unknown>>();
- for(const r of [...rows(parsedSources,'Nova Base de Premissas - Q3.xlsx'),...rows(parsedSources,'relatorio_carteira_clientes.xls')]){const cnpj=String(value(r,'customer_document_declared','customer_cnpj')??'');if(!cnpj||m2.has(cnpj))continue;const p=portfolio.get(cnpj);m2.set(cnpj,fieldOnly('M2_CLIENTE_RCA',{snapshot_date:snapshot,competence:comp,customer_canonical_id:cnpj.length===14?`CUSTOMER:${cnpj}`:null,cnpj:cnpj.length===14?cnpj:null,winthor_customer_code:value(p??r,'winthor_customer_code'),customer_name:value(p??r,'customer_name','customer_name_premise'),trade_name:value(p??r,'trade_name'),commercial_activity:value(p??r,'commercial_activity'),city:value(p??r,'city'),state:value(r,'state'),district:value(p??r,'district'),address:value(p??r,'address'),latitude:value(p??r,'latitude'),longitude:value(p??r,'longitude'),buyer:value(p??r,'buyer'),phone:value(p??r,'phone'),environment:value(r,'environment'),tier:value(r,'tier'),profile:value(r,'profile'),cluster_code:value(r,'cluster_code'),cluster_description:value(r,'cluster_description'),avg_12_months:value(r,'avg_12_months'),premise_network:value(r,'premise_network'),visit_frequency:value(p??r,'visit_frequency'),visit_day:value(p??r,'visit_day'),days_without_purchase:value(p??r,'days_without_purchase'),network_resolution_status:'SOURCE_PRESERVED',source_lineage:'Premissas|Carteira Clientes'}));}
- bundle.lists.M2_CLIENTE_RCA=list('M2_CLIENTE_RCA',[...m2.values()],['Nova Base de Premissas - Q3.xlsx','NOVOS RCAS.xlsx','relatorio_carteira_clientes.xls',"08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"],[]);
- // M3 has one fact family per source. Staged compass payload lacks the approved
- // textual context, so it is not converted into an unprovable TARGET fact.
- const m3:Record<string,unknown>[]=[]; const pushFact=(source:string,fact:string,convert:(r:Record<string,RawTyped>)=>Record<string,unknown>)=>rows(parsedSources,source).forEach(r=>m3.push(fieldOnly('M3_MOVIMENTO_VENDAS',convert(r))));
- pushFact('vendas-8022.xls','SALE',r=>({fact_id:`8022:${value(r,'__source_row')}`,fact_type:'SALE',source:'8022',competence:comp,event_date:value(r,'movement_date'),invoice_issue_date:value(r,'invoice_issue_date'),cnpj:value(r,'customer_document'),transaction_rca_code:value(r,'seller_code'),winthor_product_code:value(r,'winthor_product_code'),industry_sku:value(r,'manufacturer_code'),order_winthor:value(r,'order_winthor'),order_rca:value(r,'order_rca'),invoice_number:value(r,'invoice_number'),order_status:value(r,'order_status'),block_status:value(r,'block_status'),sale_type:value(r,'sale_type'),order_origin:value(r,'order_origin'),units:value(r,'units_sold'),cases:value(r,'cases_sold'),gross_weight_kg:value(r,'gross_weight_kg'),net_weight_kg:value(r,'net_weight_kg'),value:value(r,'sale_value'),source_lineage:'8022'}));
- pushFact('CARTEIRA 24.08.xlsx','INBOUND_ORDER',r=>({fact_id:`CARTEIRA:${value(r,'__source_row')}`,fact_type:'INBOUND_ORDER',source:'CARTEIRA_COLGATE',competence:comp,order_date:value(r,'order_date'),billing_date:value(r,'billing_date'),industry_material:value(r,'industry_material'),industry_order_number:value(r,'industry_order_number'),invoice_number:value(r,'invoice_raw'),order_qty:value(r,'order_qty'),bill_qty:value(r,'bill_qty'),inbound_net_value:value(r,'net_value'),billing_type:value(r,'billing_type'),source_lineage:'Carteira Colgate'}));
- pushFact('entrada-notas-218.xls','RECEIPT',r=>({fact_id:`218:${value(r,'__source_row')}`,fact_type:'RECEIPT',source:'218',competence:comp,receipt_date:value(r,'receipt_date'),invoice_issue_date:value(r,'invoice_issue_date'),invoice_number:value(r,'invoice_raw'),invoice_series:value(r,'invoice_series'),winthor_product_code:value(r,'receipt_item_code + description'),received_units:value(r,'received_units'),receipt_unit_price:value(r,'receipt_unit_price'),current_financial_cost:value(r,'current_financial_cost'),fiscal_code:value(r,'fiscal_code'),operation_code:value(r,'operation_code'),source_lineage:'218'}));
- const normalizeName=(x:unknown)=>String(x??'').toUpperCase().replace(/[^A-ZÀ-Ú ]/g,' ').replace(/\b(CL T|CLT|PJ)\b/g,' ').replace(/\s+/g,' ').trim();
- const rcaMaster=rows(parsedSources,'NOVOS RCAS.xlsx');
- for(const r of rows(parsedSources,'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')){
-   if(String(value(r,'pasta_type')??'').trim().toUpperCase()!=='MCD'||String(value(r,'industry_name')??'').trim().toUpperCase()!=='COLGATE')continue;
-   const code=String(value(r,'target_rca_code')??''); const name=normalizeName(value(r,'target_rca_name'));
-   const matches=rcaMaster.filter(m=>String(value(m,'legacy_rca_code_principal','legacy_rca_code_auxiliar')??'')===code).filter(m=>{const n=normalizeName(value(m,'rca_name_raw_principal','rca_name_raw_auxiliar'));const first=name.split(' ').find(Boolean);return Boolean(first&&n.includes(first));});
-   const resolved=matches.length===1?matches[0]:null;
-   m3.push(fieldOnly('M3_MOVIMENTO_VENDAS',{fact_id:`BUSSOLA:${value(r,'__source_row')}`,fact_type:'TARGET',source:'BUSSOLA',competence:comp,transaction_rca_code:code,rca_canonical_id:resolved?`RCA:${value(resolved,'current_rca_code_principal','current_rca_code_auxiliar')}`:null,sales_target:value(r,'sales_target_pna'),positivity_target:value(r,'positivity_target'),target_assignment_status:resolved?'RESOLVED_LEGACY_CONTEXT':matches.length?'AMBIGUOUS_RCA_CODE':'RCA_UNRESOLVED',source_lineage:'Bússola: Metas | MCD + COLGATE'}));
- }
- bundle.lists.M3_MOVIMENTO_VENDAS=list('M3_MOVIMENTO_VENDAS',m3,['vendas-8022.xls','CARTEIRA 24.08.xlsx','entrada-notas-218.xls','Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'],[issue('TARGET_SOURCE_UNRESOLVED','O staging da Bússola preservado não contém o contexto textual MCD/COLGATE necessário para materializar TARGET sem inferência.', 'bussola')]);
- const m4Audits:CanonicalAudit[]=[];
- const historical379=(file:string,year:string)=>rows(parsedSources,file).map(r=>{
-   const out=blank('M4_HISTORICO_TRANSICAO'); const klass=value(r,'movement_class');
-   Object.assign(out,{historical_fact_id:`${file}:${value(r,'__source_row') ?? ''}`,row_type:'TRANSACTION_379',source:file,source_year:year,competence:null,
-     movement_date:value(r,'movement_date'),invoice_number:value(r,'invoice_number'),invoice_series:value(r,'invoice_series'),legacy_product_code:value(r,'legacy_product_code'),historical_gtin:value(r,'ean_commercial','ean_tax'),customer_document_raw:value(r,'customer_document'),customer_cnpj:(()=>{const d=String(value(r,'customer_document')??'');return d.length===14?d:null})(),legacy_rca_code:value(r,'legacy_rca_code','rca_code'),movement_class:klass,operation_code:value(r,'operation_code'),cfop:value(r,'cfop'),quantity_raw:value(r,'quantity_raw'),signed_quantity:klass==='RETURN'?-(Number(value(r,'quantity_raw')??0)):value(r,'quantity_raw'),value_raw:value(r,'value_raw'),signed_value:klass==='RETURN'?-(Number(value(r,'value_raw')??0)):value(r,'value_raw'),discount_raw:value(r,'discount_raw'),signed_discount:klass==='RETURN'?-(Number(value(r,'discount_raw')??0)):value(r,'discount_raw'),net_weight:value(r,'net_weight'),gross_weight:value(r,'gross_weight'),historical_city:value(r,'city'),historical_coordinator:value(r,'coordinator'),historical_network:value(r,'network'),historical_branch:value(r,'branch'),qtd_cx:value(r,'qtd_cx'),ean_commercial:value(r,'ean_commercial'),ean_tax:value(r,'ean_tax'),mapping_status:'PRESERVED_HISTORICAL',source_lineage:file});
-   if(klass==='OTHER')m4Audits.push(issue('UNKNOWN_OPERATION_CFOP',`Par ${value(r,'operation_code')}/${value(r,'cfop')} preservado como OTHER.`,file)); return out;
- });
- const aggregates=rows(parsedSources,'310 total 2026.txt').map(r=>{
-   const out=blank('M4_HISTORICO_TRANSICAO');
-   const document=String(value(r,'customer_document')??'');
-   Object.assign(out,{
-     historical_fact_id:`310:${value(r,'__source_row') ?? ''}`,
-     row_type:'AGG_310', source:'310', source_year:'2026', competence:null,
-     legacy_product_code:value(r,'legacy_product_code'),
-     customer_document_raw:document||null,
-     customer_cnpj:document.length===14?document:null,
-     purchase_value_ytd:value(r,'purchase_value'),
-     bonus_value_ytd:value(r,'bonus_value'),
-     discount_value_ytd:value(r,'discount_value'),
-     return_value_ytd:value(r,'return_value'),
-     quantity_raw:value(r,'purchase_count'),
-     net_weight:value(r,'purchase_net_weight'),
-     gross_weight:value(r,'return_net_weight'),
-     source_lineage:'310 total 2026.txt', mapping_status:document.length===14?'DOCUMENT_CNPJ':'DOCUMENT_CPF_OR_UNRESOLVED'
-   });
-   return out;
- });
- const receipts=rows(parsedSources,'12.322.txt').map(r=>{const out=blank('M4_HISTORICO_TRANSICAO');Object.assign(out,{historical_fact_id:`12.322:${value(r,'__source_row') ?? ''}`,row_type:'RECEIPT_12322',source:'12.322.txt',source_year:'2026',competence:null,movement_date:value(r,'invoice_issue_date'),invoice_number:value(r,'invoice_raw'),accounting_date:value(r,'accounting_date'),supplier_document:value(r,'supplier_document'),supplier_name:value(r,'supplier_name'),invoice_value:value(r,'invoice_value'),discount_raw:value(r,'discount'),receipt_class:value(r,'operation_code')==='212.01'?'MERCHANDISE':value(r,'operation_code')==='299.40'?'SUPPLIES':'UNCLASSIFIED',mapping_status:'INVOICE_GRAIN_ONLY',source_lineage:'12.322.txt'});return out});
- bundle.lists.M4_HISTORICO_TRANSICAO=list('M4_HISTORICO_TRANSICAO',[...historical379('379 25.txt','2025'),...historical379('379 26.txt','2026'),...aggregates,...receipts],['379 25.txt','379 26.txt','310 total 2026.txt','12.322.txt'],m4Audits);
- return bundle;
+function registerRcaAudit(buckets: Map<string, RcaAuditBucket>, resolution: RcaResolution, source: string) {
+  if (resolution.status === 'RESOLVED_CURRENT_CONTEXT' || resolution.status === 'RESOLVED_LEGACY_CONTEXT' || !resolution.inputCode) return;
+  const key = `${source}|${resolution.context}|${resolution.status}|${resolution.inputCode}|${resolution.candidateCurrentCodes.join(',')}`;
+  const existing = buckets.get(key);
+  if (existing) existing.count += 1;
+  else buckets.set(key, { resolution, source, count: 1 });
+}
+function materializeRcaAudits(buckets: Map<string, RcaAuditBucket>) {
+  return [...buckets.values()].map(({ resolution, source, count }) => {
+    const candidates = resolution.candidateCurrentCodes.length ? ` Candidatos atuais: ${resolution.candidateCurrentCodes.join(', ')}.` : '';
+    const context = resolution.context === 'CURRENT' ? 'atual' : 'legado';
+    return issue(
+      resolution.status,
+      `RCA ${resolution.inputCode} no contexto ${context} não foi resolvido de forma única em ${count} registro(s).${candidates}`,
+      source,
+    );
+  });
+}
+
+export function buildM1(sources: ParsedSource[]) {
+  const audits: CanonicalAudit[] = [];
+  const base = [...rows(sources, 'cadastro-itens-286.xls'), ...rows(sources, 'posicao-estoque-105.xls')];
+  const seen = new Set<string>();
+  const records = base.map(row => {
+    const winthor = String(value(row, 'winthor_code', 'product_code', 'item_code', 'code') ?? '');
+    const ean = String(value(row, 'ean', 'internal_ean', 'ean_internal') ?? '');
+    const id = winthor || ean;
+    if (!id || seen.has(id)) return null;
+    seen.add(id);
+    const out = blank('M1_ITEM_ESTOQUE');
+    Object.assign(out, {
+      snapshot_date: new Date().toISOString().slice(0, 10), competence: competence(), item_canonical_id: `ITEM:${id}`,
+      winthor_code: winthor || null, internal_ean: ean || null, industry_ean: ean || null,
+      description_internal: value(row, 'description', 'product_description', 'description_internal'),
+      physical_stock_units: value(row, 'physical_stock', 'stock', 'quantity', 'quantity_stock'),
+      source_system: 'Winthor', source_file: '286/105', source_row: value(row, '__source_row'),
+    });
+    if (!winthor || !ean) audits.push(issue('ITEM_UNRESOLVED', `Item ${id} sem ${!winthor ? 'código Winthor' : 'EAN'}.`));
+    return out;
+  }).filter(Boolean) as Array<Record<string, unknown>>;
+  const price = new Map(rows(sources, 'pctabpr 13.xlsx').map(row => [String(value(row, 'product_code', 'winthor_code', 'codprod') ?? ''), value(row, 'official_price', 'p_venda_1', 'pvenda1')]));
+  for (const record of records) record.official_price = price.get(String(record.winthor_code)) ?? null;
+  return list('M1_ITEM_ESTOQUE', records, ['cadastro-itens-286.xls', 'posicao-estoque-105.xls', 'estoque-8013.xls', 'pctabpr 13.xlsx', 'Lista_de_Preco (8).xlsx', 'lançamentos.xlsx', "Sortimento Recomendado - Q3'26.xlsx"], audits);
+}
+
+export function buildM2(sources: ParsedSource[]) {
+  const audits: CanonicalAudit[] = [];
+  const rcaAudits = new Map<string, RcaAuditBucket>();
+  const resolver = createRcaResolver(sources);
+  const portfolio = new Map(rows(sources, 'relatorio_carteira_clientes.xls').map(row => [String(value(row, 'customer_cnpj') ?? ''), row]));
+  const records = rows(sources, 'Nova Base de Premissas - Q3.xlsx').map(row => {
+    const cnpj = String(value(row, 'customer_document_declared', 'customer_cnpj', 'cnpj', 'customer_document') ?? '');
+    const portfolioRow = portfolio.get(cnpj);
+    const representative = value(portfolioRow ?? row, 'representative_code', 'rca_code', 'seller_code');
+    const rca = representative ? resolver.resolveCurrent(representative) : null;
+    if (rca) registerRcaAudit(rcaAudits, rca, 'M2/Carteira Clientes');
+    const out = blank('M2_CLIENTE_RCA');
+    Object.assign(out, {
+      competence: competence(), snapshot_date: new Date().toISOString().slice(0, 10),
+      customer_canonical_id: cnpj.length === 14 ? `CUSTOMER:${cnpj}` : null, cnpj: cnpj.length === 14 ? cnpj : null,
+      customer_name: value(portfolioRow ?? row, 'customer_name', 'customer_name_premise', 'name'), city: value(portfolioRow ?? row, 'city'), state: value(row, 'state', 'uf'),
+      environment: value(row, 'environment'), profile: value(row, 'profile'), representative_code_snapshot: representative,
+      rca_canonical_id: rca?.canonicalId ?? null, rca_current_code: rca?.currentCode ?? null, rca_legacy_code: rca?.legacyCode ?? null,
+      rca_name: rca?.name ?? null, coordinator_code: rca?.coordinatorCode ?? null, coordinator_name: rca?.coordinatorName ?? null,
+      source_lineage: 'Premissas|Carteira Clientes|NOVOS RCAS', audit_flags: rca && !rca.canonicalId ? rca.status : null,
+    });
+    if (cnpj.length !== 14) audits.push(issue('INVALID_CNPJ', `Cliente ${String(value(row, 'customer_name_premise', 'customer_name') ?? '')} sem CNPJ de 14 dígitos.`));
+    return out;
+  });
+  audits.push(...materializeRcaAudits(rcaAudits));
+  return list('M2_CLIENTE_RCA', records, ['Nova Base de Premissas - Q3.xlsx', 'NOVOS RCAS.xlsx', 'relatorio_carteira_clientes.xls', "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"], audits);
+}
+
+export function buildM3(sources: ParsedSource[]) {
+  const resolver = createRcaResolver(sources);
+  const rcaAudits = new Map<string, RcaAuditBucket>();
+  const records: Array<Record<string, unknown>> = [];
+  for (const row of rows(sources, 'vendas-8022.xls')) {
+    const code = value(row, 'seller_code');
+    const rca = resolver.resolveCurrent(code);
+    registerRcaAudit(rcaAudits, rca, '8022');
+    const cnpj = String(value(row, 'customer_document') ?? '');
+    const out = blank('M3_MOVIMENTO_VENDAS');
+    Object.assign(out, {
+      fact_type: 'SALE', competence: competence(), event_date: value(row, 'movement_date'), invoice_issue_date: value(row, 'invoice_issue_date'),
+      customer_canonical_id: cnpj.length === 14 ? `CUSTOMER:${cnpj}` : null, cnpj: cnpj.length === 14 ? cnpj : null,
+      rca_canonical_id: rca.canonicalId, transaction_rca_code: code, winthor_product_code: value(row, 'winthor_product_code'),
+      industry_sku: value(row, 'manufacturer_code'), order_winthor: value(row, 'order_winthor'), order_rca: value(row, 'order_rca'),
+      invoice_number: value(row, 'invoice_number'), order_status: value(row, 'order_status'), block_status: value(row, 'block_status'),
+      sale_type: value(row, 'sale_type'), order_origin: value(row, 'order_origin'), units: value(row, 'units_sold'), cases: value(row, 'cases_sold'),
+      gross_weight_kg: value(row, 'gross_weight_kg'), net_weight_kg: value(row, 'net_weight_kg'), value: value(row, 'sale_value'),
+      source_lineage: '8022|NOVOS RCAS:CURRENT', audit_flags: rca.canonicalId ? null : rca.status,
+    });
+    records.push(out);
+  }
+  for (const row of rows(sources, 'CARTEIRA 24.08.xlsx')) {
+    const out = blank('M3_MOVIMENTO_VENDAS');
+    Object.assign(out, { fact_type: 'INBOUND_ORDER', competence: competence(), order_date: value(row, 'order_date'), billing_date: value(row, 'billing_date'), industry_material: value(row, 'industry_material'), industry_order_number: value(row, 'industry_order_number'), invoice_number: value(row, 'invoice_raw'), order_qty: value(row, 'order_qty'), bill_qty: value(row, 'bill_qty'), inbound_net_value: value(row, 'net_value'), billing_type: value(row, 'billing_type'), source_lineage: 'Carteira Colgate' });
+    records.push(out);
+  }
+  for (const row of rows(sources, 'entrada-notas-218.xls')) {
+    const out = blank('M3_MOVIMENTO_VENDAS');
+    Object.assign(out, { fact_type: 'RECEIPT', competence: competence(), receipt_date: value(row, 'receipt_date'), invoice_issue_date: value(row, 'invoice_issue_date'), invoice_number: value(row, 'invoice_raw'), invoice_series: value(row, 'invoice_series'), winthor_product_code: value(row, 'receipt_item_code + description'), received_units: value(row, 'received_units'), receipt_unit_price: value(row, 'receipt_unit_price'), current_financial_cost: value(row, 'current_financial_cost'), fiscal_code: value(row, 'fiscal_code'), operation_code: value(row, 'operation_code'), source_lineage: '218' });
+    records.push(out);
+  }
+  for (const row of rows(sources, 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) {
+    if (String(value(row, 'pasta_type') ?? '').trim().toUpperCase() !== 'MCD' || String(value(row, 'industry_name') ?? '').trim().toUpperCase() !== 'COLGATE') continue;
+    const code = value(row, 'target_rca_code');
+    const rca = resolver.resolveLegacy(code, value(row, 'target_rca_name'));
+    registerRcaAudit(rcaAudits, rca, 'Bússola');
+    const out = blank('M3_MOVIMENTO_VENDAS');
+    Object.assign(out, { fact_type: 'TARGET', competence: competence(), transaction_rca_code: code, rca_canonical_id: rca.canonicalId, sales_target: value(row, 'sales_target_pna'), positivity_target: value(row, 'positivity_target'), target_assignment_status: rca.status, source_lineage: 'Bússola: Metas | MCD + COLGATE | NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status });
+    records.push(out);
+  }
+  return list('M3_MOVIMENTO_VENDAS', records, ['vendas-8022.xls', 'CARTEIRA 24.08.xlsx', 'entrada-notas-218.xls', 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'], materializeRcaAudits(rcaAudits));
+}
+
+export function buildM4(sources: ParsedSource[]) {
+  const audits: CanonicalAudit[] = [];
+  const resolver = createRcaResolver(sources);
+  const rcaAudits = new Map<string, RcaAuditBucket>();
+  const movements = [...rows(sources, '379 25.txt'), ...rows(sources, '379 26.txt')];
+  const records = movements.map(row => {
+    const kind = value(row, 'movement_class');
+    const code = value(row, 'legacy_rca_code');
+    const rca = resolver.resolveLegacy(code);
+    registerRcaAudit(rcaAudits, rca, '379');
+    const out = blank('M4_HISTORICO_TRANSICAO');
+    Object.assign(out, { competence: competence(), movement_date: value(row, 'movement_date'), invoice_number: value(row, 'invoice_number'), invoice_series: value(row, 'invoice_series'), legacy_product_code: value(row, 'legacy_product_code'), customer_document_raw: value(row, 'customer_document'), legacy_rca_code: code, rca_canonical_id: rca.canonicalId, operation_code: value(row, 'operation_code'), cfop: value(row, 'cfop'), quantity_raw: value(row, 'quantity_raw'), value_raw: value(row, 'value_raw'), discount_raw: value(row, 'discount_raw'), net_weight: value(row, 'net_weight'), gross_weight: value(row, 'gross_weight'), movement_class: kind, mapping_status: rca.canonicalId ? rca.status : rca.status, source_lineage: '379|NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status });
+    if (kind === 'OTHER') audits.push(issue('UNKNOWN_OPERATION_CFOP', `Par ${value(row, 'operation_code')}/${value(row, 'cfop')} preservado como OTHER/PENDING.`));
+    return out;
+  });
+  audits.push(...materializeRcaAudits(rcaAudits));
+  return list('M4_HISTORICO_TRANSICAO', records, ['379 25.txt', '379 26.txt', '310 total 2026.txt', '12.322.txt'], audits);
+}
+
+export function buildCanonicalBundle(parsedSources: ParsedSource[]): CanonicalBundle {
+  const rejected = parsedSources.some(source => source.audits.some(audit => audit.severity === 'BLOCKED'));
+  if (rejected) throw new Error('SOURCE_REJECTED_KEEP_PREVIOUS: uma ou mais fontes falharam validação estrutural.');
+  const lists = { M1_ITEM_ESTOQUE: buildM1(parsedSources), M2_CLIENTE_RCA: buildM2(parsedSources), M3_MOVIMENTO_VENDAS: buildM3(parsedSources), M4_HISTORICO_TRANSICAO: buildM4(parsedSources) };
+  return { version: 'v1', generatedAt: now(), lists, parsedSources };
+}
+
+/** Stage 3 consumes only normalized staging rows. */
+export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): CanonicalBundle {
+  const bundle = buildCanonicalBundle(parsedSources);
+  const snapshot = new Date().toISOString().slice(0, 10);
+  const comp = competence();
+  const fieldOnly = (id: Id, record: Record<string, unknown>) => Object.fromEntries(schemas[id].map(schema => [schema.field, record[schema.field] ?? null]));
+  const resolver = createRcaResolver(parsedSources);
+
+  // M1
+  const stock105 = new Map(rows(parsedSources, 'posicao-estoque-105.xls').map(row => [String(value(row, 'winthor_code') ?? ''), row]));
+  const pVenda = new Map(rows(parsedSources, 'pctabpr 13.xlsx').map(row => [String(value(row, 'codprod') ?? ''), value(row, 'pvenda1')]));
+  const launches = new Map(rows(parsedSources, 'lançamentos.xlsx').map(row => [String(value(row, 'launch_winthor_code') ?? ''), row]));
+  const items = new Map<string, Record<string, unknown>>();
+  for (const row of [...rows(parsedSources, 'cadastro-itens-286.xls'), ...rows(parsedSources, 'posicao-estoque-105.xls')]) {
+    const code = String(value(row, 'winthor_code') ?? '');
+    if (!code || items.has(code)) continue;
+    const stock = stock105.get(code); const launch = launches.get(code);
+    items.set(code, fieldOnly('M1_ITEM_ESTOQUE', { snapshot_date: snapshot, competence: comp, item_canonical_id: `ITEM:${code}`, winthor_code: code, manufacturer_code: value(row, 'manufacturer_code'), internal_ean: value(row, 'internal_ean'), description_internal: value(row, 'description_286', 'description_105'), pack_internal: value(row, 'pack_286', 'pack_105'), physical_stock_units: value(stock ?? row, 'physical_stock_units'), stock_286_physical: value(row, 'physical_286'), stock_286_blocked: value(row, 'blocked_286'), stock_286_reserved: value(row, 'reserved_286'), stock_286_available: value(row, 'available_286'), cost_unit_105: value(stock ?? row, 'unit_cost_real'), sale_price_105: value(stock ?? row, 'sale_price_105'), pVenda1_region11: pVenda.get(code) ?? null, is_launch: launch ? true : false, launch_status: launch ? value(launch, 'launch_status') : null, has_winthor: true, mapping_status: 'WINTHOR', source_lineage: '286|105|PCTABPR|Lançamentos' }));
+  }
+  bundle.lists.M1_ITEM_ESTOQUE = list('M1_ITEM_ESTOQUE', [...items.values()], ['cadastro-itens-286.xls', 'posicao-estoque-105.xls', 'estoque-8013.xls', 'pctabpr 13.xlsx', 'Lista_de_Preco (8).xlsx', 'lançamentos.xlsx', "Sortimento Recomendado - Q3'26.xlsx"], []);
+
+  // M2 — CNPJ é a chave; Carteira fornece representante atual e NOVOS RCAS resolve identidade canônica.
+  const m2RcaAudits = new Map<string, RcaAuditBucket>();
+  const portfolio = new Map(rows(parsedSources, 'relatorio_carteira_clientes.xls').map(row => [String(value(row, 'customer_cnpj') ?? ''), row]));
+  const m2 = new Map<string, Record<string, unknown>>();
+  for (const row of [...rows(parsedSources, 'Nova Base de Premissas - Q3.xlsx'), ...rows(parsedSources, 'relatorio_carteira_clientes.xls')]) {
+    const cnpj = String(value(row, 'customer_document_declared', 'customer_cnpj') ?? '');
+    if (!cnpj || m2.has(cnpj)) continue;
+    const portfolioRow = portfolio.get(cnpj);
+    const representative = value(portfolioRow ?? row, 'representative_code');
+    const rca = representative ? resolver.resolveCurrent(representative) : null;
+    if (rca) registerRcaAudit(m2RcaAudits, rca, 'Carteira Clientes');
+    m2.set(cnpj, fieldOnly('M2_CLIENTE_RCA', {
+      snapshot_date: snapshot, competence: comp, customer_canonical_id: cnpj.length === 14 ? `CUSTOMER:${cnpj}` : null, cnpj: cnpj.length === 14 ? cnpj : null,
+      winthor_customer_code: value(portfolioRow ?? row, 'winthor_customer_code'), customer_name: value(portfolioRow ?? row, 'customer_name', 'customer_name_premise'), trade_name: value(portfolioRow ?? row, 'trade_name'), commercial_activity: value(portfolioRow ?? row, 'commercial_activity'), city: value(portfolioRow ?? row, 'city'), state: value(row, 'state'), district: value(portfolioRow ?? row, 'district'), address: value(portfolioRow ?? row, 'address'), latitude: value(portfolioRow ?? row, 'latitude'), longitude: value(portfolioRow ?? row, 'longitude'), buyer: value(portfolioRow ?? row, 'buyer'), phone: value(portfolioRow ?? row, 'phone'),
+      environment: value(row, 'environment'), tier: value(row, 'tier'), profile: value(row, 'profile'), cluster_code: value(row, 'cluster_code'), cluster_description: value(row, 'cluster_description'), avg_12_months: value(row, 'avg_12_months'), premise_network: value(row, 'premise_network'),
+      representative_code_snapshot: representative, rca_canonical_id: rca?.canonicalId ?? null, rca_current_code: rca?.currentCode ?? null, rca_legacy_code: rca?.legacyCode ?? null, rca_name: rca?.name ?? null, coordinator_code: rca?.coordinatorCode ?? null, coordinator_name: rca?.coordinatorName ?? null,
+      visit_frequency: value(portfolioRow ?? row, 'visit_frequency'), visit_day: value(portfolioRow ?? row, 'visit_day'), days_without_purchase: value(portfolioRow ?? row, 'days_without_purchase'), network_resolution_status: 'SOURCE_PRESERVED', source_lineage: 'Premissas|Carteira Clientes|NOVOS RCAS', audit_flags: rca && !rca.canonicalId ? rca.status : null,
+    }));
+  }
+  bundle.lists.M2_CLIENTE_RCA = list('M2_CLIENTE_RCA', [...m2.values()], ['Nova Base de Premissas - Q3.xlsx', 'NOVOS RCAS.xlsx', 'relatorio_carteira_clientes.xls', "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"], materializeRcaAudits(m2RcaAudits));
+
+  // M3 — 8022 é contexto ATUAL; Bússola homologada é contexto LEGADO com nome para desambiguar.
+  const m3RcaAudits = new Map<string, RcaAuditBucket>();
+  const m3: Record<string, unknown>[] = [];
+  for (const row of rows(parsedSources, 'vendas-8022.xls')) {
+    const code = value(row, 'seller_code'); const rca = resolver.resolveCurrent(code); registerRcaAudit(m3RcaAudits, rca, '8022');
+    const document = String(value(row, 'customer_document') ?? '');
+    m3.push(fieldOnly('M3_MOVIMENTO_VENDAS', { fact_id: `8022:${value(row, '__source_row')}`, fact_type: 'SALE', source: '8022', competence: comp, event_date: value(row, 'movement_date'), invoice_issue_date: value(row, 'invoice_issue_date'), customer_canonical_id: document.length === 14 ? `CUSTOMER:${document}` : null, cnpj: document.length === 14 ? document : null, rca_canonical_id: rca.canonicalId, transaction_rca_code: code, winthor_product_code: value(row, 'winthor_product_code'), industry_sku: value(row, 'manufacturer_code'), order_winthor: value(row, 'order_winthor'), order_rca: value(row, 'order_rca'), invoice_number: value(row, 'invoice_number'), order_status: value(row, 'order_status'), block_status: value(row, 'block_status'), sale_type: value(row, 'sale_type'), order_origin: value(row, 'order_origin'), units: value(row, 'units_sold'), cases: value(row, 'cases_sold'), gross_weight_kg: value(row, 'gross_weight_kg'), net_weight_kg: value(row, 'net_weight_kg'), value: value(row, 'sale_value'), source_lineage: '8022|NOVOS RCAS:CURRENT', audit_flags: rca.canonicalId ? null : rca.status }));
+  }
+  for (const row of rows(parsedSources, 'CARTEIRA 24.08.xlsx')) m3.push(fieldOnly('M3_MOVIMENTO_VENDAS', { fact_id: `CARTEIRA:${value(row, '__source_row')}`, fact_type: 'INBOUND_ORDER', source: 'CARTEIRA_COLGATE', competence: comp, order_date: value(row, 'order_date'), billing_date: value(row, 'billing_date'), industry_material: value(row, 'industry_material'), industry_order_number: value(row, 'industry_order_number'), invoice_number: value(row, 'invoice_raw'), order_qty: value(row, 'order_qty'), bill_qty: value(row, 'bill_qty'), inbound_net_value: value(row, 'net_value'), billing_type: value(row, 'billing_type'), source_lineage: 'Carteira Colgate' }));
+  for (const row of rows(parsedSources, 'entrada-notas-218.xls')) m3.push(fieldOnly('M3_MOVIMENTO_VENDAS', { fact_id: `218:${value(row, '__source_row')}`, fact_type: 'RECEIPT', source: '218', competence: comp, receipt_date: value(row, 'receipt_date'), invoice_issue_date: value(row, 'invoice_issue_date'), invoice_number: value(row, 'invoice_raw'), invoice_series: value(row, 'invoice_series'), winthor_product_code: value(row, 'receipt_item_code + description'), received_units: value(row, 'received_units'), receipt_unit_price: value(row, 'receipt_unit_price'), current_financial_cost: value(row, 'current_financial_cost'), fiscal_code: value(row, 'fiscal_code'), operation_code: value(row, 'operation_code'), source_lineage: '218' }));
+  for (const row of rows(parsedSources, 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) {
+    if (String(value(row, 'pasta_type') ?? '').trim().toUpperCase() !== 'MCD' || String(value(row, 'industry_name') ?? '').trim().toUpperCase() !== 'COLGATE') continue;
+    const code = value(row, 'target_rca_code'); const rca = resolver.resolveLegacy(code, value(row, 'target_rca_name')); registerRcaAudit(m3RcaAudits, rca, 'Bússola');
+    m3.push(fieldOnly('M3_MOVIMENTO_VENDAS', { fact_id: `BUSSOLA:${value(row, '__source_row')}`, fact_type: 'TARGET', source: 'BUSSOLA', competence: comp, transaction_rca_code: code, rca_canonical_id: rca.canonicalId, sales_target: value(row, 'sales_target_pna'), positivity_target: value(row, 'positivity_target'), target_assignment_status: rca.status, source_lineage: 'Bússola: Metas | MCD + COLGATE | NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status }));
+  }
+  bundle.lists.M3_MOVIMENTO_VENDAS = list('M3_MOVIMENTO_VENDAS', m3, ['vendas-8022.xls', 'CARTEIRA 24.08.xlsx', 'entrada-notas-218.xls', 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'], materializeRcaAudits(m3RcaAudits));
+
+  // M4 — 379 e 310 usam exclusivamente o contexto LEGADO do mesmo RCA master.
+  const m4Audits: CanonicalAudit[] = [];
+  const m4RcaAudits = new Map<string, RcaAuditBucket>();
+  const historical379 = (file: string, year: string) => rows(parsedSources, file).map(row => {
+    const out = blank('M4_HISTORICO_TRANSICAO'); const klass = value(row, 'movement_class'); const legacyCode = value(row, 'legacy_rca_code', 'rca_code'); const rca = resolver.resolveLegacy(legacyCode); registerRcaAudit(m4RcaAudits, rca, file);
+    Object.assign(out, { historical_fact_id: `${file}:${value(row, '__source_row') ?? ''}`, row_type: 'TRANSACTION_379', source: file, source_year: year, competence: null, movement_date: value(row, 'movement_date'), invoice_number: value(row, 'invoice_number'), invoice_series: value(row, 'invoice_series'), legacy_product_code: value(row, 'legacy_product_code'), historical_gtin: value(row, 'ean_commercial', 'ean_tax'), customer_document_raw: value(row, 'customer_document'), customer_cnpj: (() => { const document = String(value(row, 'customer_document') ?? ''); return document.length === 14 ? document : null; })(), legacy_rca_code: legacyCode, rca_canonical_id: rca.canonicalId, movement_class: klass, operation_code: value(row, 'operation_code'), cfop: value(row, 'cfop'), quantity_raw: value(row, 'quantity_raw'), signed_quantity: klass === 'RETURN' ? -(Number(value(row, 'quantity_raw') ?? 0)) : value(row, 'quantity_raw'), value_raw: value(row, 'value_raw'), signed_value: klass === 'RETURN' ? -(Number(value(row, 'value_raw') ?? 0)) : value(row, 'value_raw'), discount_raw: value(row, 'discount_raw'), signed_discount: klass === 'RETURN' ? -(Number(value(row, 'discount_raw') ?? 0)) : value(row, 'discount_raw'), net_weight: value(row, 'net_weight'), gross_weight: value(row, 'gross_weight'), historical_city: value(row, 'city'), historical_coordinator: value(row, 'coordinator'), historical_network: value(row, 'network'), historical_branch: value(row, 'branch'), qtd_cx: value(row, 'qtd_cx'), ean_commercial: value(row, 'ean_commercial'), ean_tax: value(row, 'ean_tax'), mapping_status: rca.canonicalId ? rca.status : rca.status, source_lineage: `${file}|NOVOS RCAS:LEGACY`, audit_flags: rca.canonicalId ? null : rca.status });
+    if (klass === 'OTHER') m4Audits.push(issue('UNKNOWN_OPERATION_CFOP', `Par ${value(row, 'operation_code')}/${value(row, 'cfop')} preservado como OTHER.`, file));
+    return out;
+  });
+  const aggregates = rows(parsedSources, '310 total 2026.txt').map(row => {
+    const out = blank('M4_HISTORICO_TRANSICAO'); const document = String(value(row, 'customer_document') ?? ''); const legacyCode = value(row, 'seller_code_legacy'); const rca = resolver.resolveLegacy(legacyCode); if (legacyCode) registerRcaAudit(m4RcaAudits, rca, '310');
+    Object.assign(out, { historical_fact_id: `310:${value(row, '__source_row') ?? ''}`, row_type: 'AGG_310', source: '310', source_year: '2026', competence: null, legacy_product_code: value(row, 'legacy_product_code'), customer_document_raw: document || null, customer_cnpj: document.length === 14 ? document : null, legacy_rca_code: legacyCode, rca_canonical_id: rca.canonicalId, purchase_value_ytd: value(row, 'purchase_value'), bonus_value_ytd: value(row, 'bonus_value'), discount_value_ytd: value(row, 'discount_value'), return_value_ytd: value(row, 'return_value'), quantity_raw: value(row, 'purchase_count'), net_weight: value(row, 'purchase_net_weight'), gross_weight: value(row, 'return_net_weight'), seller_code_310: legacyCode, group_code_310: value(row, 'group_code'), source_lineage: '310 total 2026.txt|NOVOS RCAS:LEGACY', mapping_status: rca.canonicalId ? rca.status : (document.length === 14 ? 'DOCUMENT_CNPJ' : 'DOCUMENT_CPF_OR_UNRESOLVED'), audit_flags: legacyCode && !rca.canonicalId ? rca.status : null });
+    return out;
+  });
+  const receipts = rows(parsedSources, '12.322.txt').map(row => { const out = blank('M4_HISTORICO_TRANSICAO'); Object.assign(out, { historical_fact_id: `12.322:${value(row, '__source_row') ?? ''}`, row_type: 'RECEIPT_12322', source: '12.322.txt', source_year: '2026', competence: null, movement_date: value(row, 'invoice_issue_date'), invoice_number: value(row, 'invoice_raw'), accounting_date: value(row, 'accounting_date'), supplier_document: value(row, 'supplier_document'), supplier_name: value(row, 'supplier_name'), invoice_value: value(row, 'invoice_value'), discount_raw: value(row, 'discount'), receipt_class: value(row, 'operation_code') === '212.01' ? 'MERCHANDISE' : value(row, 'operation_code') === '299.40' ? 'SUPPLIES' : 'UNCLASSIFIED', mapping_status: 'INVOICE_GRAIN_ONLY', source_lineage: '12.322.txt' }); return out; });
+  m4Audits.push(...materializeRcaAudits(m4RcaAudits));
+  bundle.lists.M4_HISTORICO_TRANSICAO = list('M4_HISTORICO_TRANSICAO', [...historical379('379 25.txt', '2025'), ...historical379('379 26.txt', '2026'), ...aggregates, ...receipts], ['379 25.txt', '379 26.txt', '310 total 2026.txt', '12.322.txt'], m4Audits);
+  return bundle;
 }
