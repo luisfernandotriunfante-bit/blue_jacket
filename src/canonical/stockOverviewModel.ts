@@ -113,10 +113,12 @@ function comparableCode(value: unknown) {
 function invoiceKey(value: unknown) {
   const raw = text(value)?.replace(/\.0$/, '').replace(/\s+/g, '') ?? '';
   if (!raw) return null;
-  const primary = raw.split(/[-/]/, 1)[0] ?? raw;
-  const digits = primary.replace(/\D/g, '');
-  if (digits) return digits.replace(/^0+(?=\d)/, '');
-  const comparable = normalized(primary).replace(/[^A-Z0-9]/g, '');
+  const numericTokens = raw.match(/\d+/g) ?? [];
+  if (numericTokens.length) {
+    const primary = numericTokens.reduce((best, token) => token.length > best.length ? token : best, numericTokens[0]);
+    return primary.replace(/^0+(?=\d)/, '');
+  }
+  const comparable = normalized(raw).replace(/[^A-Z0-9]/g, '');
   return comparable || null;
 }
 
@@ -263,21 +265,8 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   augmentSkuAliasesFromSales(sales, indexes);
   const unitsPerCase = unitsPerCaseIndex(items, sales, indexes);
 
+  const receiptInvoices218 = new Set(receipts218.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
   const receiptInvoices12322 = new Set(receipts12322.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
-  const receiptCases218 = new Map<string, number>();
-  const receiptInvoiceItems218 = new Set<string>();
-  for (const receipt of receipts218) {
-    const invoice = invoiceKey(receipt.invoice_number);
-    const item = currentItemForFact(receipt, indexes);
-    if (!invoice || !item) continue;
-    const factor = unitsPerCase.get(itemKey(item)) ?? 0;
-    if (!(factor > 0)) continue;
-    const receivedUnits = Math.max(0, amount(receipt.received_units));
-    if (!(receivedUnits > 0)) continue;
-    const key = `${invoice}|${itemKey(item)}`;
-    receiptCases218.set(key, (receiptCases218.get(key) ?? 0) + receivedUnits / factor);
-    receiptInvoiceItems218.add(key);
-  }
 
   const validDates = [
     ...sales.map(fact => text(fact.event_date)).filter(isIsoDate) as string[],
@@ -346,13 +335,9 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     if (billQty > 0 && invoice && receiptInvoices12322.has(invoice)) {
       receivedBillQty = billQty;
       matched12322.add(invoice);
-    } else if (billQty > 0 && invoice && itemId) {
-      const receiptKey = `${invoice}|${itemId}`;
-      const receivedCases = receiptCases218.get(receiptKey) ?? 0;
-      if (receivedCases > 0) {
-        receivedBillQty = Math.min(billQty, receivedCases);
-        matched218.add(receiptKey);
-      }
+    } else if (billQty > 0 && invoice && receiptInvoices218.has(invoice)) {
+      receivedBillQty = billQty;
+      matched218.add(invoice);
     }
 
     const outstandingBillQty = Math.max(0, billQty - receivedBillQty);
