@@ -126,6 +126,30 @@
   box-shadow: var(--panel-focus);
 }
 
+.sellout-page-stack .panel-section-action select {
+  min-height: 36px;
+  margin-left: 6px;
+  padding: 7px 30px 7px 10px;
+  border: 1px solid var(--panel-card-border);
+  border-radius: 10px;
+  outline: none;
+  background: rgba(8, 12, 18, .72);
+  color: var(--panel-text);
+  font: inherit;
+  font-size: .78rem;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.sellout-page-stack .panel-section-action select:hover {
+  border-color: rgba(255, 255, 255, .18);
+  background: rgba(14, 19, 27, .9);
+}
+
+.sellout-page-stack .panel-section-action select:focus {
+  border-color: rgba(227, 27, 45, .58);
+  box-shadow: var(--panel-focus);
+}
+
 .sellout-line-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
