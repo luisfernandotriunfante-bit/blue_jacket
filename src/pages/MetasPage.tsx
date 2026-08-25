@@ -1,5 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { loadCandidateList } from '../canonical/candidateLists';
 import { loadReportSettings, networkTargetFor, setNetworkTargetFor, setSellOutTargets } from '../canonical/reportSettings';
+import { useData } from '../store/DataContext';
 import { PanelCard, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const numberValue = (value: string) => {
@@ -9,12 +11,24 @@ const numberValue = (value: string) => {
 };
 
 export function MetasPage() {
-  const competence = new Date().toISOString().slice(0, 7);
+  const { activeCanonical } = useData();
   const initial = loadReportSettings();
+  const [competence, setCompetence] = useState(new Date().toISOString().slice(0, 7));
   const [sellOutTarget, setSellOutTarget] = useState(initial.sellOutTarget?.toString() ?? '');
   const [positivityTarget, setPositivityTarget] = useState(initial.positivityTarget?.toString() ?? '');
   const [networkTarget, setNetworkTarget] = useState(networkTargetFor(competence)?.toString() ?? '');
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (!activeCanonical) return;
+    let live = true;
+    loadCandidateList('M3_MOVIMENTO_VENDAS').then(m3 => {
+      if (!live) return;
+      setCompetence(m3.competence);
+      setNetworkTarget(networkTargetFor(m3.competence)?.toString() ?? '');
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [activeCanonical]);
 
   const save = () => {
     setSellOutTargets(numberValue(sellOutTarget), numberValue(positivityTarget));
@@ -35,7 +49,7 @@ export function MetasPage() {
           <input type="number" min="0" step="1" value={positivityTarget} onChange={event => { setPositivityTarget(event.target.value); setSaved(false); }} placeholder="Ex.: 902" />
         </label>
         <label className="panel-field">
-          <span className="panel-mini-label">Meta Redes Geral (R$)</span>
+          <span className="panel-mini-label">Meta Redes Geral (R$) · {competence}</span>
           <input type="number" min="0" step="0.01" value={networkTarget} onChange={event => { setNetworkTarget(event.target.value); setSaved(false); }} placeholder="Ex.: 3000000" />
         </label>
       </div>
