@@ -46,6 +46,12 @@ export type StockOverviewModel = {
     availableUnits: number;
     inboundQty: number;
     inboundValue: number;
+    grossInboundQty: number;
+    grossInboundValue: number;
+    receivedInboundQty: number;
+    receivedInboundValue: number;
+    matchedReceiptInvoices218: number;
+    matchedReceiptInvoices12322: number;
     mappedInboundQty: number;
     totalInboundQty: number;
     mappedInboundRows: number;
@@ -102,6 +108,16 @@ function comparableCode(value: unknown) {
   if (!raw) return null;
   if (/^\d+$/.test(raw)) return raw.replace(/^0+(?=\d)/, '');
   return normalized(raw).replace(/[^A-Z0-9]/g, '');
+}
+
+function invoiceKey(value: unknown) {
+  const raw = text(value)?.replace(/\.0$/, '').replace(/\s+/g, '') ?? '';
+  if (!raw) return null;
+  const primary = raw.split(/[-/]/, 1)[0] ?? raw;
+  const digits = primary.replace(/\D/g, '');
+  if (digits) return digits.replace(/^0+(?=\d)/, '');
+  const comparable = normalized(primary).replace(/[^A-Z0-9]/g, '');
+  return comparable || null;
 }
 
 function itemLine(item: RecordValue) {
@@ -188,9 +204,17 @@ function alert(code: string, tone: StockOverviewAlertTone, title: string, detail
 export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m4: CanonicalList }): StockOverviewModel {
   const indexes = buildItemIndexes(m1);
   const items = m1.records as RecordValue[];
-  const sales = (m3.records as RecordValue[]).filter(fact => fact.fact_type === 'SALE');
-  const inbound = (m3.records as RecordValue[]).filter(fact => fact.fact_type === 'INBOUND_ORDER');
-  const historical = (m4.records as RecordValue[]).filter(fact => fact.row_type === 'TRANSACTION_379');
+  const m3Records = m3.records as RecordValue[];
+  const m4Records = m4.records as RecordValue[];
+  const sales = m3Records.filter(fact => fact.fact_type === 'SALE');
+  const inbound = m3Records.filter(fact => fact.fact_type === 'INBOUND_ORDER');
+  const receipts218 = m3Records.filter(fact => fact.fact_type === 'RECEIPT');
+  const historical = m4Records.filter(fact => fact.row_type === 'TRANSACTION_379');
+  const receipts12322 = m4Records.filter(fact => fact.row_type === 'RECEIPT_12322');
+
+  const receiptInvoices218 = new Set(receipts218.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
+  const receiptInvoices12322 = new Set(receipts12322.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
+  const receivedInvoiceKeys = new Set([...receiptInvoices218, ...receiptInvoices12322]);
 
   const validDates = [
     ...sales.map(fact => text(fact.event_date)).filter(isIsoDate) as string[],
@@ -234,19 +258,49 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   }
 
   const inboundByItem = new Map<string, number>();
+  let grossInboundQty = 0;
   let totalInboundQty = 0;
   let mappedInboundQty = 0;
+  let grossInboundValue = 0;
   let inboundValue = 0;
+  let receivedInboundQty = 0;
+  let receivedInboundValue = 0;
   let mappedInboundRows = 0;
+  let totalInboundRows = 0;
+  const matched218 = new Set<string>();
+  const matched12322 = new Set<string>();
+
   for (const fact of inbound) {
-    const qty = Math.max(0, amount(fact.order_qty)) + Math.max(0, amount(fact.bill_qty));
-    totalInboundQty += qty;
-    inboundValue += Math.max(0, amount(fact.inbound_net_value));
+    const orderQty = Math.max(0, amount(fact.order_qty));
+    const billQty = Math.max(0, amount(fact.bill_qty));
+    const grossQty = orderQty + billQty;
+    const netValue = Math.max(0, amount(fact.inbound_net_value));
+    const key = invoiceKey(fact.invoice_number);
+    const received = Boolean(key && receivedInvoiceKeys.has(key));
+    if (key && received) {
+      if (receiptInvoices218.has(key)) matched218.add(key);
+      if (receiptInvoices12322.has(key)) matched12322.add(key);
+    }
+
+    const outstandingBillQty = received ? 0 : billQty;
+    const outstandingQty = orderQty + outstandingBillQty;
+    const outstandingRatio = grossQty > 0 ? outstandingQty / grossQty : received ? 0 : 1;
+    const outstandingValue = netValue * Math.max(0, Math.min(1, outstandingRatio));
+
+    grossInboundQty += grossQty;
+    grossInboundValue += netValue;
+    totalInboundQty += outstandingQty;
+    inboundValue += outstandingValue;
+    receivedInboundQty += Math.max(0, grossQty - outstandingQty);
+    receivedInboundValue += Math.max(0, netValue - outstandingValue);
+
+    if (outstandingQty <= 0 && outstandingValue <= 0) continue;
+    totalInboundRows += 1;
     const item = currentItemForFact(fact, indexes);
     if (!item) continue;
-    const key = itemKey(item);
-    inboundByItem.set(key, (inboundByItem.get(key) ?? 0) + qty);
-    mappedInboundQty += qty;
+    const itemKeyValue = itemKey(item);
+    inboundByItem.set(itemKeyValue, (inboundByItem.get(itemKeyValue) ?? 0) + outstandingQty);
+    mappedInboundQty += outstandingQty;
     mappedInboundRows += 1;
   }
 
@@ -357,7 +411,6 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     };
   });
 
-  const safePhysical = Math.max(0, physicalUnits);
   const safeProjected = Math.max(0, projectedUnits);
   const stockSkuShare = items.length > 0 ? itemsWithStock / items.length : null;
   const pricedCoverage = itemsWithStock > 0 ? pricedItemsWithStock / itemsWithStock : null;
@@ -379,10 +432,16 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
       availableUnits: round(availableUnits),
       inboundQty: round(inboundQty),
       inboundValue: round(inboundValue),
+      grossInboundQty: round(grossInboundQty),
+      grossInboundValue: round(grossInboundValue),
+      receivedInboundQty: round(receivedInboundQty),
+      receivedInboundValue: round(receivedInboundValue),
+      matchedReceiptInvoices218: matched218.size,
+      matchedReceiptInvoices12322: matched12322.size,
       mappedInboundQty: round(mappedInboundQty),
       totalInboundQty: round(totalInboundQty),
       mappedInboundRows,
-      totalInboundRows: inbound.length,
+      totalInboundRows,
       projectedUnits: round(projectedUnits),
       purchaseValue: round(purchaseValue),
       saleValue: round(saleValue),
@@ -405,7 +464,7 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     dataQuality: {
       noSalePriceItems: noPrice.length,
       unclassifiedItems: unclassified.length,
-      inboundUnmappedRows: Math.max(0, inbound.length - mappedInboundRows),
+      inboundUnmappedRows: Math.max(0, totalInboundRows - mappedInboundRows),
       historicalUnmappedRows: unmappedHistoricalRows,
     },
     treemap,

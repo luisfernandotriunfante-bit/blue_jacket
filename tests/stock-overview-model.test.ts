@@ -71,6 +71,40 @@ test('Carteira Colgate resolve material numérico com zeros à esquerda sem desc
   assert.equal(model.dataQuality.inboundUnmappedRows, 0);
 });
 
+test('Carteira desconta Bill Qty e valor das notas já recebidas em 218 e 12.322 sem duplicar recebimento', () => {
+  const m3WithReceipts = list('M3_MOVIMENTO_VENDAS', [
+    ...m3.records.filter(row => row.fact_type === 'SALE'),
+    {
+      fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '00000123-1',
+      order_qty: 20, bill_qty: 10, inbound_net_value: 300,
+    },
+    {
+      fact_type: 'INBOUND_ORDER', industry_material: '61052479', invoice_number: '00000456-1',
+      order_qty: 0, bill_qty: 5, inbound_net_value: 50,
+    },
+    {
+      fact_type: 'INBOUND_ORDER', industry_material: '61052478',
+      order_qty: 10, bill_qty: 0, inbound_net_value: 100,
+    },
+    { fact_type: 'RECEIPT', invoice_number: '123', received_units: 10 },
+  ]);
+  const m4WithReceipts = list('M4_HISTORICO_TRANSICAO', [
+    { row_type: 'RECEIPT_12322', invoice_number: '00000456', invoice_value: 50 },
+    { row_type: 'RECEIPT_12322', invoice_number: '00000123', invoice_value: 300 },
+  ]);
+
+  const model = buildStockOverviewModel({ m1, m3: m3WithReceipts, m4: m4WithReceipts });
+  assert.equal(model.totals.grossInboundQty, 45);
+  assert.equal(model.totals.receivedInboundQty, 15);
+  assert.equal(model.totals.totalInboundQty, 30);
+  assert.equal(model.totals.grossInboundValue, 450);
+  assert.equal(model.totals.receivedInboundValue, 150);
+  assert.equal(model.totals.inboundValue, 300);
+  assert.equal(model.totals.matchedReceiptInvoices218, 1);
+  assert.equal(model.totals.matchedReceiptInvoices12322, 2);
+  assert.equal(model.totals.inboundQty, 30);
+});
+
 test('treemap usa valor do estoque por item dentro das cinco linhas', () => {
   const model = buildStockOverviewModel({ m1, m3, m4 });
   const dental = model.treemap.find(group => group.line === 'Creme Dental');
