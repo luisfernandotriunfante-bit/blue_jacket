@@ -1,0 +1,13 @@
+import * as XLSX from 'xlsx';
+import contract from './contracts/blueJacketContractV1.json' with { type: 'json' };
+import type { CanonicalList } from './types';
+
+type ListId=CanonicalList['id']; type Field={field:string;type:string;excel_format?:string};
+export type ExportProvenance={motorBuildId:string;stagingManifestHash:string;schemaVersion:string;generatedAt?:string};
+const schemas=contract.motor_schemas as Record<ListId,Field[]>;
+const textTypes=new Set(['TEXT','CODE_TEXT','DOC_TEXT','CNPJ14_TEXT','GTIN_TEXT','ENUM_TEXT']); const numberTypes=new Set(['INTEGER','DECIMAL','CURRENCY_BRL','PERCENT_DECIMAL']);
+const download=(blob:Blob,name:string)=>{const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url)};
+export function exportPayload(list:CanonicalList,p:ExportProvenance){return {motorBuildId:p.motorBuildId,stagingManifestHash:p.stagingManifestHash,schemaVersion:p.schemaVersion,generatedAt:p.generatedAt??list.generatedAt,rowCount:list.records.length,listId:list.id,records:list.records};}
+export function exportJson(list:CanonicalList,p:ExportProvenance){download(new Blob([JSON.stringify(exportPayload(list,p),null,2)],{type:'application/json'}),`${list.id}.json`)}
+export function createExcelWorkbook(list:CanonicalList,p:ExportProvenance){const fields=schemas[list.id];const sheet=XLSX.utils.aoa_to_sheet([fields.map(x=>x.field),...list.records.map(r=>fields.map(f=>r[f.field]??null))]);fields.forEach((f,c)=>{for(let r=1;r<=list.records.length;r++){const cell=sheet[XLSX.utils.encode_cell({r,c})];if(!cell)continue;if(textTypes.has(f.type)){cell.t='s';cell.v=String(cell.v)}else if(f.type==='BOOLEAN'){cell.t='b';cell.v=Boolean(cell.v)}else if(f.type==='DATE'&&typeof cell.v==='string'){cell.t='d';cell.v=new Date(`${cell.v}T00:00:00`)}else if(numberTypes.has(f.type)&&typeof cell.v==='number')cell.t='n';if(f.excel_format)cell.z=f.excel_format;}});sheet['!autofilter']={ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:0,c:fields.length-1}})};const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,sheet,list.id.slice(0,31));const metadata=XLSX.utils.aoa_to_sheet([['key','value'],['motorBuildId',p.motorBuildId],['stagingManifestHash',p.stagingManifestHash],['schemaVersion',p.schemaVersion],['generatedAt',p.generatedAt??list.generatedAt],['rowCount',list.records.length],['listId',list.id]]);XLSX.utils.book_append_sheet(wb,metadata,'METADATA');return wb;}
+export function exportExcel(list:CanonicalList,p:ExportProvenance){const data=XLSX.write(createExcelWorkbook(list,p),{bookType:'xlsx',type:'array',cellDates:true});download(new Blob([data],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}),`${list.id}.xlsx`)}

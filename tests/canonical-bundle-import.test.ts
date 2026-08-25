@@ -1,0 +1,14 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { strToU8, zipSync } from 'fflate';
+import { validateCanonicalBundleBytes } from '../src/canonical/bundleStore.ts';
+
+const ids = ['M1_ITEM_ESTOQUE', 'M2_CLIENTE_RCA', 'M3_MOVIMENTO_VENDAS', 'M4_HISTORICO_TRANSICAO'] as const;
+const expected = { motorBuildId: 'test-build', stagingManifestHash: 'test-staging', schemaVersion: 'v1', rowCounts: Object.fromEntries(ids.map(id => [id, 1])) as Record<(typeof ids)[number], number> };
+const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
+function bundle(options: { hashOverride?: string; rowsOverride?: number; buildId?: string; schemaVersion?: string } = {}) { const payloads = Object.fromEntries(ids.map(id => { const data = strToU8(JSON.stringify({ id, records: [{ id }], sources: [], generatedAt: '2026-08-25T00:00:00Z', competence: '2026-08', snapshotDate: '2026-08-25', warnings: [], errors: [] })); return [`${id}.json`, data]; })); const manifest = { bundleFormat: 'blue-jacket-canonical-bundle/v1', motorBuildId: options.buildId ?? expected.motorBuildId, stagingManifestHash: expected.stagingManifestHash, schemaVersion: options.schemaVersion ?? expected.schemaVersion, engineVersion: 'test', createdAt: '2026-08-25T00:00:00Z', rowCounts: Object.fromEntries(ids.map(id => [id, options.rowsOverride ?? 1])), files: Object.fromEntries(ids.map(id => { const path = `${id}.json`; const data = payloads[path]; return [path, { path, bytes: data.byteLength, sha256: options.hashOverride ?? hash(data) }]; })) }; return zipSync({ 'manifest.json': strToU8(JSON.stringify(manifest)), ...payloads }, { level: 6 }); }
+
+test('valid canonical bundle validates manifest, hashes, schemas and row counts before persistence', async () => { const result = await validateCanonicalBundleBytes(bundle(), expected); assert.equal(result.manifest.motorBuildId, 'test-build'); assert.equal(result.manifest.rowCounts.M4_HISTORICO_TRANSICAO, 1); });
+test('incorrect build, hash, schema or row count is rejected before activation', async () => { await assert.rejects(() => validateCanonicalBundleBytes(bundle({ buildId: 'wrong' }), expected), /BUNDLE_MANIFEST_REJECTED/); await assert.rejects(() => validateCanonicalBundleBytes(bundle({ schemaVersion: 'v2' }), expected), /BUNDLE_MANIFEST_REJECTED/); await assert.rejects(() => validateCanonicalBundleBytes(bundle({ hashOverride: '0'.repeat(64) }), expected), /BUNDLE_HASH_MISMATCH/); await assert.rejects(() => validateCanonicalBundleBytes(bundle({ rowsOverride: 2 }), expected), /BUNDLE_MANIFEST_REJECTED/); });
+test('bundle importer contains no parser or motor dependency', async () => { const source = await import('node:fs').then(fs => fs.readFileSync('src/canonical/bundleStore.ts', 'utf8')); assert.doesNotMatch(source, /from ['\"].*\/(parsers|motors)['\"]/); });
