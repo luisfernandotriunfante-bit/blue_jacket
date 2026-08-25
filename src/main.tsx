@@ -38,7 +38,7 @@ function App() {
     { id: 'relatorios', label: 'Documentos', active: activeTab === 'relatorios', onSelect: () => selectSection('relatorios') },
     { id: 'metas', label: 'Metas', active: activeTab === 'metas', onSelect: () => selectSection('metas') },
     { id: 'listas-canonicas', label: 'Listas Canônicas', active: activeTab === 'listas-canonicas', onSelect: () => selectSection('listas-canonicas') },
-    { id: 'configuracoes', label: 'Configurações', active: activeTab === 'configuracoes', onSelect: () => selectSection('configuracoes') },
+    { id: 'configuracoes', label: 'Atualizar Bases', active: activeTab === 'configuracoes', onSelect: () => selectSection('configuracoes') },
   ]
 
   const sidebar = (
