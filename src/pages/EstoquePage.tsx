@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
-import { SELL_OUT_COMMERCIAL_LINES } from '../canonical/commercialLines';
 import { buildStockOverviewModel, type StockLineTreemap, type StockOverviewModel, type StockTreemapTile } from '../canonical/stockOverviewModel';
 import type { CanonicalList } from '../canonical/types';
 import { useData } from '../store/DataContext';
