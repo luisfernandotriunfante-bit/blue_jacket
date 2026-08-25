@@ -77,7 +77,8 @@ test('operational Excel exports reopen with the same view-model rows, numeric mo
     const sheet = reopened.Sheets[sheetName]!;
     const data = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: null, raw: true });
     assert.equal(data.length, expectedRows);
-    assert.equal(typeof data[0]!.Realizado, 'number');
+    const moneyColumn = sheetName === 'Top Redes' ? 'Total' : 'Realizado';
+    assert.equal(typeof data[0]![moneyColumn], 'number');
     assert.equal(sheet.A2?.t, 's');
     const metadata = XLSX.utils.sheet_to_json<Record<string, string>>(reopened.Sheets.METADATA!, { defval: '' });
     assert.equal(metadata.find(row => row.key === 'motorBuildId')?.value, 'motor-1787651967348');

@@ -1,0 +1,1 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';const page=fs.readFileSync(new URL('../src/pages/TopRetailNetworksPage.tsx',import.meta.url),'utf8');test('aba Redes consome top_network já materializado no M2',()=>{assert.ok(page.includes('row.top_network'));assert.equal(page.includes('Roteiro Ativo Top Varejistas Ago'),false);});

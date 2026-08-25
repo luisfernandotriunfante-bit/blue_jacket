@@ -1,5 +1,6 @@
 import { SOURCE_IDS, parseSource } from './parsers';
 import { buildCanonicalBundleFromStaging } from './motors';
+import { materializeTopRetailRouteInM2 } from './topRetailM2';
 import type { ActiveCanonicalBundle } from './runtime';
 import type { CanonicalList, ParsedSource } from './types';
 
@@ -11,7 +12,7 @@ const LISTS_STORE = 'lists';
 const DEFAULT_PARSER_VERSION = 'browser-v1';
 const SOURCE_PARSER_VERSIONS: Record<string, string> = { '310 total 2026.txt': 'browser-v2-rca310' };
 const SCHEMA_VERSION = 'v1';
-const ENGINE_VERSION = 'browser-stage3-rca-v2';
+const ENGINE_VERSION = 'browser-stage3-top-retail-v3';
 const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
 
 export const REQUIRED_SOURCE_IDS = [...new Set(SOURCE_IDS)];
@@ -247,7 +248,9 @@ export async function buildCanonicalFromStoredSources(onProgress?: (progress: So
   if (missing.length) throw new Error(`SOURCES_MISSING:${missing.join('|')}`);
   onProgress?.({ source: 'ALL', label: 'Motores canônicos', index: REQUIRED_SOURCE_IDS.length, total: REQUIRED_SOURCE_IDS.length, phase: 'BUILDING', message: 'Gerando M1, M2, M3 e M4 exclusivamente dos stagings persistidos' });
   const manifestHash = await stagingManifestHash(stages);
-  const bundle = buildCanonicalBundleFromStaging(stages.map(stage => stage.parsed));
+  const parsedSources = stages.map(stage => stage.parsed);
+  const bundle = buildCanonicalBundleFromStaging(parsedSources);
+  bundle.lists.M2_CLIENTE_RCA = materializeTopRetailRouteInM2(bundle.lists.M2_CLIENTE_RCA, parsedSources);
   const lists = bundle.lists;
   const motorBuildId = `motor-browser-${Date.now()}-${manifestHash.slice(0, 10)}`;
   const rowCounts = Object.fromEntries(Object.entries(lists).map(([id, list]) => [id, list.records.length])) as ActiveCanonicalBundle['rowCounts'];
