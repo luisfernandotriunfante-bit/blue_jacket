@@ -6,6 +6,8 @@ type RecordValue = Record<string, unknown>;
 export type TopRetailNetworkRow = NetworkRow & {
   customersWithSales: number;
   topAchievement: number | null;
+  tcReferenceTarget: number | null;
+  targetWeight: number;
 };
 
 export type TopRetailNetworksViewModel = Omit<TopNetworksViewModel, 'rows' | 'totals'> & {
@@ -14,6 +16,7 @@ export type TopRetailNetworksViewModel = Omit<TopNetworksViewModel, 'rows' | 'to
     customersWithSales: number;
     topTarget: number;
     industryTarget: number;
+    sellOutTarget: number | null;
     overallSellOut: number;
     gap: number | null;
   };
@@ -29,11 +32,13 @@ export function buildTopRetailNetworksViewModel({
   m2,
   m3,
   sellOutTarget,
+  networkTargetTotal,
   generatedAt = new Date().toISOString(),
 }: {
   m2: CanonicalList;
   m3: CanonicalList;
   sellOutTarget: number | null;
+  networkTargetTotal: number | null;
   generatedAt?: string;
 }): TopRetailNetworksViewModel {
   const routeCustomers = new Map<string, { network: string; topTarget: number; customerName: string | null; tradeName: string | null; city: string | null; customerCode: string | null; rca: string | null }>();
@@ -65,6 +70,12 @@ export function buildTopRetailNetworksViewModel({
   const industryTarget = round(targets.reduce((sum, fact) => sum + amount(fact.sales_target), 0));
   const overallSellOut = round(sales.reduce((sum, sale) => sum + amount(sale.value), 0));
 
+  const tcReferenceByNetwork = new Map<string, number>();
+  for (const [network, topTarget] of topTargetsByNetwork) {
+    tcReferenceByNetwork.set(network, sellOutTarget !== null && industryTarget > 0 ? topTarget * sellOutTarget / industryTarget : 0);
+  }
+  const referenceTotal = [...tcReferenceByNetwork.values()].reduce((sum, value) => sum + Math.max(value, 0), 0);
+
   const aggregates = new Map<string, { invoiced: number; toInvoice: number; realized: number; positive: Set<string> }>();
   for (const network of networkCustomers.keys()) aggregates.set(network, { invoiced: 0, toInvoice: 0, realized: 0, positive: new Set<string>() });
 
@@ -84,8 +95,12 @@ export function buildTopRetailNetworksViewModel({
   const rows: TopRetailNetworkRow[] = [...networkCustomers.entries()].map(([network, customers]) => {
     const aggregate = aggregates.get(network)!;
     const topTarget = round(topTargetsByNetwork.get(network) ?? 0) || null;
-    const networkTarget = sellOutTarget !== null && industryTarget > 0 && topTarget !== null
+    const tcReferenceTarget = sellOutTarget !== null && industryTarget > 0 && topTarget !== null
       ? round(topTarget * sellOutTarget / industryTarget)
+      : null;
+    const weight = referenceTotal > 0 ? (tcReferenceByNetwork.get(network) ?? 0) / referenceTotal : 0;
+    const networkTarget = networkTargetTotal !== null && referenceTotal > 0
+      ? round(networkTargetTotal * weight)
       : null;
     const realized = round(aggregate.realized);
     const networkAchievement = networkTarget && networkTarget > 0 ? realized / networkTarget : null;
@@ -104,8 +119,22 @@ export function buildTopRetailNetworksViewModel({
       gap: networkTarget === null ? null : round(networkTarget - realized),
       achievement: networkAchievement,
       topAchievement,
+      tcReferenceTarget,
+      targetWeight: weight,
     };
   }).sort((a, b) => b.realized - a.realized || a.network.localeCompare(b.network));
+
+  // Ajuste de centavos: a soma das metas por rede precisa ser exatamente a Meta Redes manual.
+  if (networkTargetTotal !== null && referenceTotal > 0 && rows.length) {
+    const assigned = round(rows.reduce((sum, row) => sum + (row.networkTarget ?? 0), 0));
+    const difference = round(networkTargetTotal - assigned);
+    const last = rows[rows.length - 1];
+    if (last && Math.abs(difference) > 0) {
+      last.networkTarget = round((last.networkTarget ?? 0) + difference);
+      last.achievement = last.networkTarget > 0 ? last.realized / last.networkTarget : null;
+      last.gap = round(last.networkTarget - last.realized);
+    }
+  }
 
   const storeRows = [...routeCustomers.entries()].flatMap(([cnpj, route]) => {
     const customerSales = sales.filter(sale => text(sale.cnpj) === cnpj);
@@ -133,7 +162,7 @@ export function buildTopRetailNetworksViewModel({
   const invoicedTotal = round(rows.reduce((sum, row) => sum + row.invoiced, 0));
   const toInvoiceTotal = round(rows.reduce((sum, row) => sum + row.toInvoice, 0));
   const topTargetTotal = round(rows.reduce((sum, row) => sum + (row.topTarget ?? 0), 0));
-  const networkTargetTotal = sellOutTarget !== null && industryTarget > 0
+  const calculatedNetworkTargetTotal = networkTargetTotal !== null && referenceTotal > 0
     ? round(rows.reduce((sum, row) => sum + (row.networkTarget ?? 0), 0))
     : null;
 
@@ -153,11 +182,12 @@ export function buildTopRetailNetworksViewModel({
       realized,
       invoiced: invoicedTotal,
       toInvoice: toInvoiceTotal,
-      networkTarget: networkTargetTotal,
+      networkTarget: calculatedNetworkTargetTotal,
       topTarget: topTargetTotal,
       industryTarget,
+      sellOutTarget,
       overallSellOut,
-      gap: networkTargetTotal === null ? null : round(networkTargetTotal - realized),
+      gap: calculatedNetworkTargetTotal === null ? null : round(calculatedNetworkTargetTotal - realized),
     },
     reconciliation: {
       rowsEqualTotal: Math.abs(realized - rows.reduce((sum, row) => sum + row.realized, 0)) < 0.01,
