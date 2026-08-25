@@ -4,7 +4,7 @@ import { BlueJacketShell } from './ui/BlueJacketShell'
 import { HoverSidebar } from './ui/navigation/HoverSidebar'
 import { TopTabs } from './ui/navigation/TopTabs'
 import { PanelEmptyState, PanelPage } from './ui/pattern/PanelVisual'
-import { EstoquePage } from './pages/EstoquePage'
+import { EstoquePage, type EstoqueView } from './pages/EstoquePage'
 import { LancamentosPage } from './pages/LancamentosPage'
 import { ConfiguracoesPage } from './pages/ConfiguracoesPage'
 import { MetasPage } from './pages/MetasPage'
@@ -75,6 +75,7 @@ function App() {
     { id: 'products', label: 'Produtos' },
     { id: 'launches', label: 'Lançamentos' },
     { id: 'movements', label: 'Entradas e Saídas' },
+    { id: 'purchase-helper', label: 'Auxiliar de Pedidos' },
   ]
 
   const atividadesTopTabs = [{ id: 'combo', label: 'Criação de Combo' }]
@@ -96,7 +97,13 @@ function App() {
   ) : null
 
   const currentLabel = sidebarItems.find(item => item.id === activeTab)?.label ?? activeTab
-  const estoqueView = activeEstoqueTopTab === 'products' ? 'products' : activeEstoqueTopTab === 'movements' ? 'movements' : 'overview'
+  const estoqueView: EstoqueView = activeEstoqueTopTab === 'products'
+    ? 'products'
+    : activeEstoqueTopTab === 'movements'
+      ? 'movements'
+      : activeEstoqueTopTab === 'purchase-helper'
+        ? 'purchase-helper'
+        : 'overview'
 
   return (
     <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
