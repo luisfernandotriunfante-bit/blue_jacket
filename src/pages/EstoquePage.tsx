@@ -94,7 +94,7 @@ function HealthPanel({ model }: { model: StockOverviewModel }) {
       <strong>Qualidade dos vínculos</strong>
       <span>{number.format(model.dataQuality.noSalePriceItems)} sem PVENDA1</span>
       <span>{number.format(model.dataQuality.unclassifiedItems)} sem linha comercial</span>
-      <span>{number.format(model.dataQuality.inboundUnmappedRows)} linha(s) da Carteira sem produto</span>
+      <span>{number.format(model.dataQuality.inboundUnmappedRows)} linha(s) da Carteira sem item + Un/CX</span>
       <span>{number.format(model.dataQuality.historicalUnmappedRows)} movimento(s) históricos sem vínculo</span>
     </div>
   </PanelCard>;
@@ -105,8 +105,8 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
   const period = model.analysis.startDate && model.analysis.endDate ? `${new Date(`${model.analysis.startDate}T12:00:00`).toLocaleDateString('pt-BR')} — ${new Date(`${model.analysis.endDate}T12:00:00`).toLocaleDateString('pt-BR')}` : 'sem período histórico válido';
   const inboundMapping = model.progress.inboundMapping;
   const inboundCopy = model.totals.totalInboundQty > 0
-    ? `${number.format(model.totals.totalInboundQty)} qtd. · ${inboundMapping === null ? 'sem vínculo' : `${percent.format(inboundMapping)} vinculada`}`
-    : 'Sem Carteira na fotografia';
+    ? `${number.format(model.totals.totalInboundQty)} cx. em aberto · ${inboundMapping === null ? 'sem vínculo' : `${percent.format(inboundMapping)} com item + Un/CX`}`
+    : 'Sem Carteira em aberto';
 
   return <PanelPage title="Estoque"><div className="panel-stack stock-page-stack">
     <section className="stock-metric-section">
@@ -138,7 +138,7 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
           value={currency.format(model.totals.inboundValue)}
           progress={model.progress.inboundMapping}
           progressLabel={inboundCopy}
-          info="Valor líquido já materializado nos fatos INBOUND_ORDER do M3. Para quantidade e projeção física, a regra continua Order Qty + Bill Qty; o vínculo de produto aceita o material Colgate com zeros à esquerda sem usar descrição como chute."
+          info={`Carteira ainda em aberto. Order Qty permanece previsto; Bill Qty é baixado quando o recebimento é comprovado no 12.322 (NF histórica) ou no 218 (NF + item). A Carteira bruta desta fotografia é ${currency.format(model.totals.grossInboundValue)} e já foram baixados ${currency.format(model.totals.receivedInboundValue)}. Quantidades da Carteira são caixas; a projeção física converte para unidades por Un/CX.`}
         />
       </div>
     </section>
@@ -165,14 +165,14 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
           value={`${number.format(model.totals.projectedUnits)} un.`}
           progress={model.progress.projectedInboundShare}
           progressLabel={model.progress.projectedInboundShare === null ? 'Sem projeção positiva' : `${percent.format(model.progress.projectedInboundShare)} do projetado vem da Carteira`}
-          info="Disponível + quantidade da Carteira Colgate que encontrou vínculo seguro com o item do M1."
+          info={`Disponível + ${number.format(model.totals.inboundQty)} unidades previstas da Carteira em aberto. As caixas só entram nesta projeção quando existe vínculo seguro do material com o item e fator Un/CX válido.`}
         />
         <MetricCard
           label="Projetado a custo"
           value={currency.format(model.totals.projectedPurchaseValue)}
           progress={model.totals.projectedPurchaseValue > 0 ? model.totals.inboundValue / model.totals.projectedPurchaseValue : null}
-          progressLabel={`${currency.format(model.totals.inboundValue)} vêm da Carteira`}
-          info="Valor do estoque disponível a custo somado ao valor líquido total da Carteira Colgate. É uma leitura financeira do estoque após as entradas previstas."
+          progressLabel={`${currency.format(model.totals.inboundValue)} vêm da Carteira em aberto`}
+          info="Valor do estoque disponível a custo somado somente ao valor ainda em aberto da Carteira Colgate, depois da conciliação dos recebimentos 12.322 e 218."
         />
       </div>
     </section>
@@ -187,7 +187,7 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
       <div className="stock-analysis-note">
         <span>Janela de giro: {period}</span>
         <span>{number.format(model.totals.mappedDemandItems)} SKUs com giro mapeado</span>
-        <span>{number.format(model.totals.mappedInboundRows)} de {number.format(model.totals.totalInboundRows)} linhas da Carteira vinculadas</span>
+        <span>{number.format(model.totals.mappedInboundRows)} de {number.format(model.totals.totalInboundRows)} linhas abertas da Carteira com item + Un/CX</span>
         <span>{number.format(model.totals.launchItems)} lançamentos reconhecidos</span>
       </div>
     </PanelCard>
