@@ -10,13 +10,15 @@ test('Sell Out não renderiza bloco de estoque', () => {
   assert.equal(page.includes('eyebrow="ESTOQUE"'), false);
 });
 
-test('exportações do Sell Out permanecem junto ao movimento', () => {
+test('exportações do Sell Out permanecem junto ao movimento e usam o padrão visual do sistema', () => {
   const movementIndex = page.indexOf('eyebrow="MOVIMENTO"');
   const excelIndex = page.indexOf('exportSellOutExcel(model)');
   const jsonIndex = page.indexOf('exportSellOutJson(model)');
   assert.ok(movementIndex >= 0);
   assert.ok(excelIndex > movementIndex);
   assert.ok(jsonIndex > movementIndex);
+  assert.ok(page.includes('className="panel-secondary-button"'));
+  assert.equal(page.includes('className="panel-button"'), false);
 });
 
 test('Sell Out não expõe identificador técnico do build no cabeçalho', () => {
@@ -34,11 +36,14 @@ test('Resumo usa cards modernos na ordem operacional definida', () => {
     previous = index;
   }
   assert.ok(page.includes('className="sellout-metric-grid"'));
+  assert.ok(page.includes('sellout-progress-copy'));
+  assert.ok(page.includes('progressLabel='));
   assert.equal(page.includes('sellout-kpi-strip'), false);
 });
 
-test('Resumo recebe série e totais prontos do dashboard model', () => {
+test('Resumo recebe série, totais e divisões prontas do dashboard model', () => {
   assert.ok(page.includes('buildSellOutDashboardModel'));
+  assert.ok(page.includes('m1: lists.m1'));
   assert.ok(page.includes('<Summary dashboard={dashboard} />'));
   assert.ok(dailyWindow.includes('Sell Out acumulado'));
   assert.ok(dailyWindow.includes('Positivados acumulados'));
@@ -46,7 +51,10 @@ test('Resumo recebe série e totais prontos do dashboard model', () => {
   assert.equal(dailyWindow.includes('visible.reduce'), false);
 });
 
-test('Leitura por linhas usa o mesmo padrão de cards do topo', () => {
+test('Sell Out por linha volta ao padrão das cinco divisões comerciais', () => {
+  assert.ok(page.includes('title="Resultado das cinco linhas comerciais"'));
   assert.ok(page.includes('className="sellout-line-grid"'));
   assert.ok(page.includes('dashboard.lineRows.map'));
+  assert.ok(page.includes('do Sell Out'));
+  assert.equal(page.includes('As linhas comerciais oficiais ainda não foram definidas'), false);
 });
