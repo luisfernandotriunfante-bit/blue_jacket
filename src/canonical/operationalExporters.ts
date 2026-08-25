@@ -26,12 +26,25 @@ export function sellOutExportRows(view: SellOutViewModel) {
   }));
 }
 export function topNetworksExportRows(view: TopNetworksViewModel) {
-  return view.rows.map(row => ({ Rede: row.network, status_relacionamento: row.resolutionStatus, Clientes: row.customers, Faturado: row.invoiced, 'A faturar': row.toInvoice, Realizado: row.realized, Participação: row.share }));
+  return view.rows.map(row => ({
+    Rede: row.network,
+    status_relacionamento: row.resolutionStatus,
+    Clientes: row.customers,
+    Faturado: row.invoiced,
+    'A faturar': row.toInvoice,
+    Realizado: row.realized,
+    Participação: row.share,
+    'Meta Redes': row.networkTarget,
+    'Meta Tops': row.topTarget,
+    Gap: row.gap,
+    'Atingimento Redes': row.achievement,
+    'Atingimento Tops': row.topTarget && row.topTarget > 0 ? row.realized / row.topTarget : null,
+  }));
 }
 function metadata(view: { motorBuildId: string; stagingManifestHash: string; generatedAt: string; competence: string }, kind: string, rowCount: number) {
   return [['key', 'value'], ['report', kind], ['motorBuildId', view.motorBuildId], ['stagingManifestHash', view.stagingManifestHash], ['generatedAt', view.generatedAt], ['competence', view.competence], ['rowCount', rowCount]];
 }
-function style(sheet: XLSX.WorkSheet, headers: string[]) { headers.forEach((header, col) => { for (let row = 1; ; row += 1) { const cell = sheet[XLSX.utils.encode_cell({ r: row, c: col })]; if (!cell) break; if (['Meta', 'Faturado', 'A faturar', 'Realizado'].includes(header)) { cell.t = 'n'; cell.z = money; } if (['Atingimento', 'Atingimento positivação', 'Participação'].includes(header)) { cell.t = 'n'; cell.z = pct; } if (['Clientes positivos', 'Clientes'].includes(header)) cell.t = 'n'; if (['Supervisor', 'Código supervisor', 'RCA', 'Código RCA atual', 'Código RCA antigo', 'rca_canonical_id', 'codigo_origem', 'status_relacionamento', 'Rede'].includes(header)) { cell.t = 's'; cell.v = String(cell.v ?? ''); } } }); sheet['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }) }; }
+function style(sheet: XLSX.WorkSheet, headers: string[]) { headers.forEach((header, col) => { for (let row = 1; ; row += 1) { const cell = sheet[XLSX.utils.encode_cell({ r: row, c: col })]; if (!cell) break; if (['Meta', 'Faturado', 'A faturar', 'Realizado', 'Meta Redes', 'Meta Tops', 'Gap'].includes(header)) { cell.t = 'n'; cell.z = money; } if (['Atingimento', 'Atingimento positivação', 'Participação', 'Atingimento Redes', 'Atingimento Tops'].includes(header)) { cell.t = 'n'; cell.z = pct; } if (['Clientes positivos', 'Clientes'].includes(header)) cell.t = 'n'; if (['Supervisor', 'Código supervisor', 'RCA', 'Código RCA atual', 'Código RCA antigo', 'rca_canonical_id', 'codigo_origem', 'status_relacionamento', 'Rede'].includes(header)) { cell.t = 's'; cell.v = String(cell.v ?? ''); } } }); sheet['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }) }; }
 function workbook(rows: Record<string, unknown>[], view: { motorBuildId: string; stagingManifestHash: string; generatedAt: string; competence: string }, report: string) { const headers = Object.keys(rows[0] ?? {}); const sheet = XLSX.utils.json_to_sheet(rows, { header: headers }); style(sheet, headers); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, sheet, report.slice(0, 31)); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(metadata(view, report, rows.length)), 'METADATA'); return wb; }
 export function createSellOutWorkbook(view: SellOutViewModel) { return workbook(sellOutExportRows(view), view, 'Sell Out'); }
 export function createTopNetworksWorkbook(view: TopNetworksViewModel) { return workbook(topNetworksExportRows(view), view, 'Top Redes'); }
