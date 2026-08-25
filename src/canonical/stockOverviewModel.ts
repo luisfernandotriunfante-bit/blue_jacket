@@ -13,13 +13,20 @@ export type StockOverviewAlert = {
   examples: string[];
 };
 
-export type StockLineOverview = {
-  line: SellOutCommercialLine;
-  items: number;
+export type StockTreemapTile = {
+  key: string;
+  label: string;
+  saleValue: number;
   physicalUnits: number;
   availableUnits: number;
-  saleValue: number;
-  itemShare: number;
+  aggregate: boolean;
+};
+
+export type StockLineTreemap = {
+  line: SellOutCommercialLine;
+  totalValue: number;
+  items: number;
+  tiles: StockTreemapTile[];
 };
 
 export type StockOverviewModel = {
@@ -38,29 +45,37 @@ export type StockOverviewModel = {
     reservedUnits: number;
     availableUnits: number;
     inboundQty: number;
+    inboundValue: number;
+    mappedInboundQty: number;
+    totalInboundQty: number;
+    mappedInboundRows: number;
+    totalInboundRows: number;
     projectedUnits: number;
     purchaseValue: number;
     saleValue: number;
+    availablePurchaseValue: number;
+    projectedPurchaseValue: number;
     coverageDays: number | null;
     mappedDemandItems: number;
     pricedItemsWithStock: number;
-    mappedInboundQty: number;
-    totalInboundQty: number;
     launchItems: number;
   };
   progress: {
     coverageVsReference: number | null;
-    reservedShare: number | null;
-    availableShare: number | null;
     inboundMapping: number | null;
-    projectedInboundShare: number | null;
     pricedCoverage: number | null;
     purchaseVsSale: number | null;
     stockSkuShare: number | null;
+    projectedInboundShare: number | null;
   };
   alerts: StockOverviewAlert[];
-  lines: StockLineOverview[];
-  unclassifiedItems: number;
+  dataQuality: {
+    noSalePriceItems: number;
+    unclassifiedItems: number;
+    inboundUnmappedRows: number;
+    historicalUnmappedRows: number;
+  };
+  treemap: StockLineTreemap[];
 };
 
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : value === null || value === undefined ? null : String(value).trim() || null;
@@ -72,6 +87,7 @@ const dateValue = (value: string) => Date.parse(`${value}T12:00:00Z`);
 const isoDate = (value: number) => new Date(value).toISOString().slice(0, 10);
 const LOW_COVERAGE_DAYS = 30;
 const ANALYSIS_DAYS = 90;
+const MAX_TILES_PER_LINE = 18;
 
 function firstText(record: RecordValue | undefined, fields: string[]) {
   for (const field of fields) {
@@ -79,6 +95,13 @@ function firstText(record: RecordValue | undefined, fields: string[]) {
     if (value) return value;
   }
   return null;
+}
+
+function comparableCode(value: unknown) {
+  const raw = text(value)?.replace(/\.0$/, '').replace(/\s+/g, '') ?? '';
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return raw.replace(/^0+(?=\d)/, '');
+  return normalized(raw).replace(/[^A-Z0-9]/g, '');
 }
 
 function itemLine(item: RecordValue) {
@@ -91,10 +114,26 @@ function itemLine(item: RecordValue) {
   );
 }
 
+function addUniqueIndex(map: Map<string, RecordValue>, ambiguous: Set<string>, key: string | null, item: RecordValue) {
+  if (!key || ambiguous.has(key)) return;
+  const existing = map.get(key);
+  if (existing && existing !== item) {
+    map.delete(key);
+    ambiguous.add(key);
+    return;
+  }
+  map.set(key, item);
+}
+
 function buildItemIndexes(m1: CanonicalList) {
   const byWinthor = new Map<string, RecordValue>();
+  const byWinthorComparable = new Map<string, RecordValue>();
   const byEan = new Map<string, RecordValue>();
   const bySku = new Map<string, RecordValue>();
+  const bySkuComparable = new Map<string, RecordValue>();
+  const ambiguousWinthor = new Set<string>();
+  const ambiguousSku = new Set<string>();
+
   for (const item of m1.records as RecordValue[]) {
     const winthor = firstText(item, ['winthor_code']);
     const ean = firstText(item, ['internal_ean', 'industry_ean']);
@@ -102,24 +141,31 @@ function buildItemIndexes(m1: CanonicalList) {
     if (winthor) byWinthor.set(winthor, item);
     if (ean) byEan.set(ean, item);
     if (sku) bySku.set(sku, item);
+    addUniqueIndex(byWinthorComparable, ambiguousWinthor, comparableCode(winthor), item);
+    addUniqueIndex(bySkuComparable, ambiguousSku, comparableCode(sku), item);
   }
-  return { byWinthor, byEan, bySku };
+  return { byWinthor, byWinthorComparable, byEan, bySku, bySkuComparable };
 }
 
 function currentItemForFact(fact: RecordValue, indexes: ReturnType<typeof buildItemIndexes>) {
   const winthor = firstText(fact, ['winthor_product_code']);
   const sku = firstText(fact, ['industry_sku', 'industry_material']);
-  return (winthor ? indexes.byWinthor.get(winthor) : undefined) ?? (sku ? indexes.bySku.get(sku) : undefined);
+  return (winthor ? indexes.byWinthor.get(winthor) : undefined)
+    ?? (winthor ? indexes.byWinthorComparable.get(comparableCode(winthor) ?? '') : undefined)
+    ?? (sku ? indexes.bySku.get(sku) : undefined)
+    ?? (sku ? indexes.bySkuComparable.get(comparableCode(sku) ?? '') : undefined);
 }
 
 function historicalItemForFact(fact: RecordValue, indexes: ReturnType<typeof buildItemIndexes>) {
   const ean = firstText(fact, ['historical_gtin', 'ean_commercial', 'ean_tax']);
   const legacyCode = firstText(fact, ['legacy_product_code']);
-  return (ean ? indexes.byEan.get(ean) : undefined) ?? (legacyCode ? indexes.byWinthor.get(legacyCode) : undefined);
+  return (ean ? indexes.byEan.get(ean) : undefined)
+    ?? (legacyCode ? indexes.byWinthor.get(legacyCode) : undefined)
+    ?? (legacyCode ? indexes.byWinthorComparable.get(comparableCode(legacyCode) ?? '') : undefined);
 }
 
 function itemKey(item: RecordValue) {
-  return firstText(item, ['item_canonical_id', 'winthor_code', 'internal_ean', 'manufacturer_code']) ?? `ITEM:${Math.random()}`;
+  return firstText(item, ['item_canonical_id', 'winthor_code', 'internal_ean', 'manufacturer_code', 'source_row']) ?? 'ITEM:UNRESOLVED';
 }
 
 function itemLabel(item: RecordValue) {
@@ -156,7 +202,6 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const demandByItem = new Map<string, number>();
   let mappedHistoricalRows = 0;
   let unmappedHistoricalRows = 0;
-
   const addDemand = (item: RecordValue | undefined, quantity: number) => {
     if (!item || !Number.isFinite(quantity)) return false;
     const key = itemKey(item);
@@ -191,14 +236,18 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const inboundByItem = new Map<string, number>();
   let totalInboundQty = 0;
   let mappedInboundQty = 0;
+  let inboundValue = 0;
+  let mappedInboundRows = 0;
   for (const fact of inbound) {
     const qty = Math.max(0, amount(fact.order_qty)) + Math.max(0, amount(fact.bill_qty));
     totalInboundQty += qty;
+    inboundValue += Math.max(0, amount(fact.inbound_net_value));
     const item = currentItemForFact(fact, indexes);
     if (!item) continue;
     const key = itemKey(item);
     inboundByItem.set(key, (inboundByItem.get(key) ?? 0) + qty);
     mappedInboundQty += qty;
+    mappedInboundRows += 1;
   }
 
   let physicalUnits = 0;
@@ -208,13 +257,12 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   let projectedUnits = 0;
   let purchaseValue = 0;
   let saleValue = 0;
+  let availablePurchaseValue = 0;
   let itemsWithStock = 0;
   let pricedItemsWithStock = 0;
   let mappedDemandItems = 0;
   let launchItems = 0;
-  let coverageAvailableUnits = 0;
-  let totalDailyDemand = 0;
-  let unclassifiedItems = 0;
+  const coverageValues: number[] = [];
 
   const ruptures: RecordValue[] = [];
   const lowCoverage: RecordValue[] = [];
@@ -223,10 +271,7 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const noPrice: RecordValue[] = [];
   const oversold: RecordValue[] = [];
   const unclassified: RecordValue[] = [];
-
-  const lineBuckets = new Map<SellOutCommercialLine, { items: number; physicalUnits: number; availableUnits: number; saleValue: number }>(
-    SELL_OUT_COMMERCIAL_LINES.map(line => [line, { items: 0, physicalUnits: 0, availableUnits: 0, saleValue: 0 }] as const),
-  );
+  const lineItemBuckets = new Map<SellOutCommercialLine, StockTreemapTile[]>(SELL_OUT_COMMERCIAL_LINES.map(line => [line, []]));
 
   for (const item of items) {
     const key = itemKey(item);
@@ -237,6 +282,7 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     const projected = available + inboundItem;
     const cost = Math.max(0, amount(item.cost_unit_105));
     const price = Math.max(0, amount(item.pVenda1_region11));
+    const itemSaleValue = physical * price;
     const netDemand = Math.max(0, demandByItem.get(key) ?? 0);
     const dailyDemand = netDemand > 0 ? netDemand / ANALYSIS_DAYS : 0;
     const coverage = dailyDemand > 0 ? Math.max(0, available) / dailyDemand : null;
@@ -248,25 +294,27 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     inboundQty += inboundItem;
     projectedUnits += projected;
     purchaseValue += physical * cost;
-    saleValue += physical * price;
+    saleValue += itemSaleValue;
+    availablePurchaseValue += Math.max(0, available) * cost;
     if (physical > 0) itemsWithStock += 1;
     if (physical > 0 && price > 0) pricedItemsWithStock += 1;
-    if (dailyDemand > 0) {
+    if (dailyDemand > 0 && coverage !== null) {
       mappedDemandItems += 1;
-      coverageAvailableUnits += Math.max(0, available);
-      totalDailyDemand += dailyDemand;
+      coverageValues.push(coverage);
     }
     if (isLaunch) launchItems += 1;
 
     const line = itemLine(item);
-    if (line) {
-      const bucket = lineBuckets.get(line)!;
-      bucket.items += 1;
-      bucket.physicalUnits += physical;
-      bucket.availableUnits += available;
-      bucket.saleValue += physical * price;
-    } else {
-      unclassifiedItems += 1;
+    if (line && itemSaleValue > 0) {
+      lineItemBuckets.get(line)!.push({
+        key,
+        label: itemLabel(item),
+        saleValue: round(itemSaleValue),
+        physicalUnits: round(physical),
+        availableUnits: round(available),
+        aggregate: false,
+      });
+    } else if (!line) {
       unclassified.push(item);
     }
 
@@ -278,27 +326,34 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     if (physical > 0 && price <= 0) noPrice.push(item);
   }
 
-  const coverageDays = totalDailyDemand > 0 ? coverageAvailableUnits / totalDailyDemand : null;
+  const coverageDays = coverageValues.length ? coverageValues.reduce((sum, value) => sum + value, 0) / coverageValues.length : null;
+  const projectedPurchaseValue = Math.max(0, availablePurchaseValue) + inboundValue;
   const alerts: StockOverviewAlert[] = [];
   if (launchCritical.length) alerts.push(alert('LAUNCH_STOCK_RISK', 'critical', 'Lançamentos com risco de estoque', `Lançamentos sem saldo disponível ou abaixo de ${LOW_COVERAGE_DAYS} dias de cobertura na janela histórica.`, launchCritical));
   if (ruptures.length) alerts.push(alert('STOCKOUT_WITH_DEMAND', 'critical', 'Rupturas com giro comprovado', 'Itens sem estoque disponível que tiveram saída líquida no período de análise.', ruptures));
   if (oversold.length) alerts.push(alert('RESERVED_ABOVE_PHYSICAL', 'critical', 'Reserva acima do físico', 'Itens em que pedidos a faturar superam o estoque físico atual.', oversold));
   if (lowCoverage.length) alerts.push(alert('LOW_COVERAGE', 'attention', `Cobertura abaixo de ${LOW_COVERAGE_DAYS} dias`, 'Somente itens com giro mapeado entram neste alerta; itens sem histórico não recebem falso risco imediato.', lowCoverage));
-  if (noPrice.length) alerts.push(alert('NO_SALE_PRICE', 'attention', 'Estoque sem PVENDA1', 'Itens com saldo físico e sem preço PVENDA1 da região 11.', noPrice));
-  if (unclassified.length) alerts.push(alert('UNCLASSIFIED_LINE', 'attention', 'Itens sem linha comercial', 'Itens ainda não classificados nas cinco linhas oficiais do Sell Out.', unclassified));
-  if (totalInboundQty > mappedInboundQty + 0.0001) alerts.push({ code: 'INBOUND_UNMAPPED', tone: 'attention', title: 'Carteira sem vínculo de item', detail: 'Parte da Carteira Colgate não encontrou item do M1 pelo material da indústria; a projeção usa apenas a parcela mapeada.', count: inbound.filter(fact => !currentItemForFact(fact, indexes)).length, examples: inbound.filter(fact => !currentItemForFact(fact, indexes)).slice(0, 5).map(fact => firstText(fact, ['industry_material']) ?? 'material sem código') });
   if (noTurnover.length) alerts.push(alert('NO_TURNOVER', 'info', 'Estoque sem giro na janela', `Itens com saldo disponível e nenhuma saída líquida mapeada nos últimos ${ANALYSIS_DAYS} dias.`, noTurnover));
-  if (unmappedHistoricalRows) alerts.push({ code: 'HISTORICAL_UNMAPPED', tone: 'info', title: 'Histórico sem vínculo de item', detail: 'Há movimentos 379 do período que não puderam ser ligados com segurança ao item atual por EAN/código; eles ficam fora da cobertura, sem chute.', count: unmappedHistoricalRows, examples: [] });
 
-  const lines: StockLineOverview[] = SELL_OUT_COMMERCIAL_LINES.map(line => {
-    const bucket = lineBuckets.get(line)!;
+  const treemap: StockLineTreemap[] = SELL_OUT_COMMERCIAL_LINES.map(line => {
+    const sorted = [...(lineItemBuckets.get(line) ?? [])].sort((a, b) => b.saleValue - a.saleValue);
+    const visible = sorted.slice(0, MAX_TILES_PER_LINE);
+    const hidden = sorted.slice(MAX_TILES_PER_LINE);
+    if (hidden.length) {
+      visible.push({
+        key: `${line}:OUTROS`,
+        label: `Outros ${hidden.length} itens`,
+        saleValue: round(hidden.reduce((sum, item) => sum + item.saleValue, 0)),
+        physicalUnits: round(hidden.reduce((sum, item) => sum + item.physicalUnits, 0)),
+        availableUnits: round(hidden.reduce((sum, item) => sum + item.availableUnits, 0)),
+        aggregate: true,
+      });
+    }
     return {
       line,
-      items: bucket.items,
-      physicalUnits: round(bucket.physicalUnits),
-      availableUnits: round(bucket.availableUnits),
-      saleValue: round(bucket.saleValue),
-      itemShare: items.length > 0 ? bucket.items / items.length : 0,
+      totalValue: round(sorted.reduce((sum, item) => sum + item.saleValue, 0)),
+      items: sorted.length,
+      tiles: visible,
     };
   });
 
@@ -323,28 +378,36 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
       reservedUnits: round(reservedUnits),
       availableUnits: round(availableUnits),
       inboundQty: round(inboundQty),
+      inboundValue: round(inboundValue),
+      mappedInboundQty: round(mappedInboundQty),
+      totalInboundQty: round(totalInboundQty),
+      mappedInboundRows,
+      totalInboundRows: inbound.length,
       projectedUnits: round(projectedUnits),
       purchaseValue: round(purchaseValue),
       saleValue: round(saleValue),
+      availablePurchaseValue: round(availablePurchaseValue),
+      projectedPurchaseValue: round(projectedPurchaseValue),
       coverageDays: coverageDays === null ? null : round(coverageDays),
       mappedDemandItems,
       pricedItemsWithStock,
-      mappedInboundQty: round(mappedInboundQty),
-      totalInboundQty: round(totalInboundQty),
       launchItems,
     },
     progress: {
       coverageVsReference: coverageDays === null ? null : coverageDays / LOW_COVERAGE_DAYS,
-      reservedShare: safePhysical > 0 ? reservedUnits / safePhysical : null,
-      availableShare: safePhysical > 0 ? Math.max(0, availableUnits) / safePhysical : null,
       inboundMapping: totalInboundQty > 0 ? mappedInboundQty / totalInboundQty : null,
-      projectedInboundShare: safeProjected > 0 ? inboundQty / safeProjected : null,
       pricedCoverage,
       purchaseVsSale: saleValue > 0 ? purchaseValue / saleValue : null,
       stockSkuShare,
+      projectedInboundShare: safeProjected > 0 ? inboundQty / safeProjected : null,
     },
     alerts,
-    lines,
-    unclassifiedItems,
+    dataQuality: {
+      noSalePriceItems: noPrice.length,
+      unclassifiedItems: unclassified.length,
+      inboundUnmappedRows: Math.max(0, inbound.length - mappedInboundRows),
+      historicalUnmappedRows: unmappedHistoricalRows,
+    },
+    treemap,
   };
 }

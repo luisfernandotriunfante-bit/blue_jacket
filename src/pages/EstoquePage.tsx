@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
-import { buildStockOverviewModel, type StockOverviewModel } from '../canonical/stockOverviewModel';
+import { buildStockOverviewModel, type StockLineTreemap, type StockOverviewModel, type StockTreemapTile } from '../canonical/stockOverviewModel';
 import type { CanonicalList } from '../canonical/types';
 import { useData } from '../store/DataContext';
 import { MigrationPage } from '../ui/pattern/MigrationEmptyState';
@@ -28,72 +28,167 @@ function MetricCard({ label, value, progress, progressLabel, info }: { label: st
   </div>;
 }
 
-function HealthPanel({ model }: { model: StockOverviewModel }) {
-  const visible = model.alerts.slice(0, 8);
-  return <div className="stock-health-grid">
-    <PanelCard>
-      <PanelSectionHeader
-        eyebrow="SAÚDE DO ESTOQUE"
-        title="Avisos que pedem atenção"
-        description={`Cobertura usa uma janela móvel de ${model.analysis.days} dias e só gera risco por cobertura quando existe giro mapeado. Lançamentos recebem prioridade própria.`}
-      />
-      {visible.length ? <div className="stock-alert-list">{visible.map(item => <div key={item.code} className="stock-alert" data-tone={item.tone}>
-        <div className="stock-alert-head"><span className="stock-alert-title">{item.title}</span><span className="stock-alert-count">{number.format(item.count)}</span></div>
-        <div className="stock-alert-detail">{item.detail}</div>
-        {item.examples.length ? <div className="stock-alert-examples">Ex.: {item.examples.join(' · ')}</div> : null}
-      </div>)}</div> : <PanelEmptyState title="Sem alertas para esta fotografia" description="Nenhuma condição monitorada foi acionada pelas listas canônicas ativas." />}
-    </PanelCard>
+function tileSpan(tile: StockTreemapTile, group: StockLineTreemap) {
+  const share = group.totalValue > 0 ? tile.saleValue / group.totalValue : 0;
+  const area = Math.max(2, Math.min(24, Math.round(share * 42)));
+  const col = Math.max(2, Math.min(6, Math.round(Math.sqrt(area * 1.5))));
+  const row = Math.max(1, Math.min(4, Math.ceil(area / col)));
+  return { col, row };
+}
 
-    <PanelCard>
-      <PanelSectionHeader
-        eyebrow="ESTOQUE POR LINHA"
-        title="Composição das cinco linhas"
-        description="A mesma classificação comercial compartilhada com o Sell Out. O tamanho dos blocos representa a quantidade de SKUs da linha."
-      />
-      <div className="stock-treemap">{model.lines.map(row => {
-        const colSpan = Math.max(3, Math.min(12, Math.round(row.itemShare * 18)));
-        const rowSpan = row.itemShare >= .25 ? 2 : 1;
-        return <div key={row.line} className="stock-treemap-cell" style={{ gridColumn: `span ${colSpan}`, gridRow: `span ${rowSpan}` }}>
-          <strong>{row.line}</strong>
-          <span>{number.format(row.items)} SKUs · {number.format(row.availableUnits)} disponíveis</span>
-          <span>{currency.format(row.saleValue)} a PVENDA1</span>
-        </div>;
-      })}</div>
-      <div className="stock-analysis-note">
-        <span>{model.unclassifiedItems ? `${number.format(model.unclassifiedItems)} item(ns) ainda sem linha oficial` : 'Todos os itens classificados nas cinco linhas'}</span>
+function tileColor(lineIndex: number, tileIndex: number, aggregate: boolean) {
+  if (aggregate) return `hsl(${lineIndex * 68 + 18} 18% 27% / .88)`;
+  const hue = (lineIndex * 68 + tileIndex * 11 + 8) % 360;
+  const saturation = 36 + (tileIndex % 4) * 7;
+  const lightness = 24 + (tileIndex % 5) * 3;
+  return `hsl(${hue} ${saturation}% ${lightness}% / .92)`;
+}
+
+function StockTreemap({ model }: { model: StockOverviewModel }) {
+  return <PanelCard>
+    <PanelSectionHeader
+      eyebrow="ESTOQUE POR LINHA"
+      title="Valor do estoque por produto"
+      description="As cinco linhas são as mesmas do Sell Out. Dentro de cada linha, cada bloco representa um produto e cresce conforme o valor do estoque físico a PVENDA1. As cores servem apenas para diferenciar visualmente os itens."
+    />
+    <div className="stock-line-treemap-grid">{model.treemap.map((group, lineIndex) => <section className="stock-line-treemap" key={group.line}>
+      <div className="stock-line-treemap-head">
+        <div><strong>{group.line}</strong><span>{number.format(group.items)} itens com valor</span></div>
+        <strong>{currency.format(group.totalValue)}</strong>
       </div>
-    </PanelCard>
-  </div>;
+      {group.tiles.length ? <div className="stock-item-treemap">{group.tiles.map((tile, tileIndex) => {
+        const span = tileSpan(tile, group);
+        return <div
+          key={tile.key}
+          className="stock-item-tile"
+          data-aggregate={tile.aggregate ? 'true' : 'false'}
+          style={{ gridColumn: `span ${span.col}`, gridRow: `span ${span.row}`, background: tileColor(lineIndex, tileIndex, tile.aggregate) }}
+          title={`${tile.label}\n${currency.format(tile.saleValue)}\n${number.format(tile.availableUnits)} disponíveis`}
+        >
+          <strong>{tile.label}</strong>
+          <span>{currency.format(tile.saleValue)}</span>
+          <small>{number.format(tile.availableUnits)} disponíveis</small>
+        </div>;
+      })}</div> : <div className="stock-line-empty">Sem estoque valorizado nesta linha</div>}
+    </section>)}</div>
+    <div className="stock-analysis-note">
+      <span>O mapa usa valor do estoque, não quantidade de SKUs, para definir o tamanho dos blocos.</span>
+    </div>
+  </PanelCard>;
+}
+
+function HealthPanel({ model }: { model: StockOverviewModel }) {
+  return <PanelCard>
+    <PanelSectionHeader
+      eyebrow="SAÚDE DO ESTOQUE"
+      title="Avisos operacionais"
+      description={`A leitura usa ${model.analysis.days} dias de histórico. Cobertura só gera risco quando existe giro mapeado; item sem venda no período não vira ruptura artificial.`}
+    />
+    {model.alerts.length ? <div className="stock-alert-list">{model.alerts.map(item => <div key={item.code} className="stock-alert" data-tone={item.tone}>
+      <div className="stock-alert-head"><span className="stock-alert-title">{item.title}</span><span className="stock-alert-count">{number.format(item.count)}</span></div>
+      <div className="stock-alert-detail">{item.detail}</div>
+      {item.examples.length ? <div className="stock-alert-examples">Ex.: {item.examples.join(' · ')}</div> : null}
+    </div>)}</div> : <PanelEmptyState title="Sem alertas para esta fotografia" description="Nenhuma condição operacional monitorada foi acionada pelas listas canônicas ativas." />}
+
+    <div className="stock-data-quality">
+      <strong>Qualidade dos vínculos</strong>
+      <span>{number.format(model.dataQuality.noSalePriceItems)} sem PVENDA1</span>
+      <span>{number.format(model.dataQuality.unclassifiedItems)} sem linha comercial</span>
+      <span>{number.format(model.dataQuality.inboundUnmappedRows)} linha(s) da Carteira sem produto</span>
+      <span>{number.format(model.dataQuality.historicalUnmappedRows)} movimento(s) históricos sem vínculo</span>
+    </div>
+  </PanelCard>;
 }
 
 function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m4: CanonicalList }) {
   const model = useMemo(() => buildStockOverviewModel({ m1, m3, m4 }), [m1, m3, m4]);
-  const coverageLabel = model.totals.coverageDays === null ? 'Sem giro mapeado suficiente' : `${decimal.format(model.totals.coverageDays)} dias · ref. ${model.analysis.lowCoverageThresholdDays}d`;
-  const inboundMappingLabel = model.progress.inboundMapping === null ? 'Sem Carteira na fotografia' : `${percent.format(model.progress.inboundMapping)} da Carteira mapeada`;
   const period = model.analysis.startDate && model.analysis.endDate ? `${new Date(`${model.analysis.startDate}T12:00:00`).toLocaleDateString('pt-BR')} — ${new Date(`${model.analysis.endDate}T12:00:00`).toLocaleDateString('pt-BR')}` : 'sem período histórico válido';
+  const inboundMapping = model.progress.inboundMapping;
+  const inboundCopy = model.totals.totalInboundQty > 0
+    ? `${number.format(model.totals.totalInboundQty)} qtd. · ${inboundMapping === null ? 'sem vínculo' : `${percent.format(inboundMapping)} vinculada`}`
+    : 'Sem Carteira na fotografia';
 
   return <PanelPage title="Estoque"><div className="panel-stack stock-page-stack">
-    <div className="stock-metric-grid">
-      <MetricCard label="Cobertura estimada" value={model.totals.coverageDays === null ? '—' : `${decimal.format(model.totals.coverageDays)} dias`} progress={model.progress.coverageVsReference} progressLabel={coverageLabel} info={`Cobertura agregada dos itens com giro mapeado entre ${period}. Itens sem saída histórica não recebem cobertura artificial nem falso risco imediato.`} />
-      <MetricCard label="Estoque a custo" value={currency.format(model.totals.purchaseValue)} progress={model.progress.purchaseVsSale} progressLabel={model.progress.purchaseVsSale === null ? 'Sem valor de venda comparável' : `${percent.format(model.progress.purchaseVsSale)} do valor a venda`} info="Saldo físico do M1 × custo unitário do 105. A tela não reabre o relatório 105." />
-      <MetricCard label="Estoque a venda" value={currency.format(model.totals.saleValue)} progress={model.progress.pricedCoverage} progressLabel={model.progress.pricedCoverage === null ? 'Sem SKUs com saldo' : `${percent.format(model.progress.pricedCoverage)} dos SKUs com saldo têm PVENDA1`} info="Saldo físico do M1 × PVENDA1 da região 11 materializado no M1. Não usa preço alternativo." />
-      <MetricCard label="Estoque físico" value={number.format(model.totals.physicalUnits)} progress={model.progress.stockSkuShare} progressLabel={model.progress.stockSkuShare === null ? 'Sem itens' : `${number.format(model.totals.itemsWithStock)} de ${number.format(model.totals.items)} SKUs com saldo`} info="Posição física materializada a partir do relatório 105 no M1." />
-      <MetricCard label="Reservado" value={number.format(model.totals.reservedUnits)} progress={model.progress.reservedShare} progressLabel={model.progress.reservedShare === null ? 'Sem estoque físico' : `${percent.format(model.progress.reservedShare)} do físico`} info="Pedidos SALE do M3 com status A FATURAR, somados por item. Essa reserva é descontada do físico para formar o disponível." />
-      <MetricCard label="Disponível" value={number.format(model.totals.availableUnits)} progress={model.progress.availableShare} progressLabel={model.progress.availableShare === null ? 'Sem estoque físico' : `${percent.format(model.progress.availableShare)} do físico`} info="Estoque físico menos a reserva dos pedidos a faturar. Se a reserva superar o físico, a diferença permanece visível nos alertas." />
-      <MetricCard label="Carteira Colgate" value={decimal.format(model.totals.inboundQty)} progress={model.progress.inboundMapping} progressLabel={inboundMappingLabel} info="Regra aprovada da Carteira: Order Qty + Bill Qty. Só a parcela ligada com segurança ao item do M1 entra na projeção; materiais não mapeados aparecem nos avisos." />
-      <MetricCard label="Projetado" value={decimal.format(model.totals.projectedUnits)} progress={model.progress.projectedInboundShare} progressLabel={model.progress.projectedInboundShare === null ? 'Sem projeção positiva' : `${percent.format(model.progress.projectedInboundShare)} do projetado vem da Carteira`} info="Disponível + quantidade mapeada da Carteira Colgate. Nenhuma fonte original é lida nesta tela." />
+    <section className="stock-metric-section">
+      <div className="stock-metric-section-head"><span>Resumo financeiro e cobertura</span></div>
+      <div className="stock-metric-grid">
+        <MetricCard
+          label="Cobertura média"
+          value={model.totals.coverageDays === null ? '—' : `${decimal.format(model.totals.coverageDays)} dias`}
+          progress={model.progress.coverageVsReference}
+          progressLabel={model.totals.coverageDays === null ? 'Sem giro mapeado' : `${number.format(model.totals.mappedDemandItems)} SKUs com giro · ref. ${model.analysis.lowCoverageThresholdDays}d`}
+          info={`Média aritmética dos dias de cobertura de cada SKU que teve giro mapeado entre ${period}. Cada produto com giro pesa uma vez. Itens sem venda histórica ficam fora da média e não recebem cobertura artificial.`}
+        />
+        <MetricCard
+          label="Estoque a custo"
+          value={currency.format(model.totals.purchaseValue)}
+          progress={model.progress.purchaseVsSale}
+          progressLabel={model.progress.purchaseVsSale === null ? 'Sem valor de venda comparável' : `${percent.format(model.progress.purchaseVsSale)} do valor a venda`}
+          info="Saldo físico do M1 multiplicado pelo custo unitário do 105 já materializado."
+        />
+        <MetricCard
+          label="Estoque a venda"
+          value={currency.format(model.totals.saleValue)}
+          progress={model.progress.pricedCoverage}
+          progressLabel={model.progress.pricedCoverage === null ? 'Sem SKUs com saldo' : `${percent.format(model.progress.pricedCoverage)} dos SKUs com saldo têm PVENDA1`}
+          info="Saldo físico do M1 multiplicado exclusivamente pelo PVENDA1 da região 11 materializado no M1."
+        />
+        <MetricCard
+          label="Carteira Colgate"
+          value={currency.format(model.totals.inboundValue)}
+          progress={model.progress.inboundMapping}
+          progressLabel={inboundCopy}
+          info="Valor líquido já materializado nos fatos INBOUND_ORDER do M3. Para quantidade e projeção física, a regra continua Order Qty + Bill Qty; o vínculo de produto aceita o material Colgate com zeros à esquerda sem usar descrição como chute."
+        />
+      </div>
+    </section>
+
+    <section className="stock-metric-section">
+      <div className="stock-metric-section-head"><span>Posição física e projeção</span></div>
+      <div className="stock-metric-grid">
+        <MetricCard
+          label="Estoque físico"
+          value={`${number.format(model.totals.physicalUnits)} un.`}
+          progress={model.progress.stockSkuShare}
+          progressLabel={model.progress.stockSkuShare === null ? 'Sem itens' : `${number.format(model.totals.itemsWithStock)} de ${number.format(model.totals.items)} SKUs com saldo`}
+          info="Posição física já materializada no M1 a partir do relatório 105."
+        />
+        <MetricCard
+          label="Disponível"
+          value={`${number.format(model.totals.availableUnits)} un.`}
+          progress={model.totals.physicalUnits > 0 ? Math.max(0, model.totals.availableUnits) / model.totals.physicalUnits : null}
+          progressLabel={`${number.format(model.totals.reservedUnits)} un. reservadas em pedidos a faturar`}
+          info="Estoque físico menos a reserva dos pedidos SALE com status A FATURAR. A reserva continua visível aqui sem ocupar um card próprio."
+        />
+        <MetricCard
+          label="Projetado"
+          value={`${number.format(model.totals.projectedUnits)} un.`}
+          progress={model.progress.projectedInboundShare}
+          progressLabel={model.progress.projectedInboundShare === null ? 'Sem projeção positiva' : `${percent.format(model.progress.projectedInboundShare)} do projetado vem da Carteira`}
+          info="Disponível + quantidade da Carteira Colgate que encontrou vínculo seguro com o item do M1."
+        />
+        <MetricCard
+          label="Projetado a custo"
+          value={currency.format(model.totals.projectedPurchaseValue)}
+          progress={model.totals.projectedPurchaseValue > 0 ? model.totals.inboundValue / model.totals.projectedPurchaseValue : null}
+          progressLabel={`${currency.format(model.totals.inboundValue)} vêm da Carteira`}
+          info="Valor do estoque disponível a custo somado ao valor líquido total da Carteira Colgate. É uma leitura financeira do estoque após as entradas previstas."
+        />
+      </div>
+    </section>
+
+    <div className="stock-overview-main-grid">
+      <HealthPanel model={model} />
+      <StockTreemap model={model} />
     </div>
 
-    <HealthPanel model={model} />
-
     <PanelCard>
-      <PanelSectionHeader eyebrow="LEITURA" title="Base da análise" description="Esta visão é um resumo operacional. A análise detalhada por produto será fechada na próxima aba sem duplicar regras aqui." />
+      <PanelSectionHeader eyebrow="LEITURA" title="Base da análise" description="Resumo operacional da fotografia ativa. A futura lista de agrupamentos não foi criada nem presumida nesta alteração; vamos definir o contrato dela na próxima etapa." />
       <div className="stock-analysis-note">
         <span>Janela de giro: {period}</span>
         <span>{number.format(model.totals.mappedDemandItems)} SKUs com giro mapeado</span>
-        <span>{number.format(model.analysis.mappedHistoricalRows)} movimentos históricos vinculados</span>
-        <span>{number.format(model.analysis.unmappedHistoricalRows)} movimentos históricos preservados sem vínculo</span>
-        <span>{number.format(model.totals.launchItems)} lançamentos reconhecidos no M1</span>
+        <span>{number.format(model.totals.mappedInboundRows)} de {number.format(model.totals.totalInboundRows)} linhas da Carteira vinculadas</span>
+        <span>{number.format(model.totals.launchItems)} lançamentos reconhecidos</span>
       </div>
     </PanelCard>
   </div></PanelPage>;
