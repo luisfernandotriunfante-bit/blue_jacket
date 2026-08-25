@@ -59,7 +59,7 @@
 
 .chart-pair {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(380px, .85fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
 }
@@ -108,10 +108,12 @@
 .chart-daily-table { display: flex; flex-direction: column; }
 .chart-daily-header { padding: 16px 16px 12px; border-bottom: 1px solid var(--panel-separator); }
 .chart-daily-body { overflow: auto; flex: 1; min-height: 0; }
-.chart-daily-body .panel-table { min-width: 560px; }
+.chart-daily-body .panel-table { min-width: 680px; }
 .chart-daily-footer { border-top: 1px solid var(--panel-separator); background: rgba(0,0,0,.12); padding: 12px 14px; }
+.chart-daily-footer-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.chart-daily-footer-totals > div + div { border-left: 1px solid var(--panel-separator); padding-left: 14px; }
 
-@media (max-width: 1100px) {
+@media (max-width: 1180px) {
   .chart-pair { grid-template-columns: 1fr; }
 }
 
@@ -121,4 +123,6 @@
   .chart-nav-button { flex: 1; }
   .chart-panel { padding: 12px 10px 6px; }
   .chart-canvas-wrap { padding: 4px 2px; }
+  .chart-daily-footer-totals { grid-template-columns: 1fr; }
+  .chart-daily-footer-totals > div + div { border-left: 0; border-top: 1px solid var(--panel-separator); padding-left: 0; padding-top: 10px; }
 }

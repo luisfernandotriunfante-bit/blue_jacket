@@ -2,69 +2,150 @@
   gap: 20px;
 }
 
-.sellout-kpi-strip {
+.sellout-metric-grid {
+  display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  background: var(--panel-separator);
+  gap: 10px;
+}
+
+.sellout-metric-card {
+  position: relative;
+  min-width: 0;
+  min-height: 126px;
+  padding: 17px 17px 15px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
   border: 1px solid var(--panel-card-border);
-  border-radius: 14px;
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(28, 33, 42, .95), rgba(19, 23, 30, .94));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .14);
 }
 
-.sellout-kpi-strip .panel-kpi {
-  min-height: 106px;
-  padding: 16px 18px;
-  border: 0;
-  border-radius: 0;
-  background: rgba(20, 24, 31, .92);
-  box-shadow: none;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-
-.sellout-kpi-strip .panel-kpi-glow {
-  display: none;
-}
-
-.sellout-kpi-strip .panel-kpi-label,
-.sellout-kpi-strip .panel-kpi-red .panel-kpi-label,
-.sellout-kpi-strip .panel-kpi-blue .panel-kpi-label,
-.sellout-kpi-strip .panel-kpi-green .panel-kpi-label,
-.sellout-kpi-strip .panel-kpi-purple .panel-kpi-label,
-.sellout-kpi-strip .panel-kpi-amber .panel-kpi-label {
-  margin-bottom: 7px;
+.sellout-metric-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   color: var(--panel-muted-light);
   font-size: .68rem;
+  font-weight: var(--panel-weight-black);
   letter-spacing: .09em;
+  text-transform: uppercase;
 }
 
-.sellout-kpi-strip .panel-kpi-value {
-  font-size: clamp(1.35rem, 1.75vw, 1.95rem);
+.sellout-metric-value {
+  min-width: 0;
+  color: var(--panel-text);
+  font-size: clamp(1.08rem, 1.42vw, 1.58rem);
+  font-weight: var(--panel-weight-heavy);
+  line-height: 1.08;
   letter-spacing: -.025em;
-  line-height: 1.05;
+  overflow-wrap: anywhere;
 }
 
-.sellout-kpi-strip .panel-kpi-detail {
-  margin-top: 7px;
+.sellout-progress {
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .08);
+}
+
+.sellout-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(214, 40, 57, .72), rgba(232, 68, 82, .92));
+  transition: width .2s ease;
+}
+
+.sellout-progress.is-empty > span { display: none; }
+
+.sellout-info {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--panel-card-border);
+  border-radius: 50%;
   color: var(--panel-muted);
-  font-size: .72rem;
-  line-height: 1.25;
+  font-size: .66rem;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: help;
 }
 
-@media (max-width: 1320px) {
-  .sellout-kpi-strip {
+.sellout-info-tooltip {
+  position: absolute;
+  z-index: 20;
+  right: -2px;
+  bottom: calc(100% + 8px);
+  width: min(260px, 70vw);
+  padding: 9px 10px;
+  border: 1px solid var(--panel-card-border);
+  border-radius: 9px;
+  background: rgba(8, 12, 18, .98);
+  color: var(--panel-text);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .35);
+  font-size: .72rem;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(3px);
+  transition: opacity .14s ease, transform .14s ease, visibility .14s ease;
+  pointer-events: none;
+}
+
+.sellout-info:hover .sellout-info-tooltip,
+.sellout-info:focus .sellout-info-tooltip,
+.sellout-info:focus-visible .sellout-info-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.sellout-info:focus-visible {
+  outline: none;
+  box-shadow: var(--panel-focus);
+}
+
+.sellout-line-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.sellout-line-grid .sellout-metric-card {
+  min-height: 116px;
+}
+
+@media (max-width: 1440px) {
+  .sellout-metric-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .sellout-metric-value {
+    font-size: clamp(1.2rem, 2vw, 1.65rem);
   }
 }
 
 @media (max-width: 760px) {
-  .sellout-kpi-strip {
+  .sellout-metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 480px) {
-  .sellout-kpi-strip {
+@media (max-width: 500px) {
+  .sellout-metric-grid,
+  .sellout-line-grid {
     grid-template-columns: 1fr;
   }
 }

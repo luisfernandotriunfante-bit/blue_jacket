@@ -4,6 +4,7 @@ import { DailyPositivityChart } from './DailyPositivityChart';
 import './charts.css';
 
 type MovementDay = { date:string; invoiced:number; toInvoice:number; total:number; invoicedPositivation:number; totalPositivation:number; };
+type MovementTotals = { realized:number; positiveCustomers:number; invoicedPositiveCustomers:number; };
 const WINDOW_DAYS=10;
 const fmtBRL=(value:number)=>value.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const fmtInt=(value:number)=>Math.round(value||0).toLocaleString('pt-BR');
@@ -13,7 +14,7 @@ function addDays(date:string,amount:number){const value=new Date(`${date}T12:00:
 function firstDayOfMonth(date:string){return `${date.slice(0,7)}-01`}
 function buildCalendar(data:MovementDay[]){if(!data.length)return [] as MovementDay[];const ordered=[...data].sort((a,b)=>a.date.localeCompare(b.date));const byDate=new Map(ordered.map(item=>[item.date,item]));const monthStart=firstDayOfMonth(ordered[0].date);const latest=ordered[ordered.length-1].date;const minimumWindowStart=addDays(latest,-(WINDOW_DAYS-1));const start=monthStart<minimumWindowStart?monthStart:minimumWindowStart;const days:MovementDay[]=[];for(let cursor=start;cursor<=latest;cursor=addDays(cursor,1)){days.push(byDate.get(cursor)||{date:cursor,invoiced:0,toInvoice:0,total:0,invoicedPositivation:0,totalPositivation:0})}return days}
 
-export function DailyMovementWindow({data}:{data:MovementDay[]}){
+export function DailyMovementWindow({data,totals}:{data:MovementDay[];totals:MovementTotals}){
  const calendar=useMemo(()=>buildCalendar(data),[data]);
  const latestDate=calendar.length?calendar[calendar.length-1].date:'';
  const maxEnd=Math.max(calendar.length-1,0);
@@ -49,7 +50,11 @@ export function DailyMovementWindow({data}:{data:MovementDay[]}){
    <div className="chart-daily-table">
     <div className="chart-daily-header"><div className="panel-eyebrow">PLANILHA DIÁRIA</div><div className="panel-section-title">Financeiro + positivação</div><div className="panel-muted" style={{fontSize:'var(--panel-font-caption)',marginTop:3}}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div></div>
     <div className="chart-daily-body"><table className="panel-table"><thead><tr><th>Data</th><th className="is-right">Sell Out</th><th className="is-right">Faturado</th><th className="is-right">A Faturar</th><th className="is-right">Pos. Fat.</th><th className="is-right">Pos. Total</th></tr></thead><tbody>{visible.map(day=><tr key={day.date}><td className="is-strong">{fmtShortDate(day.date)}</td><td className="is-right is-strong">{fmtBRL(day.total)}</td><td className="is-right is-blue">{fmtBRL(day.invoiced)}</td><td className="is-right is-green">{fmtBRL(day.toInvoice)}</td><td className="is-right is-blue">{fmtInt(day.invoicedPositivation)}</td><td className="is-right">{fmtInt(day.totalPositivation)}</td></tr>)}</tbody></table></div>
-    <div className="chart-daily-footer"><div className="panel-mini-label">Sell Out da janela</div><div className="panel-mini-value">{fmtBRL(visible.reduce((sum,day)=>sum+day.total,0))}</div></div>
+    <div className="chart-daily-footer chart-daily-footer-totals">
+      <div><div className="panel-mini-label">Sell Out acumulado</div><div className="panel-mini-value">{fmtBRL(totals.realized)}</div></div>
+      <div><div className="panel-mini-label">Positivados acumulados</div><div className="panel-mini-value">{fmtInt(totals.positiveCustomers)}</div></div>
+      <div><div className="panel-mini-label">Pos. faturada</div><div className="panel-mini-value">{fmtInt(totals.invoicedPositiveCustomers)}</div></div>
+    </div>
    </div>
   </div>
  </div>;
