@@ -1,0 +1,25 @@
+{
+  "sourceRegistry": [
+    {"name":"Vendas 8022","meaning":"Milênio para clientes; faturado, a faturar, Sell Out e positivação","frequency":"Diário"},
+    {"name":"Posição de Estoque 105","meaning":"estoque físico e custo","frequency":"Diário"},
+    {"name":"Carteira Colgate","meaning":"Colgate para Milênio; pedidos/faturamento industrial, nunca Sell Out","frequency":"Diário"},
+    {"name":"Estoque 8013","meaning":"medidas logísticas internas","frequency":"Diário"},
+    {"name":"Entrada de Notas 218","meaning":"recebimento físico","frequency":"Diário/conforme recebimento"},
+    {"name":"Bússola de Metas","meaning":"metas industriais","frequency":"Nova competência"},
+    {"name":"Roteiro Ativo Top Varejistas","meaning":"Top Varejistas e meta Top","frequency":"Nova competência"},
+    {"name":"Tabela de Preços Winthor PCTABPR","meaning":"preço PVENDA1","frequency":"Quando houver alteração"},
+    {"name":"Cadastro de Itens 286","meaning":"código Winthor e cadastro de itens","frequency":"Quando mudar"},
+    {"name":"Lista de Preço Colgate","meaning":"identificadores e embalagem industrial","frequency":"Quando atualizar"},
+    {"name":"Lista Oficial de Lançamentos","meaning":"lançamentos por EAN","frequency":"Quando houver versão nova"},
+    {"name":"De-Para / Novos RCAs","meaning":"RCA atual/legado e coordenação","frequency":"Quando a equipe mudar"},
+    {"name":"Base de Premissas","meaning":"ambiente, faixa, perfil e rede","frequency":"Quando atualizar"},
+    {"name":"Carteira de Clientes","meaning":"cadastro operacional de clientes","frequency":"Quando houver fotografia"},
+    {"name":"Sortimento Oficial","meaning":"competência, migração e descontinuação","frequency":"Nova competência"},
+    {"name":"Histórico 379 2025","meaning":"histórico transacional","frequency":"Eventual"},
+    {"name":"Histórico 379 2026","meaning":"histórico pré-migração","frequency":"Após fechamento"},
+    {"name":"310 total 2026","meaning":"reconciliação CNPJ por produto","frequency":"Quando atualizar"},
+    {"name":"Notas Recebidas 12.322","meaning":"histórico de recebimento por NF","frequency":"Histórico encerrado"}
+  ],
+  "currentSourceOfTruth": null,
+  "note": "As fontes descrevem o contrato visual anterior. Nenhuma está ativa após o reset."
+}

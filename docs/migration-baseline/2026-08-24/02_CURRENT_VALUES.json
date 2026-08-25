@@ -1,0 +1,24 @@
+{
+  "capturedAt": "2026-08-24",
+  "technicalBaseCommit": "fc8399dc531c5924b03642ada852f089c5395c4c",
+  "publishedSystem": "https://luisfernandotriunfante-bit.github.io/blue_jacket/",
+  "observedRuntime": {
+    "loadedSources": 0,
+    "registeredSources": 19,
+    "canonicalSnapshot": null,
+    "operationalSourceState": null,
+    "manualConfiguration": null,
+    "activeValues": null,
+    "observation": "A publicação não continha carga ativa; nenhum valor operacional foi inventado como zero no baseline."
+  },
+  "pageStates": {
+    "Estoque": "Nenhum dado carregado",
+    "Sell Out": "Nenhum relatório de vendas carregado",
+    "Clientes & Sortimento": "Base canônica unificada ainda não processada",
+    "Atividades": "Cadastro de produtos indisponível",
+    "Documentos": "Base ainda não processada",
+    "Metas": "Base ainda não carregada",
+    "Configurações": "0/19 fontes carregadas",
+    "PEX": "Em construção"
+  }
+}

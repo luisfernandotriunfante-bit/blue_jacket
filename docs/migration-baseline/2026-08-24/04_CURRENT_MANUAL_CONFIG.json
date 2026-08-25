@@ -1,0 +1,15 @@
+{
+  "capturedAt": "2026-08-24",
+  "activeConfiguration": null,
+  "observedReason": "A publicação e o runtime auditado não possuíam uma competência canônica ativa; por isso não havia configuração manual materializada para copiar.",
+  "manualParametersPreviouslySupported": [
+    "Meta Sell Out (T&C)",
+    "Meta Redes Geral e distribuição por rede",
+    "Meta de cobertura em dias",
+    "Acréscimo de venda da Carteira",
+    "Participação das linhas comerciais",
+    "Feriados e dias não trabalhados",
+    "Preferências de alerta de estoque"
+  ],
+  "migrationRule": "Nenhum parâmetro legado é carregado pelo aplicativo após o reset. Caso exista uma fotografia em outro navegador, ela deve ser extraída antes de executar uma versão com esta etapa publicada."
+}

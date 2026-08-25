@@ -1,0 +1,7 @@
+export type ReportSettings = { networkTargetByCompetence: Record<string, number> };
+const KEY = 'blue-jacket-v3-report-settings';
+const empty = (): ReportSettings => ({ networkTargetByCompetence: {} });
+export function loadReportSettings(): ReportSettings { try { const parsed = JSON.parse(localStorage.getItem(KEY) ?? 'null') as ReportSettings | null; return parsed && parsed.networkTargetByCompetence ? parsed : empty(); } catch { return empty(); } }
+export function networkTargetFor(competence: string) { const value = loadReportSettings().networkTargetByCompetence[competence]; return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null; }
+export function setNetworkTargetFor(competence: string, value: number | null) { const settings = loadReportSettings(); if (value === null || !Number.isFinite(value) || value < 0) delete settings.networkTargetByCompetence[competence]; else settings.networkTargetByCompetence[competence] = value; localStorage.setItem(KEY, JSON.stringify(settings)); return settings; }
+export function proportionalNetworkTargets(total: number | null, weights: Array<{ network: string; realized: number }>) { if (total === null) return new Map<string, number>(); const denominator = weights.reduce((sum, row) => sum + Math.max(0, row.realized), 0); return new Map(weights.map(row => [row.network, denominator ? total * Math.max(0, row.realized) / denominator : total / Math.max(1, weights.length)])); }

@@ -1,0 +1,20 @@
+{
+  "capturedAt": "2026-08-24",
+  "futureSource": null,
+  "pages": [
+    {"page":"Estoque","component":"Cards de posição","currentValue":null,"expectedMeaning":"Físico, reservado, disponível, Carteira, projetado, valor e cobertura por fotografia oficial.","currentSource":"105, 8013, 8022, Carteira, 218, 286 e preços"},
+    {"page":"Estoque","component":"Produtos","currentValue":null,"expectedMeaning":"Lista de SKU com código Winthor/fabricante/EAN, embalagem, saldos, valores, cobertura e alertas.","currentSource":"motor de itens/estoque anterior"},
+    {"page":"Estoque","component":"Entradas e Saídas","currentValue":null,"expectedMeaning":"Movimentos realizados e previstos, por documento, item e origem.","currentSource":"218, Carteira, 8022 e estoque anterior"},
+    {"page":"Sell Out","component":"Resumo","currentValue":null,"expectedMeaning":"Faturado, a faturar, total, metas, positivação, dias úteis e tendência do período.","currentSource":"8022, Bússola, de-para e configurações"},
+    {"page":"Sell Out","component":"Redes","currentValue":null,"expectedMeaning":"Realizado/a faturar/meta por rede e participação.","currentSource":"8022, clientes/redes, Roteiro e configurações"},
+    {"page":"Sell Out","component":"Gerencial","currentValue":null,"expectedMeaning":"Resultado e meta por RCA e coordenação.","currentSource":"8022, Bússola, RCA atual/legado"},
+    {"page":"Clientes & Sortimento","component":"Ficha por CNPJ","currentValue":null,"expectedMeaning":"Cliente, perfil, sortimento oficial/executável, compra, faltas, disponibilidade, Carteira, preço e ação.","currentSource":"Premissas, carteira de clientes, sortimento, 310/379/8022, estoque, Carteira, lançamentos e preços"},
+    {"page":"Clientes & Sortimento","component":"Lançamentos","currentValue":null,"expectedMeaning":"Adoção e bloqueios de lançamentos recomendados por CNPJ.","currentSource":"lista de lançamentos, sortimento, estoque, Carteira, vendas e 286"},
+    {"page":"Clientes & Sortimento","component":"Promoções","currentValue":null,"expectedMeaning":"Promoções elegíveis para o cliente e seus itens.","currentSource":"motor de promoções ainda não materializado"},
+    {"page":"Atividades","component":"Criação de Combo","currentValue":null,"expectedMeaning":"Produtos elegíveis, PVENDA1, preço praticado, desconto e clientes.","currentSource":"286, PCTABPR e clientes"},
+    {"page":"Documentos","component":"Geradores","currentValue":null,"expectedMeaning":"Arquivos coerentes com a mesma fotografia consumida pelas telas.","currentSource":"motores canônicos; sem leitura direta de arquivos"},
+    {"page":"Metas","component":"Parâmetros e distribuição","currentValue":null,"expectedMeaning":"Metas oficiais, parâmetros manuais versionados e distribuição por rede/linha.","currentSource":"Bússola, Roteiro e configuração manual"},
+    {"page":"Configurações","component":"Registro de fontes","currentValue":"0/19","expectedMeaning":"Status, data, arquivo e qualidade de cada fonte de uma carga oficial.","currentSource":"metadados de ingestão"},
+    {"page":"Configurações","component":"Auditoria","currentValue":null,"expectedMeaning":"Conciliações, qualidade, pendências e linhagem da fotografia oficial.","currentSource":"motor de reconciliação"}
+  ]
+}

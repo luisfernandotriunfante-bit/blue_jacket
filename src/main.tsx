@@ -13,6 +13,7 @@ import { DocumentosPage } from './pages/DocumentosPage'
 import { CriacaoComboPage } from './pages/CriacaoComboPage'
 import { ClientesSortimentoPage, type ClientesSortimentoView } from './pages/ClientesSortimentoUnifiedPage'
 import { DataProvider } from './store/DataContext'
+import { ListasCanonicasPage } from './pages/ListasCanonicasPage'
 import './ui/theme/foundation.css'
 
 function App() {
@@ -36,6 +37,7 @@ function App() {
     { id: 'atividades', label: 'Atividades', active: activeTab === 'atividades', onSelect: () => selectSection('atividades') },
     { id: 'relatorios', label: 'Documentos', active: activeTab === 'relatorios', onSelect: () => selectSection('relatorios') },
     { id: 'metas', label: 'Metas', active: activeTab === 'metas', onSelect: () => selectSection('metas') },
+    { id: 'listas-canonicas', label: 'Listas Canônicas', active: activeTab === 'listas-canonicas', onSelect: () => selectSection('listas-canonicas') },
     { id: 'configuracoes', label: 'Configurações', active: activeTab === 'configuracoes', onSelect: () => selectSection('configuracoes') },
   ]
 
@@ -104,6 +106,7 @@ function App() {
       : activeTab === 'atividades' && activeAtividadesTopTab === 'combo' ? <CriacaoComboPage />
       : activeTab === 'relatorios' ? <DocumentosPage />
       : activeTab === 'metas' ? <MetasPage />
+      : activeTab === 'listas-canonicas' ? <ListasCanonicasPage />
       : activeTab === 'configuracoes' ? <ConfiguracoesPage />
       : (
         <PanelPage title={currentLabel}>
