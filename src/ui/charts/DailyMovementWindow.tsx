@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { DailyMovementChart } from './DailyMovementChart';
 import { DailyPositivityChart } from './DailyPositivityChart';
 import './charts.css';
 
 type MovementDay = { date:string; invoiced:number; toInvoice:number; total:number; invoicedPositivation:number; totalPositivation:number; };
 const WINDOW_DAYS=10;
-const WINDOW_STORAGE_KEY='blue_jacket_sellout_daily_window_end';
 const fmtBRL=(value:number)=>value.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const fmtInt=(value:number)=>Math.round(value||0).toLocaleString('pt-BR');
 const fmtDate=(date:string)=>new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR');
@@ -13,19 +12,15 @@ const fmtShortDate=(date:string)=>new Date(`${date}T12:00:00`).toLocaleDateStrin
 function addDays(date:string,amount:number){const value=new Date(`${date}T12:00:00Z`);value.setUTCDate(value.getUTCDate()+amount);return value.toISOString().slice(0,10)}
 function firstDayOfMonth(date:string){return `${date.slice(0,7)}-01`}
 function buildCalendar(data:MovementDay[]){if(!data.length)return [] as MovementDay[];const ordered=[...data].sort((a,b)=>a.date.localeCompare(b.date));const byDate=new Map(ordered.map(item=>[item.date,item]));const monthStart=firstDayOfMonth(ordered[0].date);const latest=ordered[ordered.length-1].date;const minimumWindowStart=addDays(latest,-(WINDOW_DAYS-1));const start=monthStart<minimumWindowStart?monthStart:minimumWindowStart;const days:MovementDay[]=[];for(let cursor=start;cursor<=latest;cursor=addDays(cursor,1)){days.push(byDate.get(cursor)||{date:cursor,invoiced:0,toInvoice:0,total:0,invoicedPositivation:0,totalPositivation:0})}return days}
-function readStoredEndDate(){try{return typeof window==='undefined'?'':window.sessionStorage.getItem(WINDOW_STORAGE_KEY)||''}catch{return''}}
-function storeEndDate(date:string){try{if(typeof window!=='undefined'&&date)window.sessionStorage.setItem(WINDOW_STORAGE_KEY,date)}catch{/* storage indisponível não quebra a visualização */}}
 
 export function DailyMovementWindow({data}:{data:MovementDay[]}){
  const calendar=useMemo(()=>buildCalendar(data),[data]);
  const latestDate=calendar.length?calendar[calendar.length-1].date:'';
  const maxEnd=Math.max(calendar.length-1,0);
  const minEnd=Math.min(WINDOW_DAYS-1,maxEnd);
- const[selectedEndDate,setSelectedEndDate]=useState(readStoredEndDate);
+ const[selectedEndDate,setSelectedEndDate]=useState('');
  const selectedIndex=selectedEndDate?calendar.findIndex(day=>day.date===selectedEndDate):-1;
  const safeEnd=selectedIndex>=minEnd&&selectedIndex<=maxEnd?selectedIndex:maxEnd;
- useEffect(()=>{if(!calendar.length)return;const current=calendar[safeEnd]?.date||latestDate;if(current!==selectedEndDate)setSelectedEndDate(current)},[calendar,latestDate,safeEnd,selectedEndDate]);
- useEffect(()=>{if(selectedEndDate)storeEndDate(selectedEndDate)},[selectedEndDate]);
  if(!calendar.length)return null;
  const startIndex=Math.max(0,safeEnd-(WINDOW_DAYS-1));
  const visible=calendar.slice(startIndex,safeEnd+1);
