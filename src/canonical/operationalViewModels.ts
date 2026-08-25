@@ -3,13 +3,18 @@ import { APPROVED_CANONICAL_BUILD } from './runtime';
 import { proportionalNetworkTargets } from './reportSettings';
 
 type RecordValue = Record<string, unknown>;
-export type ViewAuditCode = 'UNRESOLVED_RCA_IN_VIEW' | 'UNRESOLVED_CUSTOMER_NETWORK' | 'MISSING_TARGET' | 'VIEW_RECONCILIATION_FAILED';
+export type ViewAuditCode = 'UNRESOLVED_RCA_IN_VIEW' | 'MISSING_TARGET' | 'VIEW_RECONCILIATION_FAILED';
 export type ViewAudit = { code: ViewAuditCode; message: string; action: string; count: number };
 
 export type SellOutRow = {
   key: string;
   rcaCanonicalId: string | null;
   rawRcaCode: string | null;
+  rcaName: string | null;
+  rcaCurrentCode: string | null;
+  rcaLegacyCode: string | null;
+  supervisorCode: string | null;
+  supervisorName: string | null;
   label: string;
   salesTarget: number;
   positivityTarget: number;
@@ -39,6 +44,8 @@ export type NetworkRow = {
 export type SellOutLineRow = { line: string; invoiced: number; toInvoice: number; realized: number; share: number; resolutionStatus: 'CLASSIFIED' | 'UNCLASSIFIED' };
 export type StockSummary = { items: number; physicalUnits: number; atCost: number; atSale: number; pricedItems: number };
 export type StoreRow = { cnpj: string | null; customerCode: string | null; customer: string; tradeName: string | null; city: string | null; network: string; rca: string | null; invoiced: number; toInvoice: number; realized: number; topTarget: number | null; achievement: number | null };
+
+type RcaDisplayMetadata = Pick<SellOutRow, 'rcaName' | 'rcaCurrentCode' | 'rcaLegacyCode' | 'supervisorCode' | 'supervisorName'>;
 
 export type SellOutViewModel = {
   motorBuildId: string;
@@ -85,6 +92,23 @@ function firstCustomerByCnpj(m2: CanonicalList) {
   return map;
 }
 
+function rcaMetadataByCanonical(m2: CanonicalList) {
+  const map = new Map<string, RcaDisplayMetadata>();
+  for (const customer of listRecords(m2)) {
+    const canonicalId = text(customer.rca_canonical_id);
+    if (!canonicalId) continue;
+    const current = map.get(canonicalId) ?? { rcaName: null, rcaCurrentCode: null, rcaLegacyCode: null, supervisorCode: null, supervisorName: null };
+    map.set(canonicalId, {
+      rcaName: current.rcaName ?? text(customer.rca_name),
+      rcaCurrentCode: current.rcaCurrentCode ?? text(customer.rca_current_code) ?? canonicalId.replace(/^RCA:/, ''),
+      rcaLegacyCode: current.rcaLegacyCode ?? text(customer.rca_legacy_code),
+      supervisorCode: current.supervisorCode ?? text(customer.coordinator_code),
+      supervisorName: current.supervisorName ?? text(customer.coordinator_name),
+    });
+  }
+  return map;
+}
+
 function addTo<T extends object>(map: Map<string, T>, key: string, create: () => T): T {
   const existing = map.get(key);
   if (existing) return existing;
@@ -105,8 +129,23 @@ function stockSummary(m1?: CanonicalList): StockSummary | null {
   return { items: m1.records.length, physicalUnits: round(physicalUnits), atCost: round(atCost), atSale: round(atSale), pricedItems };
 }
 
+function vendorIdentity(canonicalId: string | null, rawCode: string | null, metadata: Map<string, RcaDisplayMetadata>) {
+  const meta = canonicalId ? metadata.get(canonicalId) : undefined;
+  const currentCode = meta?.rcaCurrentCode ?? (canonicalId ? canonicalId.replace(/^RCA:/, '') : null);
+  const name = meta?.rcaName ?? null;
+  return {
+    rcaName: name,
+    rcaCurrentCode: currentCode,
+    rcaLegacyCode: meta?.rcaLegacyCode ?? null,
+    supervisorCode: meta?.supervisorCode ?? null,
+    supervisorName: meta?.supervisorName ?? null,
+    label: name ?? (currentCode ? `RCA ${currentCode}` : `RCA pendente${rawCode ? ` (${rawCode})` : ''}`),
+  };
+}
+
 export function buildSellOutViewModel({ m1, m2, m3, generatedAt = new Date().toISOString() }: { m1?: CanonicalList; m2: CanonicalList; m3: CanonicalList; generatedAt?: string }): SellOutViewModel {
   const customers = firstCustomerByCnpj(m2);
+  const rcaMetadata = rcaMetadataByCanonical(m2);
   const items = itemMaps(m1);
   const sales = listRecords(m3).filter(fact => fact.fact_type === 'SALE');
   const targets = listRecords(m3).filter(fact => fact.fact_type === 'TARGET');
@@ -114,18 +153,21 @@ export function buildSellOutViewModel({ m1, m2, m3, generatedAt = new Date().toI
   const dailyMap = new Map<string, { date: string; invoiced: number; toInvoice: number; realized: number }>();
   const networkMap = new Map<string, NetworkRow>();
   const unresolvedRcaCodes = new Set<string>();
-  let unresolvedNetworkLines = 0;
+
+  const ensureVendor = (canonicalId: string | null, rawCode: string | null) => {
+    const key = canonicalId ? `canonical:${canonicalId}` : `raw:${rawCode ?? 'SEM_RCA'}`;
+    const identity = vendorIdentity(canonicalId, rawCode, rcaMetadata);
+    return addTo(vendorMap, key, (): SellOutRow => ({
+      key, rcaCanonicalId: canonicalId, rawRcaCode: rawCode, ...identity,
+      salesTarget: 0, positivityTarget: 0, invoiced: 0, toInvoice: 0, realized: 0, positiveCustomers: 0,
+      achievement: null, positivityAchievement: null, resolutionStatus: canonicalId ? 'RESOLVED' : 'UNRESOLVED',
+    }));
+  };
 
   for (const target of targets) {
     const canonicalId = text(target.rca_canonical_id);
     const rawCode = text(target.transaction_rca_code);
-    const key = canonicalId ? `canonical:${canonicalId}` : `raw:${rawCode ?? 'SEM_RCA'}`;
-    const row = addTo(vendorMap, key, (): SellOutRow => ({
-      key, rcaCanonicalId: canonicalId, rawRcaCode: rawCode,
-      label: canonicalId ?? `RCA pendente${rawCode ? ` (${rawCode})` : ''}`,
-      salesTarget: 0, positivityTarget: 0, invoiced: 0, toInvoice: 0, realized: 0, positiveCustomers: 0,
-      achievement: null, positivityAchievement: null, resolutionStatus: canonicalId ? 'RESOLVED' : 'UNRESOLVED',
-    }));
+    const row = ensureVendor(canonicalId, rawCode);
     row.salesTarget += amount(target.sales_target);
     row.positivityTarget += amount(target.positivity_target);
   }
@@ -133,13 +175,7 @@ export function buildSellOutViewModel({ m1, m2, m3, generatedAt = new Date().toI
   for (const sale of sales) {
     const canonicalId = text(sale.rca_canonical_id);
     const rawCode = text(sale.transaction_rca_code);
-    const key = canonicalId ? `canonical:${canonicalId}` : `raw:${rawCode ?? 'SEM_RCA'}`;
-    const row = addTo(vendorMap, key, (): SellOutRow => ({
-      key, rcaCanonicalId: canonicalId, rawRcaCode: rawCode,
-      label: canonicalId ?? `RCA pendente${rawCode ? ` (${rawCode})` : ''}`,
-      salesTarget: 0, positivityTarget: 0, invoiced: 0, toInvoice: 0, realized: 0, positiveCustomers: 0,
-      achievement: null, positivityAchievement: null, resolutionStatus: canonicalId ? 'RESOLVED' : 'UNRESOLVED',
-    }));
+    const row = ensureVendor(canonicalId, rawCode);
     if (!canonicalId) unresolvedRcaCodes.add(rawCode ?? 'SEM_RCA');
     const value = amount(sale.value);
     row.realized += value;
@@ -153,7 +189,7 @@ export function buildSellOutViewModel({ m1, m2, m3, generatedAt = new Date().toI
     const cnpj = text(sale.cnpj);
     const customer = cnpj ? customers.get(cnpj) : undefined;
     const network = text(customer?.canonical_network) ?? text(customer?.premise_network) ?? text(customer?.top_network);
-    if (!network) { unresolvedNetworkLines += 1; continue; }
+    if (!network) continue;
     const net = addTo<NetworkRow>(networkMap, network, () => ({ network, customers: 0, invoiced: 0, toInvoice: 0, realized: 0, share: 0, resolutionStatus: 'SOURCE_PRESERVED', networkTarget: null, topTarget: null, gap: null, achievement: null }));
     net.realized += value;
     if (orderBucket(sale) === 'TO_INVOICE') net.toInvoice += value; else net.invoiced += value;
@@ -183,7 +219,7 @@ export function buildSellOutViewModel({ m1, m2, m3, generatedAt = new Date().toI
   }
   for (const sale of sales) { const customerKey = text(sale.customer_canonical_id) ?? text(sale.cnpj); if (customerKey) totals.positiveCustomers.add(customerKey); }
   const finalTotals = { ...totals, invoiced: round(totals.invoiced), toInvoice: round(totals.toInvoice), realized: round(totals.realized), salesTarget: round(totals.salesTarget), positivityTarget: round(totals.positivityTarget), positiveCustomers: totals.positiveCustomers.size, salesAchievement: totals.salesTarget > 0 ? totals.realized / totals.salesTarget : null, positivityAchievement: totals.positivityTarget > 0 ? totals.positiveCustomers.size / totals.positivityTarget : null };
-  const vendorRows = [...vendorMap.values()].sort((a, b) => b.realized - a.realized || a.label.localeCompare(b.label));
+  const vendorRows = [...vendorMap.values()].sort((a, b) => (a.supervisorName ?? 'ZZZ').localeCompare(b.supervisorName ?? 'ZZZ') || (a.supervisorCode ?? '').localeCompare(b.supervisorCode ?? '') || b.realized - a.realized || a.label.localeCompare(b.label));
   const dailyRows = [...dailyMap.values()].map(row => ({ ...row, invoiced: round(row.invoiced), toInvoice: round(row.toInvoice), realized: round(row.realized) })).sort((a, b) => a.date.localeCompare(b.date));
   const networkTopTargets = new Map<string, number>();
   for (const customer of listRecords(m2)) { const network = text(customer.canonical_network) ?? text(customer.premise_network) ?? text(customer.top_network); if (network) networkTopTargets.set(network, (networkTopTargets.get(network) ?? 0) + amount(customer.top_target)); }
@@ -194,7 +230,6 @@ export function buildSellOutViewModel({ m1, m2, m3, generatedAt = new Date().toI
   const mappedNetworkValue = round(networkRows.reduce((sum, row) => sum + row.realized, 0));
   const audits: ViewAudit[] = [];
   if (unresolvedRcaCodes.size) audits.push({ code: 'UNRESOLVED_RCA_IN_VIEW', count: unresolvedRcaCodes.size, message: `${unresolvedRcaCodes.size} códigos de RCA presentes em SALE não possuem rca_canonical_id no bundle ativo.`, action: 'Corrigir o relacionamento RCA no próximo build canônico; a visão não aplica fallback.' });
-  if (unresolvedNetworkLines) audits.push({ code: 'UNRESOLVED_CUSTOMER_NETWORK', count: unresolvedNetworkLines, message: `${unresolvedNetworkLines} linhas SALE não possuem rede resolvida em M2.`, action: 'Completar a relação de rede no M2 em novo build; essas linhas não são alocadas em rede.' });
   if (!targets.length) audits.push({ code: 'MISSING_TARGET', count: 1, message: 'Não há TARGET no M3 ativo.', action: 'Homologar um novo build com metas materializadas.' });
   const vendorTotal = round(vendorRows.reduce((sum, row) => sum + row.realized, 0));
   const dailyTotal = round(dailyRows.reduce((sum, row) => sum + row.realized, 0));

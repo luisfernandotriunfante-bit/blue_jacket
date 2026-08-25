@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
-import { buildSellOutViewModel, buildTopNetworksViewModel, type SellOutViewModel } from '../canonical/operationalViewModels';
+import { buildSellOutViewModel, buildTopNetworksViewModel, type SellOutRow, type SellOutViewModel } from '../canonical/operationalViewModels';
 import { exportSellOutExcel, exportSellOutJson, exportTopNetworksExcel, exportTopNetworksJson } from '../canonical/operationalExporters';
 import type { CanonicalList } from '../canonical/types';
 import { useData } from '../store/DataContext';
@@ -12,19 +12,6 @@ const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: '
 const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFractionDigits: 1 });
 const number = new Intl.NumberFormat('pt-BR');
 const percentValue = (input: number | null) => input === null ? '—' : percent.format(input);
-const valueText = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
-
-function rcaLabelsFromM2(m2: CanonicalList) {
-  const labels = new Map<string, string>();
-  for (const customer of m2.records) {
-    const id = valueText(customer.rca_canonical_id);
-    if (!id || labels.has(id)) continue;
-    const name = valueText(customer.rca_name);
-    const code = valueText(customer.rca_current_code) ?? id.replace(/^RCA:/, '');
-    labels.set(id, name ? `${name} · RCA ${code}` : `RCA ${code}`);
-  }
-  return labels;
-}
 
 function Alerts({ model }: { model: SellOutViewModel }) { return <>{model.audits.map(audit => <PanelAlert key={audit.code} tone="warning"><strong>{audit.code}</strong> — {audit.message} {audit.action}</PanelAlert>)}</>; }
 
@@ -37,11 +24,27 @@ function Summary({ model }: { model: SellOutViewModel }) { return <>
 </>; }
 
 function Networks({ model, m2, m3 }: { model: SellOutViewModel; m2: CanonicalList; m3: CanonicalList }) { const built = buildTopNetworksViewModel({ m2, m3, generatedAt: model.generatedAt }); const networks = { ...built, motorBuildId: model.motorBuildId, stagingManifestHash: model.stagingManifestHash, teamRows: model.vendorRows }; return <>
-  <div className="panel-grid panel-grid-auto"><PanelKpi label="Redes com venda" value={number.format(networks.totals.networks)} tone="purple" detail="Relação preservada em M2" /><PanelKpi label="Clientes vinculados" value={number.format(networks.totals.customers)} detail="CNPJ positivo por rede" /><PanelKpi label="Total nas redes" value={currency.format(networks.totals.realized)} tone="blue" detail="Universo com rede resolvida" /><PanelKpi label="Meta de redes" value="—" detail="Parâmetro manual não estava materializado no backup" /></div>
-  <PanelCard><PanelSectionHeader eyebrow="TOP REDES" title="Realizado por rede" description="Rede vem de M2; vendas vêm exclusivamente de SALE no M3." action={<><button className="panel-button" onClick={() => exportTopNetworksExcel(networks)}>Exportar Excel</button> <button className="panel-button" onClick={() => exportTopNetworksJson(networks)}>Exportar JSON</button></>} /><div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Rede</th><th>Clientes</th><th>Faturado</th><th>A faturar</th><th>Total</th><th>Participação</th><th>Status</th></tr></thead><tbody>{networks.rows.map(row => <tr key={row.network}><td>{row.network}</td><td>{number.format(row.customers)}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{percent.format(row.share)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div></PanelCard>
+  <div className="panel-grid panel-grid-auto"><PanelKpi label="Redes com venda" value={number.format(networks.totals.networks)} tone="purple" detail="Somente clientes que pertencem a uma rede" /><PanelKpi label="Clientes vinculados" value={number.format(networks.totals.customers)} detail="CNPJ positivo com rede" /><PanelKpi label="Total nas redes" value={currency.format(networks.totals.realized)} tone="blue" detail="Clientes sem rede ficam naturalmente fora desta visão" /><PanelKpi label="Meta de redes" value="—" detail="Parâmetro manual não estava materializado no backup" /></div>
+  <PanelCard><PanelSectionHeader eyebrow="TOP REDES" title="Realizado por rede" description="Rede vem de M2. Cliente sem rede não é erro e não é forçado para nenhuma rede." action={<><button className="panel-button" onClick={() => exportTopNetworksExcel(networks)}>Exportar Excel</button> <button className="panel-button" onClick={() => exportTopNetworksJson(networks)}>Exportar JSON</button></>} /><div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Rede</th><th>Clientes</th><th>Faturado</th><th>A faturar</th><th>Total</th><th>Participação</th><th>Status</th></tr></thead><tbody>{networks.rows.map(row => <tr key={row.network}><td>{row.network}</td><td>{number.format(row.customers)}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{percent.format(row.share)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div></PanelCard>
 </>; }
 
-function Management({ model }: { model: SellOutViewModel }) { const [status, setStatus] = useState<'ALL' | 'RESOLVED' | 'UNRESOLVED'>('ALL'); const rows = useMemo(() => status === 'ALL' ? model.vendorRows : model.vendorRows.filter(row => row.resolutionStatus === status), [status, model]); return <PanelCard><PanelSectionHeader eyebrow="GERENCIAL" title="Vendedores, metas e positivação" description="Filtro e tabela usam o mesmo SellOutViewModel da exportação." action={<label className="panel-muted">RCA <select value={status} onChange={event => setStatus(event.target.value as typeof status)}><option value="ALL">Todos</option><option value="RESOLVED">Resolvidos</option><option value="UNRESOLVED">Pendentes</option></select></label>} /><div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>RCA atual</th><th>Meta</th><th>Faturado</th><th>A faturar</th><th>Total</th><th>Clientes positivos</th><th>Positivação</th><th>Status</th></tr></thead><tbody>{rows.map(row => <tr key={row.key}><td>{row.label}</td><td>{currency.format(row.salesTarget)}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{number.format(row.positiveCustomers)}</td><td>{percentValue(row.positivityAchievement)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div></PanelCard>; }
+function VendorTable({ rows }: { rows: SellOutRow[] }) { return <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>RCA</th><th>Cód. atual</th><th>Cód. antigo</th><th>Meta</th><th>Faturado</th><th>A faturar</th><th>Total</th><th>Clientes positivos</th><th>Positivação</th><th>Status</th></tr></thead><tbody>{rows.map(row => <tr key={row.key}><td>{row.rcaName ?? row.label}</td><td>{row.rcaCurrentCode ?? '—'}</td><td>{row.rcaLegacyCode ?? '—'}</td><td>{currency.format(row.salesTarget)}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{number.format(row.positiveCustomers)}</td><td>{percentValue(row.positivityAchievement)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div>; }
+
+function Management({ model }: { model: SellOutViewModel }) {
+  const [status, setStatus] = useState<'ALL' | 'RESOLVED' | 'UNRESOLVED'>('ALL');
+  const [supervisor, setSupervisor] = useState('ALL');
+  const supervisors = useMemo(() => [...new Map(model.vendorRows.map(row => { const key = row.supervisorCode ?? row.supervisorName ?? 'SEM_SUPERVISOR'; return [key, { key, code: row.supervisorCode, name: row.supervisorName }]; })).values()].sort((a, b) => (a.name ?? 'ZZZ').localeCompare(b.name ?? 'ZZZ') || (a.code ?? '').localeCompare(b.code ?? '')), [model]);
+  const filtered = useMemo(() => model.vendorRows.filter(row => (status === 'ALL' || row.resolutionStatus === status) && (supervisor === 'ALL' || (row.supervisorCode ?? row.supervisorName ?? 'SEM_SUPERVISOR') === supervisor)), [status, supervisor, model]);
+  const groups = useMemo(() => {
+    const map = new Map<string, { code: string | null; name: string | null; rows: SellOutRow[] }>();
+    for (const row of filtered) { const key = row.supervisorCode ?? row.supervisorName ?? 'SEM_SUPERVISOR'; const group = map.get(key) ?? { code: row.supervisorCode, name: row.supervisorName, rows: [] }; group.rows.push(row); map.set(key, group); }
+    return [...map.values()].sort((a, b) => (a.name ?? 'ZZZ').localeCompare(b.name ?? 'ZZZ') || (a.code ?? '').localeCompare(b.code ?? ''));
+  }, [filtered]);
+  return <>
+    <PanelCard><PanelSectionHeader eyebrow="GERENCIAL" title="Vendedores separados por supervisor" description="Nome, código RCA atual e código legado vêm do mesmo master NOVOS RCAS usado pelo motor canônico." action={<div style={{display:'flex',gap:12,flexWrap:'wrap'}}><label className="panel-muted">Supervisor <select value={supervisor} onChange={event => setSupervisor(event.target.value)}><option value="ALL">Todos</option>{supervisors.map(item => <option key={item.key} value={item.key}>{item.name ?? 'Sem supervisor'}{item.code ? ` · ${item.code}` : ''}</option>)}</select></label><label className="panel-muted">RCA <select value={status} onChange={event => setStatus(event.target.value as typeof status)}><option value="ALL">Todos</option><option value="RESOLVED">Resolvidos</option><option value="UNRESOLVED">Pendentes</option></select></label></div>} /></PanelCard>
+    {groups.map(group => <PanelCard key={group.code ?? group.name ?? 'SEM_SUPERVISOR'}><PanelSectionHeader eyebrow="SUPERVISOR" title={`${group.name ?? 'Sem supervisor'}${group.code ? ` · Cód. ${group.code}` : ''}`} description={`${number.format(group.rows.length)} RCA(s) nesta supervisão`} /><VendorTable rows={group.rows} /></PanelCard>)}
+  </>;
+}
 
 export function SellOutPage({ view = 'resumo' }: { view?: SellOutView }) {
   const { activeCanonical } = useData(); const [lists, setLists] = useState<{ m1: CanonicalList; m2: CanonicalList; m3: CanonicalList } | null>(null); const [error, setError] = useState('');
@@ -50,7 +53,6 @@ export function SellOutPage({ view = 'resumo' }: { view?: SellOutView }) {
   if (error) return <PanelPage title="Sell Out"><PanelAlert tone="error">Erro ao carregar o bundle ativo: {error}</PanelAlert></PanelPage>;
   if (!lists) return <PanelPage title="Sell Out"><PanelEmptyState variant="page" title="Carregando bundle canônico" description="Leitura passiva de M2 e M3; nenhum parser ou motor é acionado." /></PanelPage>;
   const baseModel = buildSellOutViewModel(lists);
-  const rcaLabels = rcaLabelsFromM2(lists.m2);
-  const model: SellOutViewModel = { ...baseModel, motorBuildId: activeCanonical.motorBuildId, stagingManifestHash: activeCanonical.stagingManifestHash, vendorRows: baseModel.vendorRows.map(row => ({ ...row, label: row.rcaCanonicalId ? (rcaLabels.get(row.rcaCanonicalId) ?? `RCA ${row.rcaCanonicalId.replace(/^RCA:/, '')}`) : row.label })) };
+  const model: SellOutViewModel = { ...baseModel, motorBuildId: activeCanonical.motorBuildId, stagingManifestHash: activeCanonical.stagingManifestHash };
   return <PanelPage title="Sell Out" metricLabel="Build canônico" metricValue={activeCanonical.motorBuildId}><PanelAlert tone="success">BUILD ATIVO: {activeCanonical.motorBuildId}<br />stagingManifestHash: {activeCanonical.stagingManifestHash}</PanelAlert><div className="panel-stack"><Alerts model={model} />{view === 'redes' ? <Networks model={model} m2={lists.m2} m3={lists.m3} /> : view === 'gerencial' ? <Management model={model} /> : <Summary model={model} />}</div></PanelPage>;
 }
