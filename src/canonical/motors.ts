@@ -18,6 +18,11 @@ const rows = (sources: ParsedSource[], name: string) => sources.find(item => ite
 const now = () => new Date().toISOString();
 const competence = () => new Date().toISOString().slice(0, 7);
 const blank = (id: Id) => Object.fromEntries(schemas[id].map(field => [field.field, null])) as Record<string, unknown>;
+const codeKey = (input: unknown) => {
+  const raw = String(input ?? '').trim().replace(/\.0$/, '').replace(/\s+/g, '');
+  if (!raw) return '';
+  return /^\d+$/.test(raw) ? raw.replace(/^0+(?=\d)/, '') : raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+};
 const issue = (code: string, message: string, source = 'motor', severity: CanonicalAudit['severity'] = 'WARNING'): CanonicalAudit => ({
   code,
   severity,
@@ -62,17 +67,25 @@ export function buildM1(sources: ParsedSource[]) {
   const audits: CanonicalAudit[] = [];
   const base = [...rows(sources, 'cadastro-itens-286.xls'), ...rows(sources, 'posicao-estoque-105.xls')];
   const seen = new Set<string>();
+  const listPriceRows = rows(sources, 'Lista_de_Preco (8).xlsx');
+  const listByEan = new Map(listPriceRows.map(row => [String(value(row, 'ean') ?? ''), row]));
+  const listBySku = new Map(listPriceRows.map(row => [codeKey(value(row, 'sku')), row]));
   const records = base.map(row => {
     const winthor = String(value(row, 'winthor_code', 'product_code', 'item_code', 'code') ?? '');
     const ean = String(value(row, 'ean', 'internal_ean', 'ean_internal') ?? '');
+    const manufacturer = value(row, 'manufacturer_code');
+    const industry = listByEan.get(ean) ?? listBySku.get(codeKey(manufacturer));
     const id = winthor || ean;
     if (!id || seen.has(id)) return null;
     seen.add(id);
     const out = blank('M1_ITEM_ESTOQUE');
     Object.assign(out, {
       snapshot_date: new Date().toISOString().slice(0, 10), competence: competence(), item_canonical_id: `ITEM:${id}`,
-      winthor_code: winthor || null, internal_ean: ean || null, industry_ean: ean || null,
-      description_internal: value(row, 'description', 'product_description', 'description_internal'),
+      winthor_code: winthor || null, manufacturer_code: manufacturer, internal_ean: ean || null,
+      industry_sku: industry ? value(industry, 'sku') : null, industry_ean: industry ? value(industry, 'ean') : ean || null,
+      dun14: industry ? value(industry, 'dun_14') : null, description_internal: value(row, 'description', 'product_description', 'description_internal'),
+      description_industry: industry ? value(industry, 'descricao_padrao') : null,
+      units_per_case_industry: industry ? value(industry, 'un_cx') : null, cases_per_pallet: industry ? value(industry, 'cx_pal') : null,
       physical_stock_units: value(row, 'physical_stock', 'stock', 'quantity', 'quantity_stock'),
       source_system: 'Winthor', source_file: '286/105', source_row: value(row, '__source_row'),
     });
@@ -194,12 +207,28 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   const stock105 = new Map(rows(parsedSources, 'posicao-estoque-105.xls').map(row => [String(value(row, 'winthor_code') ?? ''), row]));
   const pVenda = new Map(rows(parsedSources, 'pctabpr 13.xlsx').map(row => [String(value(row, 'codprod') ?? ''), value(row, 'pvenda1')]));
   const launches = new Map(rows(parsedSources, 'lançamentos.xlsx').map(row => [String(value(row, 'launch_winthor_code') ?? ''), row]));
+  const listPriceRows = rows(parsedSources, 'Lista_de_Preco (8).xlsx');
+  const listByEan = new Map(listPriceRows.map(row => [String(value(row, 'ean') ?? ''), row]));
+  const listBySku = new Map(listPriceRows.map(row => [codeKey(value(row, 'sku')), row]));
   const items = new Map<string, Record<string, unknown>>();
   for (const row of [...rows(parsedSources, 'cadastro-itens-286.xls'), ...rows(parsedSources, 'posicao-estoque-105.xls')]) {
     const code = String(value(row, 'winthor_code') ?? '');
     if (!code || items.has(code)) continue;
     const stock = stock105.get(code); const launch = launches.get(code);
-    items.set(code, fieldOnly('M1_ITEM_ESTOQUE', { snapshot_date: snapshot, competence: comp, item_canonical_id: `ITEM:${code}`, winthor_code: code, manufacturer_code: value(row, 'manufacturer_code'), internal_ean: value(row, 'internal_ean'), description_internal: value(row, 'description_286', 'description_105'), pack_internal: value(row, 'pack_286', 'pack_105'), physical_stock_units: value(stock ?? row, 'physical_stock_units'), stock_286_physical: value(row, 'physical_286'), stock_286_blocked: value(row, 'blocked_286'), stock_286_reserved: value(row, 'reserved_286'), stock_286_available: value(row, 'available_286'), cost_unit_105: value(stock ?? row, 'unit_cost_real'), sale_price_105: value(stock ?? row, 'sale_price_105'), pVenda1_region11: pVenda.get(code) ?? null, is_launch: launch ? true : false, launch_status: launch ? value(launch, 'launch_status') : null, has_winthor: true, mapping_status: 'WINTHOR', source_lineage: '286|105|PCTABPR|Lançamentos' }));
+    const ean = String(value(row, 'internal_ean') ?? '');
+    const manufacturer = value(row, 'manufacturer_code');
+    const industry = listByEan.get(ean) ?? listBySku.get(codeKey(manufacturer));
+    items.set(code, fieldOnly('M1_ITEM_ESTOQUE', {
+      snapshot_date: snapshot, competence: comp, item_canonical_id: `ITEM:${code}`, winthor_code: code,
+      manufacturer_code: manufacturer, industry_sku: industry ? value(industry, 'sku') : null,
+      internal_ean: value(row, 'internal_ean'), industry_ean: industry ? value(industry, 'ean') : null, dun14: industry ? value(industry, 'dun_14') : null,
+      description_internal: value(row, 'description_286', 'description_105'), description_industry: industry ? value(industry, 'descricao_padrao') : null,
+      pack_internal: value(row, 'pack_286', 'pack_105'), units_per_case_industry: industry ? value(industry, 'un_cx') : null, cases_per_pallet: industry ? value(industry, 'cx_pal') : null,
+      physical_stock_units: value(stock ?? row, 'physical_stock_units'), stock_286_physical: value(row, 'physical_286'), stock_286_blocked: value(row, 'blocked_286'), stock_286_reserved: value(row, 'reserved_286'), stock_286_available: value(row, 'available_286'),
+      cost_unit_105: value(stock ?? row, 'unit_cost_real'), sale_price_105: value(stock ?? row, 'sale_price_105'), pVenda1_region11: pVenda.get(code) ?? null,
+      is_launch: launch ? true : false, launch_status: launch ? value(launch, 'launch_status') : null, has_winthor: true, mapping_status: industry ? 'WINTHOR+LIST_PRICE' : 'WINTHOR',
+      source_lineage: industry ? '286|105|PCTABPR|ListaPreço|Lançamentos' : '286|105|PCTABPR|Lançamentos',
+    }));
   }
   bundle.lists.M1_ITEM_ESTOQUE = list('M1_ITEM_ESTOQUE', [...items.values()], ['cadastro-itens-286.xls', 'posicao-estoque-105.xls', 'estoque-8013.xls', 'pctabpr 13.xlsx', 'Lista_de_Preco (8).xlsx', 'lançamentos.xlsx', "Sortimento Recomendado - Q3'26.xlsx"], []);
 
