@@ -153,14 +153,32 @@ function buildItemIndexes(m1: CanonicalList) {
   for (const item of m1.records as RecordValue[]) {
     const winthor = firstText(item, ['winthor_code']);
     const ean = firstText(item, ['internal_ean', 'industry_ean']);
-    const sku = firstText(item, ['manufacturer_code', 'industry_sku', 'manufacturer_code_286']);
+    const skus = [firstText(item, ['manufacturer_code']), firstText(item, ['industry_sku']), firstText(item, ['manufacturer_code_286'])].filter(Boolean) as string[];
     if (winthor) byWinthor.set(winthor, item);
     if (ean) byEan.set(ean, item);
-    if (sku) bySku.set(sku, item);
     addUniqueIndex(byWinthorComparable, ambiguousWinthor, comparableCode(winthor), item);
-    addUniqueIndex(bySkuComparable, ambiguousSku, comparableCode(sku), item);
+    for (const sku of skus) {
+      addUniqueIndex(bySku, ambiguousSku, sku, item);
+      addUniqueIndex(bySkuComparable, ambiguousSku, comparableCode(sku), item);
+    }
   }
-  return { byWinthor, byWinthorComparable, byEan, bySku, bySkuComparable };
+  return { byWinthor, byWinthorComparable, byEan, bySku, bySkuComparable, ambiguousSku };
+}
+
+function itemByWinthor(code: unknown, indexes: ReturnType<typeof buildItemIndexes>) {
+  const raw = firstText({ code }, ['code']);
+  return (raw ? indexes.byWinthor.get(raw) : undefined)
+    ?? (raw ? indexes.byWinthorComparable.get(comparableCode(raw) ?? '') : undefined);
+}
+
+function augmentSkuAliasesFromSales(sales: RecordValue[], indexes: ReturnType<typeof buildItemIndexes>) {
+  for (const sale of sales) {
+    const item = itemByWinthor(sale.winthor_product_code, indexes);
+    const sku = firstText(sale, ['industry_sku']);
+    if (!item || !sku) continue;
+    addUniqueIndex(indexes.bySku, indexes.ambiguousSku, sku, item);
+    addUniqueIndex(indexes.bySkuComparable, indexes.ambiguousSku, comparableCode(sku), item);
+  }
 }
 
 function currentItemForFact(fact: RecordValue, indexes: ReturnType<typeof buildItemIndexes>) {
@@ -190,6 +208,36 @@ function itemLabel(item: RecordValue) {
   return `${code} · ${description}`;
 }
 
+function unitsPerCaseIndex(items: RecordValue[], sales: RecordValue[], indexes: ReturnType<typeof buildItemIndexes>) {
+  const factors = new Map<string, number>();
+  const conflicted = new Set<string>();
+  for (const item of items) {
+    const factor = amount(item.units_per_case_industry);
+    if (factor > 0) factors.set(itemKey(item), factor);
+  }
+  for (const sale of sales) {
+    const item = currentItemForFact(sale, indexes);
+    if (!item) continue;
+    const units = Math.abs(amount(sale.units));
+    const cases = Math.abs(amount(sale.cases));
+    if (!(units > 0 && cases > 0)) continue;
+    const factor = units / cases;
+    if (!Number.isFinite(factor) || factor <= 0) continue;
+    const key = itemKey(item);
+    if (factors.has(key)) continue;
+    const previous = factors.get(`OBSERVED:${key}`);
+    if (previous !== undefined && Math.abs(previous - factor) > 0.001) conflicted.add(key);
+    else factors.set(`OBSERVED:${key}`, factor);
+  }
+  for (const [key, value] of [...factors.entries()]) {
+    if (!key.startsWith('OBSERVED:')) continue;
+    const item = key.slice('OBSERVED:'.length);
+    factors.delete(key);
+    if (!conflicted.has(item) && !factors.has(item)) factors.set(item, value);
+  }
+  return factors;
+}
+
 function alert(code: string, tone: StockOverviewAlertTone, title: string, detail: string, items: RecordValue[]) {
   return {
     code,
@@ -202,7 +250,6 @@ function alert(code: string, tone: StockOverviewAlertTone, title: string, detail
 }
 
 export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m4: CanonicalList }): StockOverviewModel {
-  const indexes = buildItemIndexes(m1);
   const items = m1.records as RecordValue[];
   const m3Records = m3.records as RecordValue[];
   const m4Records = m4.records as RecordValue[];
@@ -210,11 +257,27 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const inbound = m3Records.filter(fact => fact.fact_type === 'INBOUND_ORDER');
   const receipts218 = m3Records.filter(fact => fact.fact_type === 'RECEIPT');
   const historical = m4Records.filter(fact => fact.row_type === 'TRANSACTION_379');
-  const receipts12322 = m4Records.filter(fact => fact.row_type === 'RECEIPT_12322');
+  const receipts12322 = m4Records.filter(fact => fact.row_type === 'RECEIPT_12322' && normalized(fact.receipt_class) === 'MERCHANDISE');
 
-  const receiptInvoices218 = new Set(receipts218.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
+  const indexes = buildItemIndexes(m1);
+  augmentSkuAliasesFromSales(sales, indexes);
+  const unitsPerCase = unitsPerCaseIndex(items, sales, indexes);
+
   const receiptInvoices12322 = new Set(receipts12322.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
-  const receivedInvoiceKeys = new Set([...receiptInvoices218, ...receiptInvoices12322]);
+  const receiptCases218 = new Map<string, number>();
+  const receiptInvoiceItems218 = new Set<string>();
+  for (const receipt of receipts218) {
+    const invoice = invoiceKey(receipt.invoice_number);
+    const item = currentItemForFact(receipt, indexes);
+    if (!invoice || !item) continue;
+    const factor = unitsPerCase.get(itemKey(item)) ?? 0;
+    if (!(factor > 0)) continue;
+    const receivedUnits = Math.max(0, amount(receipt.received_units));
+    if (!(receivedUnits > 0)) continue;
+    const key = `${invoice}|${itemKey(item)}`;
+    receiptCases218.set(key, (receiptCases218.get(key) ?? 0) + receivedUnits / factor);
+    receiptInvoiceItems218.add(key);
+  }
 
   const validDates = [
     ...sales.map(fact => text(fact.event_date)).filter(isIsoDate) as string[],
@@ -257,7 +320,7 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     reservedByItem.set(key, (reservedByItem.get(key) ?? 0) + Math.max(0, amount(fact.units)));
   }
 
-  const inboundByItem = new Map<string, number>();
+  const inboundUnitsByItem = new Map<string, number>();
   let grossInboundQty = 0;
   let totalInboundQty = 0;
   let mappedInboundQty = 0;
@@ -275,31 +338,42 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     const billQty = Math.max(0, amount(fact.bill_qty));
     const grossQty = orderQty + billQty;
     const netValue = Math.max(0, amount(fact.inbound_net_value));
-    const key = invoiceKey(fact.invoice_number);
-    const received = Boolean(key && receivedInvoiceKeys.has(key));
-    if (key && received) {
-      if (receiptInvoices218.has(key)) matched218.add(key);
-      if (receiptInvoices12322.has(key)) matched12322.add(key);
+    const invoice = invoiceKey(fact.invoice_number);
+    const item = currentItemForFact(fact, indexes);
+    const itemId = item ? itemKey(item) : null;
+
+    let receivedBillQty = 0;
+    if (billQty > 0 && invoice && receiptInvoices12322.has(invoice)) {
+      receivedBillQty = billQty;
+      matched12322.add(invoice);
+    } else if (billQty > 0 && invoice && itemId) {
+      const receiptKey = `${invoice}|${itemId}`;
+      const receivedCases = receiptCases218.get(receiptKey) ?? 0;
+      if (receivedCases > 0) {
+        receivedBillQty = Math.min(billQty, receivedCases);
+        matched218.add(receiptKey);
+      }
     }
 
-    const outstandingBillQty = received ? 0 : billQty;
+    const outstandingBillQty = Math.max(0, billQty - receivedBillQty);
     const outstandingQty = orderQty + outstandingBillQty;
-    const outstandingRatio = grossQty > 0 ? outstandingQty / grossQty : received ? 0 : 1;
+    const outstandingRatio = grossQty > 0 ? outstandingQty / grossQty : 1;
     const outstandingValue = netValue * Math.max(0, Math.min(1, outstandingRatio));
 
     grossInboundQty += grossQty;
     grossInboundValue += netValue;
     totalInboundQty += outstandingQty;
     inboundValue += outstandingValue;
-    receivedInboundQty += Math.max(0, grossQty - outstandingQty);
+    receivedInboundQty += receivedBillQty;
     receivedInboundValue += Math.max(0, netValue - outstandingValue);
 
     if (outstandingQty <= 0 && outstandingValue <= 0) continue;
     totalInboundRows += 1;
-    const item = currentItemForFact(fact, indexes);
-    if (!item) continue;
-    const itemKeyValue = itemKey(item);
-    inboundByItem.set(itemKeyValue, (inboundByItem.get(itemKeyValue) ?? 0) + outstandingQty);
+    if (!item || !itemId) continue;
+    const factor = unitsPerCase.get(itemId) ?? 0;
+    if (!(factor > 0)) continue;
+    const outstandingUnits = outstandingQty * factor;
+    inboundUnitsByItem.set(itemId, (inboundUnitsByItem.get(itemId) ?? 0) + outstandingUnits);
     mappedInboundQty += outstandingQty;
     mappedInboundRows += 1;
   }
@@ -332,8 +406,8 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     const physical = Math.max(0, amount(item.physical_stock_units));
     const reserved = Math.max(0, reservedByItem.get(key) ?? 0);
     const available = physical - reserved;
-    const inboundItem = Math.max(0, inboundByItem.get(key) ?? 0);
-    const projected = available + inboundItem;
+    const inboundItemUnits = Math.max(0, inboundUnitsByItem.get(key) ?? 0);
+    const projected = available + inboundItemUnits;
     const cost = Math.max(0, amount(item.cost_unit_105));
     const price = Math.max(0, amount(item.pVenda1_region11));
     const itemSaleValue = physical * price;
@@ -345,7 +419,7 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     physicalUnits += physical;
     reservedUnits += reserved;
     availableUnits += available;
-    inboundQty += inboundItem;
+    inboundQty += inboundItemUnits;
     projectedUnits += projected;
     purchaseValue += physical * cost;
     saleValue += itemSaleValue;
