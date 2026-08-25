@@ -40,15 +40,19 @@ export function materializeTopRetailRouteInM2(m2: CanonicalList, sources: Parsed
     }
     const previousNetwork = text(typed(previous, 'top_network'));
     const currentNetwork = text(typed(row, 'top_network'));
+    const previousManager = text(typed(previous, 'manager_cnpj'));
+    const currentManager = text(typed(row, 'manager_cnpj'));
+    const previousGroup = text(typed(previous, 'group_code'));
+    const currentGroup = text(typed(row, 'group_code'));
     const previousTarget = Number(typed(previous, 'top_target') ?? 0);
     const currentTarget = Number(typed(row, 'top_target') ?? 0);
-    if (previousNetwork !== currentNetwork || Math.abs(previousTarget - currentTarget) > 0.01) {
+    if (previousNetwork !== currentNetwork || previousManager !== currentManager || previousGroup !== currentGroup || Math.abs(previousTarget - currentTarget) > 0.01) {
       warnings.push({
         code: 'TOP_ROUTE_DUPLICATE_CNPJ',
         severity: 'WARNING',
         source: ROUTE_SOURCE,
         file: '',
-        message: `CNPJ ${cnpj} aparece mais de uma vez no Roteiro Ativo com rede/meta divergente; a primeira linha foi preservada sem adivinhação.`,
+        message: `CNPJ ${cnpj} aparece mais de uma vez no Roteiro Ativo com gestor/agrupamento/rede/meta divergente; a primeira linha foi preservada sem adivinhação.`,
         action: 'Corrigir o Roteiro Ativo para manter um único vínculo mensal por CNPJ.',
       });
     }
@@ -84,6 +88,10 @@ export function materializeTopRetailRouteInM2(m2: CanonicalList, sources: Parsed
       coordinator_code: base.coordinator_code ?? rca?.coordinatorCode ?? null,
       coordinator_name: base.coordinator_name ?? rca?.coordinatorName ?? null,
       top_network: typed(route, 'top_network'),
+      top_banner: typed(route, 'banner'),
+      manager_cnpj: typed(route, 'manager_cnpj'),
+      top_group_code: typed(route, 'group_code'),
+      top_category: typed(route, 'top_category'),
       top_target: typed(route, 'top_target'),
       network_resolution_status: 'SOURCE_PRESERVED',
       source_lineage: lineage(base.source_lineage),

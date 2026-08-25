@@ -70,7 +70,7 @@ export function TopRetailNetworksPage() {
     : null;
 
   return <PanelPage title="Sell Out"><div className="panel-stack sellout-page-stack">
-    <div className="sellout-metric-grid">
+    <div className="sellout-metric-grid" style={{ width: '100%', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
       <MetricCard
         label="Meta Redes"
         value={model.totals.networkTarget === null ? 'Definir em Metas' : currency.format(model.totals.networkTarget)}
@@ -105,7 +105,7 @@ export function TopRetailNetworksPage() {
       <PanelSectionHeader
         eyebrow="TOP VAREJISTAS"
         title="Redes do Roteiro Ativo"
-        description="Somente redes e CNPJs do Roteiro Ativo mensal. Meta Top Varejista vem do roteiro; Faturado/A faturar vêm do M3. A Meta da Rede preserva a Meta Redes Geral e usa como peso a representatividade da Meta Top do cliente convertida pela relação Meta T&C ÷ Meta Indústria."
+        description="Somente CNPJs do Roteiro Ativo mensal, agrupados pelo CNPJ gestor/COD AGRUPAMENTO do próprio roteiro — nunca pelo texto do nome da rede. As metas Top dos CNPJs do mesmo gestor são somadas; Faturado/A faturar vêm do M3. A Meta da Rede preserva a Meta Redes Geral e usa como peso a representatividade da Meta Top agregada convertida pela relação Meta T&C ÷ Meta Indústria."
         action={<div className="panel-inline-actions"><button className="panel-secondary-button" onClick={() => exportTopNetworksExcel(model)}>Exportar Excel</button><button className="panel-secondary-button" onClick={() => exportTopNetworksJson(model)}>Exportar JSON</button></div>}
       />
       <div className="panel-table-wrap">
@@ -122,7 +122,7 @@ export function TopRetailNetworksPage() {
             <th className="is-right">Total</th>
             <th className="is-right">Participação</th>
           </tr></thead>
-          <tbody>{model.rows.map(row => <tr key={row.network}>
+          <tbody>{model.rows.map(row => <tr key={row.groupKey}>
             <td className="is-strong">{row.network}</td>
             <td className="is-right">{number.format(row.customers)}</td>
             <td className="is-right">{row.networkTarget === null ? '—' : currency.format(row.networkTarget)}</td>
