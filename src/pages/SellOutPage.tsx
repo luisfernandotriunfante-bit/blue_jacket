@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
+import { buildNetworkDashboardModel, redistributeNetworkAllocation } from '../canonical/networkDashboardModel';
 import { buildSellOutViewModel, buildTopNetworksViewModel, type SellOutRow, type SellOutViewModel } from '../canonical/operationalViewModels';
 import { exportSellOutExcel, exportSellOutJson, exportTopNetworksExcel, exportTopNetworksJson } from '../canonical/operationalExporters';
-import { sellOutTargets } from '../canonical/reportSettings';
+import { networkAllocationFor, networkTargetFor, sellOutTargets, setNetworkAllocationFor, setNetworkTargetFor } from '../canonical/reportSettings';
 import { buildSellOutDashboardModel, type SellOutDashboardModel } from '../canonical/sellOutDashboardModel';
 import type { CanonicalList } from '../canonical/types';
 import { useData } from '../store/DataContext';
 import { DailyMovementWindow } from '../ui/charts/DailyMovementWindow';
-import { PanelAlert, PanelCard, PanelEmptyState, PanelKpi, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
+import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 import './SellOutPage.css';
 
 export const SELL_OUT_TABS = [{ id: 'resumo', label: 'Resumo' }, { id: 'redes', label: 'Redes' }, { id: 'gerencial', label: 'Gerencial' }];
@@ -59,10 +60,92 @@ function Summary({ dashboard }: { dashboard: SellOutDashboardModel }) {
   </>;
 }
 
-function Networks({ model, m2, m3 }: { model: SellOutViewModel; m2: CanonicalList; m3: CanonicalList }) { const built = buildTopNetworksViewModel({ m2, m3, generatedAt: model.generatedAt }); const networks = { ...built, motorBuildId: model.motorBuildId, stagingManifestHash: model.stagingManifestHash, teamRows: model.vendorRows }; return <>
-  <div className="panel-grid panel-grid-auto"><PanelKpi label="Redes com venda" value={number.format(networks.totals.networks)} tone="purple" detail="Somente clientes que pertencem a uma rede" /><PanelKpi label="Clientes vinculados" value={number.format(networks.totals.customers)} detail="CNPJ positivo com rede" /><PanelKpi label="Total nas redes" value={currency.format(networks.totals.realized)} tone="blue" detail="Clientes sem rede ficam naturalmente fora desta visão" /><PanelKpi label="Meta de redes" value="—" detail="Parâmetro manual não estava materializado no backup" /></div>
-  <PanelCard><PanelSectionHeader eyebrow="TOP REDES" title="Realizado por rede" description="Rede vem de M2. Cliente sem rede não é erro e não é forçado para nenhuma rede." action={<><button className="panel-secondary-button" onClick={() => exportTopNetworksExcel(networks)}>Exportar Excel</button> <button className="panel-secondary-button" onClick={() => exportTopNetworksJson(networks)}>Exportar JSON</button></>} /><div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Rede</th><th>Clientes</th><th>Faturado</th><th>A faturar</th><th>Total</th><th>Participação</th><th>Status</th></tr></thead><tbody>{networks.rows.map(row => <tr key={row.network}><td>{row.network}</td><td>{number.format(row.customers)}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{percent.format(row.share)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div></PanelCard>
-</>; }
+function Networks({ model, m2, m3 }: { model: SellOutViewModel; m2: CanonicalList; m3: CanonicalList }) {
+  const [, setRevision] = useState(0);
+  const [draftTotal, setDraftTotal] = useState(() => networkTargetFor(model.competence)?.toString() ?? '');
+  const [draftTargets, setDraftTargets] = useState<Record<string, string>>({});
+  const manualTarget = networkTargetFor(model.competence);
+  const savedAllocation = networkAllocationFor(model.competence);
+  const built = buildTopNetworksViewModel({ m2, m3, generatedAt: model.generatedAt });
+  const baseNetworks = { ...built, motorBuildId: model.motorBuildId, stagingManifestHash: model.stagingManifestHash, teamRows: model.vendorRows };
+  const dashboard = buildNetworkDashboardModel({ base: baseNetworks, networkTarget: manualTarget, allocation: savedAllocation });
+  const networks = dashboard.operationalModel;
+  const attainment = manualTarget && manualTarget > 0 ? networks.totals.realized / manualTarget : null;
+  const mappedShare = model.totals.realized > 0 ? networks.totals.realized / model.totals.realized : null;
+  const invoicedShare = networks.totals.realized > 0 ? networks.totals.invoiced / networks.totals.realized : null;
+  const toInvoiceShare = networks.totals.realized > 0 ? networks.totals.toInvoice / networks.totals.realized : null;
+  const customerShare = model.totals.positiveCustomers > 0 ? networks.totals.customers / model.totals.positiveCustomers : null;
+  const sourceNetworks = new Set(m2.records.flatMap(row => [textValue(row.canonical_network), textValue(row.premise_network), textValue(row.top_network)].filter(Boolean) as string[])).size;
+  const networkCoverage = sourceNetworks > 0 ? networks.totals.networks / sourceNetworks : null;
+
+  const saveTotal = () => {
+    if (!draftTotal.trim()) {
+      setNetworkTargetFor(model.competence, null);
+      setDraftTotal('');
+      setDraftTargets({});
+      setRevision(value => value + 1);
+      return;
+    }
+    const parsed = Number(draftTotal.replace(',', '.'));
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    setNetworkTargetFor(model.competence, parsed);
+    setDraftTotal(String(parsed));
+    setDraftTargets({});
+    setRevision(value => value + 1);
+  };
+
+  const commitNetworkTarget = (network: string) => {
+    if (manualTarget === null) return;
+    const raw = draftTargets[network];
+    if (raw === undefined) return;
+    const parsed = Number(raw.replace(',', '.'));
+    if (!Number.isFinite(parsed) || parsed < 0) { setDraftTargets(current => { const next = { ...current }; delete next[network]; return next; }); return; }
+    const allocation = redistributeNetworkAllocation(manualTarget, networks.rows, network, parsed);
+    setNetworkAllocationFor(model.competence, allocation);
+    setDraftTargets({});
+    setRevision(value => value + 1);
+  };
+
+  const resetAllocation = () => {
+    setNetworkAllocationFor(model.competence, null);
+    setDraftTargets({});
+    setRevision(value => value + 1);
+  };
+
+  return <>
+    <div className="sellout-metric-grid">
+      <MetricCard label="Meta Redes" value={manualTarget === null ? 'Definir abaixo' : currency.format(manualTarget)} progress={attainment} progressLabel={attainment === null ? 'Meta não definida' : `${percent.format(attainment)} atingido`} info="Meta total das redes definida manualmente nesta competência. Não vem da Bússola nem de nenhuma planilha auxiliar." />
+      <MetricCard label="Total nas redes" value={currency.format(networks.totals.realized)} progress={mappedShare} progressLabel={mappedShare === null ? 'Sem Sell Out realizado' : `${percent.format(mappedShare)} do Sell Out`} info="Somente vendas do M3 cujos CNPJs possuem rede resolvida no M2." />
+      <MetricCard label="Faturado" value={currency.format(networks.totals.invoiced)} progress={invoicedShare} progressLabel={invoicedShare === null ? 'Sem venda em redes' : `${percent.format(invoicedShare)} das vendas em redes`} info="Parcela já faturada das vendas vinculadas a redes." />
+      <MetricCard label="A faturar" value={currency.format(networks.totals.toInvoice)} progress={toInvoiceShare} progressLabel={toInvoiceShare === null ? 'Sem venda em redes' : `${percent.format(toInvoiceShare)} das vendas em redes`} info="Parcela a faturar das vendas vinculadas a redes." />
+      <MetricCard label="Redes com venda" value={number.format(networks.totals.networks)} progress={networkCoverage} progressLabel={networkCoverage === null ? 'Sem redes mapeadas' : `${percent.format(networkCoverage)} das redes mapeadas`} info="Quantidade de redes do M2 que possuem movimento de venda no M3." />
+      <MetricCard label="Clientes vinculados" value={number.format(networks.totals.customers)} progress={customerShare} progressLabel={customerShare === null ? 'Sem positivação' : `${percent.format(customerShare)} dos positivados`} info="CNPJs positivos do M3 que possuem rede resolvida no M2." />
+    </div>
+
+    <PanelCard>
+      <PanelSectionHeader eyebrow="META DE REDES" title="Distribuição da meta" description="A meta total é manual. Sem ajuste individual, ela é distribuída pela participação atual de cada rede. Ao alterar uma rede, o saldo é redistribuído proporcionalmente entre todas as demais." action={<span className={`panel-badge${dashboard.allocationSource === 'MANUAL' ? ' panel-badge-red' : ''}`}>{dashboard.allocationSource === 'MANUAL' ? 'AJUSTE MANUAL ATIVO' : dashboard.allocationSource === 'PROPORTIONAL' ? 'DISTRIBUIÇÃO PROPORCIONAL' : 'META NÃO DEFINIDA'}</span>} />
+      <div className="panel-toolbar">
+        <label className="panel-field" style={{ minWidth: 260 }}>
+          <span className="panel-field-label">Meta total das redes · {model.competence}</span>
+          <input className="panel-input panel-input-currency" type="number" min="0" step="0.01" value={draftTotal} onChange={event => setDraftTotal(event.target.value)} placeholder="Ex.: 3000000" />
+        </label>
+        <div className="panel-inline-actions">
+          <button type="button" className="panel-secondary-button" onClick={saveTotal}>Salvar meta de redes</button>
+          <button type="button" className="panel-secondary-button" onClick={resetAllocation} disabled={manualTarget === null}>Redistribuir proporcional</button>
+        </div>
+      </div>
+    </PanelCard>
+
+    <PanelCard>
+      <PanelSectionHeader eyebrow="TOP REDES" title="Realizado por rede" description="Rede e Meta Tops vêm do M2; Faturado e A Faturar vêm do M3; Meta Redes vem somente da meta manual acima. Cliente sem rede não é forçado para nenhuma rede." action={<div className="panel-inline-actions"><button className="panel-secondary-button" onClick={() => exportTopNetworksExcel(networks)}>Exportar Excel</button><button className="panel-secondary-button" onClick={() => exportTopNetworksJson(networks)}>Exportar JSON</button></div>} />
+      <div className="panel-table-wrap"><table className="panel-table" style={{ minWidth: 1450 }}><thead><tr><th>Rede</th><th className="is-right">Clientes</th><th className="is-right">Participação</th><th className="is-right">Meta Redes</th><th className="is-right">Meta Tops</th><th className="is-right">Faturado</th><th className="is-right">A faturar</th><th className="is-right">Total</th><th className="is-right">% Meta Redes</th><th className="is-right">% Meta Tops</th><th className="is-right">Gap</th></tr></thead><tbody>{networks.rows.map(row => {
+        const topAchievement = row.topTarget && row.topTarget > 0 ? row.realized / row.topTarget : null;
+        const inputValue = draftTargets[row.network] ?? (row.networkTarget === null ? '' : String(row.networkTarget));
+        return <tr key={row.network}><td className="is-strong">{row.network}</td><td className="is-right">{number.format(row.customers)}</td><td className="is-right">{percent.format(row.share)}</td><td className="is-right"><input className="panel-input panel-input-compact panel-input-currency" style={{ width: 145 }} type="number" min="0" step="0.01" disabled={manualTarget === null} value={inputValue} onChange={event => setDraftTargets(current => ({ ...current, [row.network]: event.target.value }))} onBlur={() => commitNetworkTarget(row.network)} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></td><td className="is-right">{row.topTarget === null ? '—' : currency.format(row.topTarget)}</td><td className="is-right is-blue">{currency.format(row.invoiced)}</td><td className="is-right is-green">{currency.format(row.toInvoice)}</td><td className="is-right is-strong">{currency.format(row.realized)}</td><td className="is-right">{percentValue(row.achievement)}</td><td className="is-right">{percentValue(topAchievement)}</td><td className={`is-right${row.gap !== null && row.gap > 0 ? ' is-red' : ' is-green'}`}>{row.gap === null ? '—' : currency.format(row.gap)}</td></tr>;
+      })}</tbody></table></div>
+    </PanelCard>
+  </>;
+}
 
 function VendorTable({ rows }: { rows: SellOutRow[] }) { return <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>RCA</th><th>Cód. atual</th><th>Cód. antigo</th><th>Meta</th><th>Faturado</th><th>A faturar</th><th>Total</th><th>Clientes positivos</th><th>Positivação</th><th>Status</th></tr></thead><tbody>{rows.map(row => <tr key={row.key}><td>{row.rcaName ?? row.label}</td><td>{row.rcaCurrentCode ?? row.rawRcaCode ?? '—'}</td><td>{row.rcaLegacyCode ?? '—'}</td><td>{currency.format(row.salesTarget)}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{number.format(row.positiveCustomers)}</td><td>{percentValue(row.positivityAchievement)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div>; }
 
