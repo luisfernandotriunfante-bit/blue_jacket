@@ -1,5 +1,6 @@
 import { inflateSync } from 'fflate';
 import { APPROVED_CANONICAL_BUILD, resolveActiveCanonicalBundle } from './runtime';
+import { hasGeneratedCanonicalBuild, loadGeneratedCanonicalList, loadGeneratedCanonicalManifest } from './sourceImport';
 import type { CanonicalList } from './types';
 
 type ListId = CanonicalList['id'];
@@ -47,8 +48,8 @@ export async function importCanonicalBundle(file: File): Promise<BundleImportRes
   await put(bundle); const verified = await get(manifest.motorBuildId); if (!verified || verified.manifest.stagingManifestHash !== manifest.stagingManifestHash) throw new Error('BUNDLE_STORAGE_VERIFY_FAILED');
   return { motorBuildId: manifest.motorBuildId, stagingManifestHash: manifest.stagingManifestHash, rowCounts: manifest.rowCounts };
 }
-async function activeBundle() { const active = resolveActiveCanonicalBundle(); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); const bundle = await get(active.motorBuildId); if (!bundle || bundle.manifest.stagingManifestHash !== active.stagingManifestHash) throw new Error('CANONICAL_BUNDLE_UNAVAILABLE'); return bundle; }
-export async function loadImportedBundleManifest() { const bundle = await activeBundle(); return { status: 'VALID', generatedAt: bundle.manifest.createdAt, lists: Object.fromEntries(ids.map(id => [id, { rowCount: bundle.manifest.rowCounts[id], warnings: 0, errors: 0 }])) as Record<string, { rowCount: number; warnings: number; errors: number }> }; }
-export async function loadImportedCanonicalList(id: ListId): Promise<CanonicalList> { const bundle = await activeBundle(); const bytes = new Uint8Array(await bundle.zip.arrayBuffer()); const content = extract(bytes, entries(bytes), `${id}.json`); const list = JSON.parse(decoder.decode(content)) as CanonicalList; if (list.id !== id || list.records.length !== bundle.manifest.rowCounts[id]) throw new Error(`CANONICAL_LIST_INVALID:${id}`); return list; }
-export async function hasImportedCanonicalBundle(motorBuildId: string) { return Boolean(await get(motorBuildId)); }
+async function activeZipBundle() { const active = resolveActiveCanonicalBundle(); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); const bundle = await get(active.motorBuildId); if (!bundle || bundle.manifest.stagingManifestHash !== active.stagingManifestHash) throw new Error('CANONICAL_BUNDLE_UNAVAILABLE'); return bundle; }
+export async function loadImportedBundleManifest() { const active = resolveActiveCanonicalBundle(); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); if (await hasGeneratedCanonicalBuild(active.motorBuildId)) return loadGeneratedCanonicalManifest(active.motorBuildId); const bundle = await activeZipBundle(); return { status: 'VALID', generatedAt: bundle.manifest.createdAt, lists: Object.fromEntries(ids.map(id => [id, { rowCount: bundle.manifest.rowCounts[id], warnings: 0, errors: 0 }])) as Record<string, { rowCount: number; warnings: number; errors: number }> }; }
+export async function loadImportedCanonicalList(id: ListId): Promise<CanonicalList> { const active = resolveActiveCanonicalBundle(); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); if (await hasGeneratedCanonicalBuild(active.motorBuildId)) return loadGeneratedCanonicalList(active.motorBuildId, id); const bundle = await activeZipBundle(); const bytes = new Uint8Array(await bundle.zip.arrayBuffer()); const content = extract(bytes, entries(bytes), `${id}.json`); const list = JSON.parse(decoder.decode(content)) as CanonicalList; if (list.id !== id || list.records.length !== bundle.manifest.rowCounts[id]) throw new Error(`CANONICAL_LIST_INVALID:${id}`); return list; }
+export async function hasImportedCanonicalBundle(motorBuildId: string) { return Boolean(await get(motorBuildId)) || hasGeneratedCanonicalBuild(motorBuildId); }
 export const canonicalBundleTestHelpers = { entries, extract, sha256, encoder };
