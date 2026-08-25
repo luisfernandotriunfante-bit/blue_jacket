@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
 import { buildSellOutViewModel, buildTopNetworksViewModel, type SellOutRow, type SellOutViewModel } from '../canonical/operationalViewModels';
 import { exportSellOutExcel, exportSellOutJson, exportTopNetworksExcel, exportTopNetworksJson } from '../canonical/operationalExporters';
+import { sellOutTargets } from '../canonical/reportSettings';
+import { buildSellOutDashboardModel, type SellOutDashboardModel } from '../canonical/sellOutDashboardModel';
 import type { CanonicalList } from '../canonical/types';
 import { useData } from '../store/DataContext';
 import { DailyMovementWindow } from '../ui/charts/DailyMovementWindow';
@@ -16,41 +18,42 @@ const number = new Intl.NumberFormat('pt-BR');
 const percentValue = (input: number | null) => input === null ? '—' : percent.format(input);
 const textValue = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
 const numericValue = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : Number(value ?? 0) || 0;
-const isIsoDate = (value: string | null) => Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
 
 function Alerts({ model }: { model: SellOutViewModel }) { return <>{model.audits.map(audit => <PanelAlert key={audit.code} tone="warning"><strong>{audit.code}</strong> — {audit.message} {audit.code === 'UNRESOLVED_RCA_IN_VIEW' ? ' O código antigo pode estar vazio; esta pendência significa que existe venda do 8022 sem RCA atual resolvido em NOVOS RCAS. Veja Gerencial → Conciliação RCA.' : audit.action}</PanelAlert>)}</>; }
 
-function Summary({ model, m3 }: { model: SellOutViewModel; m3: CanonicalList }) {
-  const daily = useMemo(() => {
-    const totalPositivation = new Map<string, Set<string>>();
-    const invoicedPositivation = new Map<string, Set<string>>();
-    for (const fact of m3.records) {
-      if (fact.fact_type !== 'SALE') continue;
-      const date = textValue(fact.event_date);
-      if (!isIsoDate(date)) continue;
-      const customer = textValue(fact.customer_canonical_id) ?? textValue(fact.cnpj);
-      if (!customer) continue;
-      const totalSet = totalPositivation.get(date!) ?? new Set<string>();
-      totalSet.add(customer);
-      totalPositivation.set(date!, totalSet);
-      if ((textValue(fact.order_status) ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase() !== 'A FATURAR') {
-        const invoicedSet = invoicedPositivation.get(date!) ?? new Set<string>();
-        invoicedSet.add(customer);
-        invoicedPositivation.set(date!, invoicedSet);
-      }
-    }
-    return model.dailyRows
-      .filter(row => isIsoDate(row.date))
-      .map(row => ({ date: row.date, invoiced: row.invoiced, toInvoice: row.toInvoice, total: row.realized, invoicedPositivation: invoicedPositivation.get(row.date)?.size ?? 0, totalPositivation: totalPositivation.get(row.date)?.size ?? 0 }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-  }, [model.dailyRows, m3]);
-  const latest = daily.at(-1);
-  const latestLabel = latest ? new Date(`${latest.date}T12:00:00`).toLocaleDateString('pt-BR') : '—';
+function InfoHint({ text }: { text: string }) {
+  return <span className="sellout-info" tabIndex={0} aria-label={text}><span aria-hidden="true">i</span><span className="sellout-info-tooltip" role="tooltip">{text}</span></span>;
+}
+
+function MetricCard({ label, value, progress, info }: { label: string; value: string; progress: number | null; info: string }) {
+  const safeProgress = progress === null ? null : Math.max(0, Math.min(1, progress));
+  return <div className="sellout-metric-card">
+    <div className="sellout-metric-head"><span>{label}</span><InfoHint text={info} /></div>
+    <div className="sellout-metric-value">{value}</div>
+    <div className={`sellout-progress${safeProgress === null ? ' is-empty' : ''}`} aria-label={safeProgress === null ? 'Sem meta definida' : `Progresso ${percent.format(progress ?? 0)}`}>
+      <span style={{ width: safeProgress === null ? '0%' : `${safeProgress * 100}%` }} />
+    </div>
+  </div>;
+}
+
+function Summary({ dashboard }: { dashboard: SellOutDashboardModel }) {
+  const { operationalModel: model, totals } = dashboard;
+  const latestLabel = dashboard.latestDate ? new Date(`${dashboard.latestDate}T12:00:00`).toLocaleDateString('pt-BR') : '—';
+  const targetValue = (value: number | null, formatter: (value: number) => string) => value === null ? 'Definir em Metas' : formatter(value);
 
   return <>
-    <div className="panel-grid sellout-kpi-strip"><PanelKpi label="Faturado" value={currency.format(model.totals.invoiced)} tone="green" detail="Pedidos faturados" /><PanelKpi label="A faturar" value={currency.format(model.totals.toInvoice)} tone="amber" detail="Pedidos pendentes" /><PanelKpi label="Sell Out" value={currency.format(model.totals.realized)} tone="blue" detail={`${number.format(model.sourceFacts.sales)} movimentos`} /><PanelKpi label="Meta de vendas" value={currency.format(model.totals.salesTarget)} tone="purple" detail={`Atingimento ${percentValue(model.totals.salesAchievement)}`} /><PanelKpi label="Clientes positivos" value={number.format(model.totals.positiveCustomers)} detail={`Meta ${number.format(model.totals.positivityTarget)} · ${percentValue(model.totals.positivityAchievement)}`} /><PanelKpi label="Dias com venda" value={number.format(model.totals.daysWithSales)} detail="Dias movimentados" /></div>
-    <PanelCard><PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Gráficos e planilha usam a mesma janela móvel. A abertura sempre inicia no último dia válido do acompanhamento." action={<div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><span className="panel-badge">ÚLTIMO MOVIMENTO · {latestLabel}</span><button className="panel-button" onClick={() => exportSellOutExcel(model)}>Exportar Excel</button><button className="panel-button" onClick={() => exportSellOutJson(model)}>Exportar JSON</button></div>} />{daily.length ? <DailyMovementWindow data={daily} /> : <PanelEmptyState title="Sem movimento diário válido" description="As vendas permanecem no total do período, mas não existe data válida para montar a série diária." />}</PanelCard>
-    <PanelCard><PanelSectionHeader eyebrow="VENDA POR LINHA" title="Leitura por linhas" description="A estrutura fica abaixo do acompanhamento diário. As linhas comerciais oficiais ainda não foram definidas; nenhuma classificação nova será inventada nesta etapa." /><div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Linha</th><th>Faturado</th><th>A faturar</th><th>Sell Out</th><th>Participação</th><th>Status</th></tr></thead><tbody>{model.salesByLine.map(row => <tr key={row.line}><td>{row.line}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{percent.format(row.share)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div></PanelCard>
+    <div className="sellout-metric-grid">
+      <MetricCard label="Meta T&C" value={targetValue(totals.sellOutTarget, value => currency.format(value))} progress={totals.salesAchievement} info="Meta geral de T&C definida manualmente na aba Metas." />
+      <MetricCard label="Sell Out" value={currency.format(totals.realized)} progress={totals.salesAchievement} info="Total realizado do Sell Out no período ativo, vindo do mesmo view-model usado nos gráficos e na exportação." />
+      <MetricCard label="Faturado" value={currency.format(totals.invoiced)} progress={totals.invoicedShare} info="Parcela do Sell Out já faturada." />
+      <MetricCard label="Meta positivação" value={targetValue(totals.positivityTarget, value => number.format(value))} progress={totals.positivityAchievement} info="Meta geral de positivação definida manualmente na aba Metas." />
+      <MetricCard label="Positivado" value={number.format(totals.positiveCustomers)} progress={totals.positivityAchievement} info="Clientes distintos positivados no período ativo." />
+      <MetricCard label="Pos. faturada" value={number.format(totals.invoicedPositiveCustomers)} progress={totals.invoicedPositivityAchievement} info="Clientes distintos com venda já faturada no período ativo." />
+    </div>
+    <PanelCard><PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Gráficos e planilha usam a mesma janela móvel. A abertura sempre inicia no último dia válido do acompanhamento." action={<div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><span className="panel-badge">ÚLTIMO MOVIMENTO · {latestLabel}</span><button className="panel-button" onClick={() => exportSellOutExcel(model)}>Exportar Excel</button><button className="panel-button" onClick={() => exportSellOutJson(model)}>Exportar JSON</button></div>} />{dashboard.dailyRows.length ? <DailyMovementWindow data={dashboard.dailyRows} totals={{ realized: totals.realized, positiveCustomers: totals.positiveCustomers, invoicedPositiveCustomers: totals.invoicedPositiveCustomers }} /> : <PanelEmptyState title="Sem movimento diário válido" description="As vendas permanecem no total do período, mas não existe data válida para montar a série diária." />}</PanelCard>
+    <PanelCard><PanelSectionHeader eyebrow="VENDA POR LINHA" title="Leitura por linhas" description="As linhas comerciais oficiais ainda não foram definidas; nenhuma classificação nova será inventada nesta etapa." />
+      <div className="sellout-line-grid">{dashboard.lineRows.map(row => <MetricCard key={row.line} label={row.line} value={currency.format(row.realized)} progress={row.share} info={`Faturado: ${currency.format(row.invoiced)} · A faturar: ${currency.format(row.toInvoice)} · Status: ${row.resolutionStatus}`} />)}</div>
+    </PanelCard>
   </>;
 }
 
@@ -148,6 +151,8 @@ export function SellOutPage({ view = 'resumo' }: { view?: SellOutView }) {
   if (error) return <PanelPage title="Sell Out"><PanelAlert tone="error">Erro ao carregar o bundle ativo: {error}</PanelAlert></PanelPage>;
   if (!lists) return <PanelPage title="Sell Out"><PanelEmptyState variant="page" title="Carregando bundle canônico" description="Leitura passiva de M2 e M3; nenhum parser ou motor é acionado." /></PanelPage>;
   const baseModel = buildSellOutViewModel(lists);
-  const model: SellOutViewModel = { ...baseModel, motorBuildId: activeCanonical.motorBuildId, stagingManifestHash: activeCanonical.stagingManifestHash };
-  return <PanelPage title="Sell Out"><div className="panel-stack sellout-page-stack"><Alerts model={model} />{view === 'redes' ? <Networks model={model} m2={lists.m2} m3={lists.m3} /> : view === 'gerencial' ? <Management model={model} m2={lists.m2} m3={lists.m3} /> : <Summary model={model} m3={lists.m3} />}</div></PanelPage>;
+  const canonicalModel: SellOutViewModel = { ...baseModel, motorBuildId: activeCanonical.motorBuildId, stagingManifestHash: activeCanonical.stagingManifestHash };
+  const dashboard = buildSellOutDashboardModel({ base: canonicalModel, m3: lists.m3, targets: sellOutTargets() });
+  const model = dashboard.operationalModel;
+  return <PanelPage title="Sell Out"><div className="panel-stack sellout-page-stack"><Alerts model={model} />{view === 'redes' ? <Networks model={model} m2={lists.m2} m3={lists.m3} /> : view === 'gerencial' ? <Management model={model} m2={lists.m2} m3={lists.m3} /> : <Summary dashboard={dashboard} />}</div></PanelPage>;
 }
