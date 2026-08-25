@@ -9,6 +9,7 @@ import { LancamentosPage } from './pages/LancamentosPage'
 import { ConfiguracoesPage } from './pages/ConfiguracoesPage'
 import { MetasPage } from './pages/MetasPage'
 import { SELL_OUT_TABS, SellOutPage } from './pages/SellOutPage'
+import { TopRetailNetworksPage } from './pages/TopRetailNetworksPage'
 import { DocumentosPage } from './pages/DocumentosPage'
 import { CriacaoComboPage } from './pages/CriacaoComboPage'
 import { ClientesSortimentoPage, type ClientesSortimentoView } from './pages/ClientesSortimentoUnifiedPage'
@@ -101,7 +102,9 @@ function App() {
     <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
       {activeTab === 'estoque' ? (
         activeEstoqueTopTab === 'launches' ? <LancamentosPage /> : <EstoquePage view={estoqueView} />
-      ) : activeTab === 'sellout' ? <SellOutPage view={activeSellOutTopTab as 'resumo' | 'redes' | 'gerencial'} />
+      ) : activeTab === 'sellout' ? (
+        activeSellOutTopTab === 'redes' ? <TopRetailNetworksPage /> : <SellOutPage view={activeSellOutTopTab as 'resumo' | 'gerencial'} />
+      )
       : activeTab === 'sortimento' ? <ClientesSortimentoPage view={activeClientesTopTab} />
       : activeTab === 'atividades' && activeAtividadesTopTab === 'combo' ? <CriacaoComboPage />
       : activeTab === 'relatorios' ? <DocumentosPage />
