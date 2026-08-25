@@ -13,8 +13,9 @@ const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFracti
 const number = new Intl.NumberFormat('pt-BR');
 const percentValue = (input: number | null) => input === null ? '—' : percent.format(input);
 const textValue = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
+const numericValue = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : Number(value ?? 0) || 0;
 
-function Alerts({ model }: { model: SellOutViewModel }) { return <>{model.audits.map(audit => <PanelAlert key={audit.code} tone="warning"><strong>{audit.code}</strong> — {audit.message} {audit.code === 'UNRESOLVED_RCA_IN_VIEW' ? ' O código antigo pode estar vazio; esta pendência significa que o código atual do 8022 não foi resolvido de forma única no master atual. Veja o diagnóstico em Gerencial → Pendentes.' : audit.action}</PanelAlert>)}</>; }
+function Alerts({ model }: { model: SellOutViewModel }) { return <>{model.audits.map(audit => <PanelAlert key={audit.code} tone="warning"><strong>{audit.code}</strong> — {audit.message} {audit.code === 'UNRESOLVED_RCA_IN_VIEW' ? ' O código antigo pode estar vazio; esta pendência significa que existe venda do 8022 sem RCA atual resolvido em NOVOS RCAS. Veja Gerencial → Conciliação RCA.' : audit.action}</PanelAlert>)}</>; }
 
 function Summary({ model }: { model: SellOutViewModel }) { return <>
   <div className="panel-grid panel-grid-auto"><PanelKpi label="Faturado" value={currency.format(model.totals.invoiced)} tone="green" detail="SALE · status FATURADO" /><PanelKpi label="A faturar" value={currency.format(model.totals.toInvoice)} tone="amber" detail="SALE · status A FATURAR" /><PanelKpi label="Sell Out" value={currency.format(model.totals.realized)} tone="blue" detail={`${model.sourceFacts.sales} fatos SALE`} /><PanelKpi label="Meta de vendas" value={currency.format(model.totals.salesTarget)} tone="purple" detail={`Atingimento ${percentValue(model.totals.salesAchievement)}`} /><PanelKpi label="Clientes positivos" value={number.format(model.totals.positiveCustomers)} detail={`Meta ${number.format(model.totals.positivityTarget)} · ${percentValue(model.totals.positivityAchievement)}`} /><PanelKpi label="Dias com venda" value={number.format(model.totals.daysWithSales)} detail="Calendário dos fatos SALE" /></div>
@@ -31,14 +32,16 @@ function Networks({ model, m2, m3 }: { model: SellOutViewModel; m2: CanonicalLis
 
 function VendorTable({ rows }: { rows: SellOutRow[] }) { return <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>RCA</th><th>Cód. atual</th><th>Cód. antigo</th><th>Meta</th><th>Faturado</th><th>A faturar</th><th>Total</th><th>Clientes positivos</th><th>Positivação</th><th>Status</th></tr></thead><tbody>{rows.map(row => <tr key={row.key}><td>{row.rcaName ?? row.label}</td><td>{row.rcaCurrentCode ?? row.rawRcaCode ?? '—'}</td><td>{row.rcaLegacyCode ?? '—'}</td><td>{currency.format(row.salesTarget)}</td><td>{currency.format(row.invoiced)}</td><td>{currency.format(row.toInvoice)}</td><td>{currency.format(row.realized)}</td><td>{number.format(row.positiveCustomers)}</td><td>{percentValue(row.positivityAchievement)}</td><td>{row.resolutionStatus}</td></tr>)}</tbody></table></div>; }
 
-function PendingRcaDiagnostics({ model, m2, m3 }: { model: SellOutViewModel; m2: CanonicalList; m3: CanonicalList }) {
+function RcaReconciliation({ model, m2, m3 }: { model: SellOutViewModel; m2: CanonicalList; m3: CanonicalList }) {
   const diagnostics = useMemo(() => {
     const customers = new Map<string, Record<string, unknown>>();
     for (const customer of m2.records) { const cnpj = textValue(customer.cnpj); if (cnpj && !customers.has(cnpj)) customers.set(cnpj, customer); }
-    return model.vendorRows.filter(row => row.resolutionStatus === 'UNRESOLVED').map(row => {
+
+    const salesPending = model.vendorRows.flatMap(row => {
+      if (row.resolutionStatus !== 'UNRESOLVED') return [];
       const code = row.rawRcaCode ?? 'SEM_RCA';
       const sales = m3.records.filter(fact => fact.fact_type === 'SALE' && !textValue(fact.rca_canonical_id) && (textValue(fact.transaction_rca_code) ?? 'SEM_RCA') === code);
-      const reason = textValue(sales.find(fact => textValue(fact.audit_flags))?.audit_flags) ?? 'RCA_UNRESOLVED';
+      if (!sales.length) return [];
       const samples = new Map<string, string>();
       for (const sale of sales) {
         const cnpj = textValue(sale.cnpj);
@@ -48,26 +51,63 @@ function PendingRcaDiagnostics({ model, m2, m3 }: { model: SellOutViewModel; m2:
         samples.set(cnpj, `${name} · ${cnpj}`);
         if (samples.size >= 5) break;
       }
-      return { code, reason, lines: sales.length, realized: row.realized, positiveCustomers: row.positiveCustomers, samples: [...samples.values()] };
+      return [{ kind: 'NOVOS RCAS', code, rca: row.rcaName ?? null, supervisor: row.supervisorName ?? null, reason: 'Venda no 8022 sem RCA atual resolvido', salesTarget: row.salesTarget, positivityTarget: row.positivityTarget, saleLines: sales.length, realized: row.realized, action: 'Atualizar NOVOS RCAS', samples: [...samples.values()] }];
     });
+
+    const unresolvedTargets = m3.records.flatMap(fact => {
+      if (fact.fact_type !== 'TARGET' || textValue(fact.rca_canonical_id)) return [];
+      const salesTarget = numericValue(fact.sales_target);
+      const positivityTarget = numericValue(fact.positivity_target);
+      if (salesTarget <= 0 && positivityTarget <= 0) return [];
+      return [{ kind: 'NOVOS RCAS', code: textValue(fact.transaction_rca_code) ?? 'SEM_RCA', rca: null, supervisor: null, reason: 'Meta ativa na Bússola sem RCA correspondente no master atual', salesTarget, positivityTarget, saleLines: 0, realized: 0, action: 'Atualizar NOVOS RCAS', samples: [] as string[] }];
+    });
+
+    const targetsByCanonical = new Map<string, { salesTarget: number; positivityTarget: number }>();
+    for (const fact of m3.records) {
+      if (fact.fact_type !== 'TARGET') continue;
+      const id = textValue(fact.rca_canonical_id);
+      if (!id) continue;
+      const current = targetsByCanonical.get(id) ?? { salesTarget: 0, positivityTarget: 0 };
+      current.salesTarget += numericValue(fact.sales_target);
+      current.positivityTarget += numericValue(fact.positivity_target);
+      targetsByCanonical.set(id, current);
+    }
+
+    const activeRcas = new Map<string, { code: string; name: string | null; supervisor: string | null }>();
+    for (const customer of m2.records) {
+      const id = textValue(customer.rca_canonical_id);
+      if (!id || activeRcas.has(id)) continue;
+      activeRcas.set(id, { code: textValue(customer.rca_current_code) ?? id.replace(/^RCA:/, ''), name: textValue(customer.rca_name), supervisor: textValue(customer.coordinator_name) });
+    }
+    const bussolaPending = [...activeRcas.entries()].flatMap(([id, rca]) => {
+      const target = targetsByCanonical.get(id);
+      if (target && (target.salesTarget > 0 || target.positivityTarget > 0)) return [];
+      return [{ kind: 'BÚSSOLA', code: rca.code, rca: rca.name, supervisor: rca.supervisor, reason: target ? 'RCA ativo em NOVOS RCAS com meta zerada na Bússola' : 'RCA ativo em NOVOS RCAS sem linha de meta na Bússola', salesTarget: target?.salesTarget ?? 0, positivityTarget: target?.positivityTarget ?? 0, saleLines: 0, realized: 0, action: 'Atualizar Bússola', samples: [] as string[] }];
+    });
+
+    const dedup = new Map<string, (typeof salesPending)[number] | (typeof unresolvedTargets)[number] | (typeof bussolaPending)[number]>();
+    for (const item of [...salesPending, ...unresolvedTargets, ...bussolaPending]) dedup.set(`${item.action}|${item.code}|${item.reason}`, item);
+    return [...dedup.values()];
   }, [model, m2, m3]);
+
   if (!diagnostics.length) return null;
-  return <PanelCard><PanelSectionHeader eyebrow="CONCILIAÇÃO RCA" title="RCAs atuais pendentes no 8022" description="Ausência de código antigo NÃO gera esta pendência. Os códigos abaixo vieram diretamente do 8022 e não foram encontrados de forma única como RCA atual em NOVOS RCAS. Use os clientes abaixo para identificar o vendedor e corrigir o master sem chute." /><div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Cód. atual no 8022</th><th>Motivo</th><th>Linhas SALE</th><th>Sell Out</th><th>Clientes positivos</th><th>Clientes de referência</th></tr></thead><tbody>{diagnostics.map(item => <tr key={item.code}><td><strong>{item.code}</strong></td><td>{item.reason === 'AMBIGUOUS_RCA_CODE' ? 'Código duplicado/ambíguo em NOVOS RCAS' : item.reason === 'RCA_UNRESOLVED' ? 'Código atual ausente em NOVOS RCAS' : item.reason}</td><td>{number.format(item.lines)}</td><td>{currency.format(item.realized)}</td><td>{number.format(item.positiveCustomers)}</td><td>{item.samples.length ? item.samples.join(' | ') : 'Sem cliente identificado para conciliação'}</td></tr>)}</tbody></table></div></PanelCard>;
+  return <PanelCard><PanelSectionHeader eyebrow="CONCILIAÇÃO RCA" title="Pendências entre 8022, NOVOS RCAS e Bússola" description="Regra oficial: Bússola zerada + RCA fora de NOVOS RCAS é inativo e não aparece. Meta ativa sem RCA exige ajuste em NOVOS RCAS. RCA ativo sem meta ou com meta zerada exige ajuste na Bússola." /><div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>RCA</th><th>Cód.</th><th>Supervisor</th><th>Diagnóstico</th><th>Meta venda</th><th>Meta posit.</th><th>Linhas SALE</th><th>Sell Out</th><th>Ação</th><th>Referência</th></tr></thead><tbody>{diagnostics.map((item, index) => <tr key={`${item.action}:${item.code}:${index}`}><td>{item.rca ?? '—'}</td><td><strong>{item.code}</strong></td><td>{item.supervisor ?? '—'}</td><td>{item.reason}</td><td>{currency.format(item.salesTarget)}</td><td>{number.format(item.positivityTarget)}</td><td>{number.format(item.saleLines)}</td><td>{currency.format(item.realized)}</td><td><strong>{item.action}</strong></td><td>{item.samples.length ? item.samples.join(' | ') : '—'}</td></tr>)}</tbody></table></div></PanelCard>;
 }
 
 function Management({ model, m2, m3 }: { model: SellOutViewModel; m2: CanonicalList; m3: CanonicalList }) {
   const [status, setStatus] = useState<'ALL' | 'RESOLVED' | 'UNRESOLVED'>('ALL');
   const [supervisor, setSupervisor] = useState('ALL');
-  const supervisors = useMemo(() => [...new Map(model.vendorRows.map(row => { const key = row.supervisorCode ?? row.supervisorName ?? 'SEM_SUPERVISOR'; return [key, { key, code: row.supervisorCode, name: row.supervisorName }]; })).values()].sort((a, b) => (a.name ?? 'ZZZ').localeCompare(b.name ?? 'ZZZ') || (a.code ?? '').localeCompare(b.code ?? '')), [model]);
-  const filtered = useMemo(() => model.vendorRows.filter(row => (status === 'ALL' || row.resolutionStatus === status) && (supervisor === 'ALL' || (row.supervisorCode ?? row.supervisorName ?? 'SEM_SUPERVISOR') === supervisor)), [status, supervisor, model]);
+  const operationalRows = useMemo(() => model.vendorRows.filter(row => row.resolutionStatus === 'RESOLVED' || row.realized > 0 || row.salesTarget > 0 || row.positivityTarget > 0), [model]);
+  const supervisors = useMemo(() => [...new Map(operationalRows.map(row => { const key = row.supervisorCode ?? row.supervisorName ?? 'SEM_SUPERVISOR'; return [key, { key, code: row.supervisorCode, name: row.supervisorName }]; })).values()].sort((a, b) => (a.name ?? 'ZZZ').localeCompare(b.name ?? 'ZZZ') || (a.code ?? '').localeCompare(b.code ?? '')), [operationalRows]);
+  const filtered = useMemo(() => operationalRows.filter(row => (status === 'ALL' || row.resolutionStatus === status) && (supervisor === 'ALL' || (row.supervisorCode ?? row.supervisorName ?? 'SEM_SUPERVISOR') === supervisor)), [status, supervisor, operationalRows]);
   const groups = useMemo(() => {
     const map = new Map<string, { code: string | null; name: string | null; rows: SellOutRow[] }>();
     for (const row of filtered) { const key = row.supervisorCode ?? row.supervisorName ?? 'SEM_SUPERVISOR'; const group = map.get(key) ?? { code: row.supervisorCode, name: row.supervisorName, rows: [] }; group.rows.push(row); map.set(key, group); }
     return [...map.values()].sort((a, b) => (a.name ?? 'ZZZ').localeCompare(b.name ?? 'ZZZ') || (a.code ?? '').localeCompare(b.code ?? ''));
   }, [filtered]);
   return <>
-    <PendingRcaDiagnostics model={model} m2={m2} m3={m3} />
-    <PanelCard><PanelSectionHeader eyebrow="GERENCIAL" title="Vendedores separados por supervisor" description="Nome, código RCA atual e código legado vêm do mesmo master NOVOS RCAS usado pelo motor canônico." action={<div style={{display:'flex',gap:12,flexWrap:'wrap'}}><label className="panel-muted">Supervisor <select value={supervisor} onChange={event => setSupervisor(event.target.value)}><option value="ALL">Todos</option>{supervisors.map(item => <option key={item.key} value={item.key}>{item.name ?? 'Sem supervisor'}{item.code ? ` · ${item.code}` : ''}</option>)}</select></label><label className="panel-muted">RCA <select value={status} onChange={event => setStatus(event.target.value as typeof status)}><option value="ALL">Todos</option><option value="RESOLVED">Resolvidos</option><option value="UNRESOLVED">Pendentes</option></select></label></div>} /></PanelCard>
+    <RcaReconciliation model={model} m2={m2} m3={m3} />
+    <PanelCard><PanelSectionHeader eyebrow="GERENCIAL" title="Vendedores separados por supervisor" description="RCA inativo que ficou na Bússola com metas zeradas e não existe mais em NOVOS RCAS é retirado da visualização operacional." action={<div style={{display:'flex',gap:12,flexWrap:'wrap'}}><label className="panel-muted">Supervisor <select value={supervisor} onChange={event => setSupervisor(event.target.value)}><option value="ALL">Todos</option>{supervisors.map(item => <option key={item.key} value={item.key}>{item.name ?? 'Sem supervisor'}{item.code ? ` · ${item.code}` : ''}</option>)}</select></label><label className="panel-muted">RCA <select value={status} onChange={event => setStatus(event.target.value as typeof status)}><option value="ALL">Todos</option><option value="RESOLVED">Resolvidos</option><option value="UNRESOLVED">Pendentes</option></select></label></div>} /></PanelCard>
     {groups.map(group => <PanelCard key={group.code ?? group.name ?? 'SEM_SUPERVISOR'}><PanelSectionHeader eyebrow="SUPERVISOR" title={`${group.name ?? 'Sem supervisor'}${group.code ? ` · Cód. ${group.code}` : ''}`} description={`${number.format(group.rows.length)} RCA(s) nesta supervisão`} /><VendorTable rows={group.rows} /></PanelCard>)}
   </>;
 }
