@@ -76,7 +76,7 @@ function resolvedLine(sale: RecordValue, item: RecordValue | undefined) {
 export function buildSellOutCommercialLineRows({ m1, m3, sellOutTotal }: { m1: CanonicalList; m3: CanonicalList; sellOutTotal: number }) {
   const indexes = itemIndexes(m1);
   const buckets = new Map<SellOutCommercialLine, { invoiced: number; toInvoice: number; realized: number }>(
-    SELL_OUT_COMMERCIAL_LINES.map(line => [line, { invoiced: 0, toInvoice: 0, realized: 0 }]),
+    SELL_OUT_COMMERCIAL_LINES.map(line => [line, { invoiced: 0, toInvoice: 0, realized: 0 }] as const),
   );
   let unclassifiedValue = 0;
 
