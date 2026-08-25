@@ -115,7 +115,8 @@ function invoiceKey(value: unknown) {
   if (!raw) return null;
   const numericTokens = raw.match(/\d+/g) ?? [];
   if (numericTokens.length) {
-    const primary = numericTokens.reduce((best, token) => token.length > best.length ? token : best, numericTokens[0]);
+    let primary = numericTokens[0] ?? '';
+    for (const token of numericTokens) if (token.length > primary.length) primary = token;
     return primary.replace(/^0+(?=\d)/, '');
   }
   const comparable = normalized(raw).replace(/[^A-Z0-9]/g, '');
