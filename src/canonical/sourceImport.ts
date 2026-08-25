@@ -10,7 +10,10 @@ const STAGING_STORE = 'staging';
 const BUILDS_STORE = 'builds';
 const LISTS_STORE = 'lists';
 const DEFAULT_PARSER_VERSION = 'browser-v1';
-const SOURCE_PARSER_VERSIONS: Record<string, string> = { '310 total 2026.txt': 'browser-v2-rca310' };
+const SOURCE_PARSER_VERSIONS: Record<string, string> = {
+  '310 total 2026.txt': 'browser-v2-rca310',
+  "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v2-route-sheet-scope',
+};
 const SCHEMA_VERSION = 'v1';
 const ENGINE_VERSION = 'browser-stage3-top-retail-v3';
 const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
