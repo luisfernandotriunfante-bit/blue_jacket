@@ -42,9 +42,33 @@ test('dashboard materializa positivação faturada e série diária fora da tela
   assert.equal(dashboard.totals.realized, 200);
 });
 
-test('dashboard preserva linhas prontas do view-model sem recalcular na página', () => {
+test('dashboard preserva linhas prontas do view-model quando M1 não é fornecido', () => {
   const dashboard = buildSellOutDashboardModel({ base, m3, targets: { sellOutTarget: null, positivityTarget: null } });
   assert.deepEqual(dashboard.lineRows, base.salesByLine);
   assert.equal(dashboard.totals.salesAchievement, null);
   assert.equal(dashboard.totals.positivityAchievement, null);
+});
+
+test('dashboard materializa as cinco divisões históricas antes da tela e da exportação', () => {
+  const m1: CanonicalList = {
+    id: 'M1_ITEM_ESTOQUE', generatedAt: base.generatedAt, competence: base.competence, snapshotDate: '2026-08-25', sources: ['286'], warnings: [], errors: [],
+    records: [
+      { item_canonical_id: 'I:1', winthor_code: '1', description_internal: 'CD COLGATE TOTAL 12' },
+      { item_canonical_id: 'I:2', winthor_code: '2', description_internal: 'ESCOVA DENTAL COLGATE' },
+      { item_canonical_id: 'I:3', winthor_code: '3', description_internal: 'SABONETE PROTEX' },
+      { item_canonical_id: 'I:4', winthor_code: '4', description_internal: 'SHAMPOO PALMOLIVE' },
+      { item_canonical_id: 'I:5', winthor_code: '5', description_internal: 'PINHO SOL ORIGINAL' },
+    ],
+  };
+  const sales: CanonicalList = {
+    id: 'M3_MOVIMENTO_VENDAS', generatedAt: base.generatedAt, competence: base.competence, snapshotDate: '2026-08-25', sources: ['8022'], warnings: [], errors: [],
+    records: [1, 2, 3, 4, 5].map(code => ({ fact_type: 'SALE', event_date: '2026-08-25', customer_canonical_id: `C:${code}`, order_status: code === 5 ? 'A FATURAR' : 'FATURADO', winthor_product_code: String(code), value: 100 })),
+  };
+  const lineBase: SellOutViewModel = { ...base, sourceFacts: { sales: 5, targets: 0 }, totals: { ...base.totals, invoiced: 400, toInvoice: 100, realized: 500, positiveCustomers: 5 }, dailyRows: [{ date: '2026-08-25', invoiced: 400, toInvoice: 100, realized: 500 }] };
+  const dashboard = buildSellOutDashboardModel({ base: lineBase, m1, m3: sales, targets: { sellOutTarget: 1000, positivityTarget: 10 } });
+  assert.deepEqual(dashboard.lineRows.map(row => row.line), ['Creme Dental', 'Esc + Enx + Fio', 'Sabonetes', 'Hair', 'Limpeza']);
+  assert.deepEqual(dashboard.lineRows.map(row => row.realized), [100, 100, 100, 100, 100]);
+  assert.equal(dashboard.lineRows[4].toInvoice, 100);
+  assert.equal(dashboard.lineUnclassifiedValue, 0);
+  assert.deepEqual(dashboard.operationalModel.salesByLine, dashboard.lineRows);
 });
