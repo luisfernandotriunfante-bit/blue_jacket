@@ -1,0 +1,70 @@
+.sellout-page-stack {
+  gap: 20px;
+}
+
+.sellout-kpi-strip {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  background: var(--panel-separator);
+  border: 1px solid var(--panel-card-border);
+  border-radius: 14px;
+}
+
+.sellout-kpi-strip .panel-kpi {
+  min-height: 106px;
+  padding: 16px 18px;
+  border: 0;
+  border-radius: 0;
+  background: rgba(20, 24, 31, .92);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.sellout-kpi-strip .panel-kpi-glow {
+  display: none;
+}
+
+.sellout-kpi-strip .panel-kpi-label,
+.sellout-kpi-strip .panel-kpi-red .panel-kpi-label,
+.sellout-kpi-strip .panel-kpi-blue .panel-kpi-label,
+.sellout-kpi-strip .panel-kpi-green .panel-kpi-label,
+.sellout-kpi-strip .panel-kpi-purple .panel-kpi-label,
+.sellout-kpi-strip .panel-kpi-amber .panel-kpi-label {
+  margin-bottom: 7px;
+  color: var(--panel-muted-light);
+  font-size: .68rem;
+  letter-spacing: .09em;
+}
+
+.sellout-kpi-strip .panel-kpi-value {
+  font-size: clamp(1.35rem, 1.75vw, 1.95rem);
+  letter-spacing: -.025em;
+  line-height: 1.05;
+}
+
+.sellout-kpi-strip .panel-kpi-detail {
+  margin-top: 7px;
+  color: var(--panel-muted);
+  font-size: .72rem;
+  line-height: 1.25;
+}
+
+@media (max-width: 1320px) {
+  .sellout-kpi-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .sellout-kpi-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .sellout-kpi-strip {
+    grid-template-columns: 1fr;
+  }
+}

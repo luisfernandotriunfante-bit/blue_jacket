@@ -17,3 +17,13 @@ test('exportações do Sell Out permanecem junto ao movimento', () => {
   assert.ok(excelIndex > movementIndex);
   assert.ok(jsonIndex > movementIndex);
 });
+
+test('Sell Out não expõe identificador técnico do build no cabeçalho', () => {
+  assert.equal(page.includes('metricLabel="Build canônico"'), false);
+  assert.equal(page.includes('BUILD ATIVO:'), false);
+  assert.equal(page.includes('PanelAlert tone="success"'), false);
+});
+
+test('Resumo usa faixa compacta própria para os KPIs', () => {
+  assert.ok(page.includes('className="panel-grid sellout-kpi-strip"'));
+});
