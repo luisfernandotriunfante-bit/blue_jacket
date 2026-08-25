@@ -75,33 +75,45 @@ test('Carteira converte caixas em unidades por Un/CX e não usa descrição', ()
   assert.equal(model.dataQuality.inboundUnmappedRows, 0);
 });
 
-test('218 reconcilia por NF + item e não baixa outro produto da mesma NF', () => {
+test('218 baixa todo Bill Qty da NF recebida, inclusive linhas cujo item não foi mapeado', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),
     { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '00000123-1', order_qty: 0, bill_qty: 10, inbound_net_value: 100 },
-    { fact_type: 'INBOUND_ORDER', industry_material: '61052479', invoice_number: '00000123-1', order_qty: 0, bill_qty: 5, inbound_net_value: 50 },
+    { fact_type: 'INBOUND_ORDER', industry_material: 'SEM-MAPEAMENTO', invoice_number: '00000123-1', order_qty: 0, bill_qty: 5, inbound_net_value: 50 },
     { fact_type: 'RECEIPT', invoice_number: '123', winthor_product_code: '1', received_units: 60 },
   ]);
   const model = buildStockOverviewModel({ m1, m3: localM3, m4 });
   assert.equal(model.totals.grossInboundQty, 15);
-  assert.equal(model.totals.receivedInboundQty, 10);
-  assert.equal(model.totals.totalInboundQty, 5);
-  assert.equal(model.totals.inboundValue, 50);
+  assert.equal(model.totals.receivedInboundQty, 15);
+  assert.equal(model.totals.totalInboundQty, 0);
+  assert.equal(model.totals.inboundValue, 0);
   assert.equal(model.totals.matchedReceiptInvoices218, 1);
-  assert.equal(model.totals.inboundQty, 60);
+  assert.equal(model.totals.inboundQty, 0);
 });
 
-test('218 baixa parcialmente Bill Qty conforme unidades recebidas e Un/CX', () => {
+test('218 considera a NF recebida integralmente e preserva apenas Order Qty em aberto', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),
-    { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '123', order_qty: 0, bill_qty: 10, inbound_net_value: 100 },
+    { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '123', order_qty: 7, bill_qty: 10, inbound_net_value: 170 },
     { fact_type: 'RECEIPT', invoice_number: '123', winthor_product_code: '1', received_units: 30 },
   ]);
   const model = buildStockOverviewModel({ m1, m3: localM3, m4 });
-  assert.equal(model.totals.receivedInboundQty, 5);
-  assert.equal(model.totals.totalInboundQty, 5);
-  assert.equal(model.totals.inboundValue, 50);
-  assert.equal(model.totals.inboundQty, 30);
+  assert.equal(model.totals.receivedInboundQty, 10);
+  assert.equal(model.totals.totalInboundQty, 7);
+  assert.equal(model.totals.inboundValue, 70);
+  assert.equal(model.totals.inboundQty, 42);
+});
+
+test('normalização de NF encontra o maior bloco numérico quando série vem antes ou depois', () => {
+  const localM3 = list('M3_MOVIMENTO_VENDAS', [
+    ...m3.records.filter(row => row.fact_type === 'SALE'),
+    { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '001/00000123', order_qty: 0, bill_qty: 10, inbound_net_value: 100 },
+    { fact_type: 'RECEIPT', invoice_number: '00000123-1', winthor_product_code: '1', received_units: 60 },
+  ]);
+  const model = buildStockOverviewModel({ m1, m3: localM3, m4 });
+  assert.equal(model.totals.totalInboundQty, 0);
+  assert.equal(model.totals.inboundValue, 0);
+  assert.equal(model.totals.matchedReceiptInvoices218, 1);
 });
 
 test('12.322 MERCHANDISE baixa Bill Qty no grão de NF e SUPPLIES não baixa Carteira', () => {
