@@ -1,3 +1,4 @@
+import { buildSellOutCommercialLineRows } from './commercialLines';
 import type { CanonicalList } from './types';
 import type { SellOutViewModel } from './operationalViewModels';
 
@@ -33,6 +34,7 @@ export type SellOutDashboardModel = {
     invoicedPositivityAchievement: number | null;
   };
   lineRows: SellOutViewModel['salesByLine'];
+  lineUnclassifiedValue: number;
 };
 
 type RecordValue = Record<string, unknown>;
@@ -41,7 +43,7 @@ const normalized = (value: unknown) => text(value)?.normalize('NFD').replace(/[\
 const validTarget = (value: number | null) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 const isIsoDate = (value: string | null) => Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
 
-export function buildSellOutDashboardModel({ base, m3, targets }: { base: SellOutViewModel; m3: CanonicalList; targets: SellOutDashboardTargets }): SellOutDashboardModel {
+export function buildSellOutDashboardModel({ base, m1, m3, targets }: { base: SellOutViewModel; m1?: CanonicalList; m3: CanonicalList; targets: SellOutDashboardTargets }): SellOutDashboardModel {
   const sellOutTarget = validTarget(targets.sellOutTarget);
   const positivityTarget = validTarget(targets.positivityTarget);
   const totalPositivation = new Map<string, Set<string>>();
@@ -85,6 +87,12 @@ export function buildSellOutDashboardModel({ base, m3, targets }: { base: SellOu
   const positivityAchievement = positivityTarget && positivityTarget > 0 ? base.totals.positiveCustomers / positivityTarget : null;
   const invoicedPositivityAchievement = positivityTarget && positivityTarget > 0 ? invoicedPositiveCustomers.size / positivityTarget : null;
   const invoicedShare = base.totals.realized > 0 ? base.totals.invoiced / base.totals.realized : null;
+  const preparedLines = m1
+    ? buildSellOutCommercialLineRows({ m1, m3, sellOutTotal: base.totals.realized })
+    : {
+        rows: base.salesByLine,
+        unclassifiedValue: base.salesByLine.filter(row => row.resolutionStatus === 'UNCLASSIFIED').reduce((sum, row) => sum + row.realized, 0),
+      };
 
   const operationalModel: SellOutViewModel = {
     ...base,
@@ -95,6 +103,7 @@ export function buildSellOutDashboardModel({ base, m3, targets }: { base: SellOu
       salesAchievement,
       positivityAchievement,
     },
+    salesByLine: preparedLines.rows,
   };
 
   return {
@@ -114,6 +123,7 @@ export function buildSellOutDashboardModel({ base, m3, targets }: { base: SellOu
       positivityAchievement,
       invoicedPositivityAchievement,
     },
-    lineRows: base.salesByLine,
+    lineRows: preparedLines.rows,
+    lineUnclassifiedValue: preparedLines.unclassifiedValue,
   };
 }
