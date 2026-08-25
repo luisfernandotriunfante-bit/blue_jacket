@@ -10,15 +10,28 @@ const route: ParsedSource = {
   source: "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx",
   fileName: 'roteiro.xlsx',
   sheet: 'Roteiro Ativo',
-  rows: [{ cnpj: rt('00111111000100'), top_network: rt('REDE TOP'), top_target: rt(1234.56), store_name: rt('LOJA TOP') }],
+  rows: [{
+    cnpj: rt('00111111000100'),
+    top_network: rt('REDE TOP'),
+    banner: rt('BANDEIRA TOP'),
+    manager_cnpj: rt('00999999000100'),
+    group_code: rt('GRUPO TOP'),
+    top_category: rt('OURO'),
+    top_target: rt(1234.56),
+    store_name: rt('LOJA TOP'),
+  }],
   audits: [],
 };
 
-test('Roteiro Ativo entra no M2 persistido sem substituir a rede de Premissas', () => {
+test('Roteiro Ativo entra no M2 persistido sem substituir a rede de Premissas e preserva o gestor', () => {
   const result = materializeTopRetailRouteInM2(m2, [route]);
   const customer = result.records.find(row => row.cnpj === '00111111000100')!;
   assert.equal(customer.premise_network, 'REDE PREMISSAS');
   assert.equal(customer.top_network, 'REDE TOP');
+  assert.equal(customer.top_banner, 'BANDEIRA TOP');
+  assert.equal(customer.manager_cnpj, '00999999000100');
+  assert.equal(customer.top_group_code, 'GRUPO TOP');
+  assert.equal(customer.top_category, 'OURO');
   assert.equal(customer.top_target, 1234.56);
   assert.ok(result.sources.includes("08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"));
 });
