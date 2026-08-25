@@ -1,5 +1,19 @@
 .stock-page-stack { gap: 20px; }
 
+.stock-metric-section {
+  display: grid;
+  gap: 8px;
+}
+
+.stock-metric-section-head {
+  padding: 0 2px;
+  color: var(--panel-muted);
+  font-size: .68rem;
+  font-weight: var(--panel-weight-black);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
 .stock-metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -89,7 +103,7 @@
   z-index: 30;
   right: -2px;
   bottom: calc(100% + 8px);
-  width: min(290px, 70vw);
+  width: min(320px, 72vw);
   padding: 9px 10px;
   border: 1px solid var(--panel-card-border);
   border-radius: 9px;
@@ -114,11 +128,11 @@
   transform: translateY(0);
 }
 
-.stock-health-grid {
+.stock-overview-main-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.12fr) minmax(360px, .88fr);
+  grid-template-columns: minmax(390px, .8fr) minmax(0, 1.2fr);
   gap: 18px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .stock-alert-list {
@@ -163,38 +177,132 @@
   line-height: 1.45;
 }
 
-.stock-treemap {
-  min-height: 330px;
-  display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-auto-rows: 72px;
-  gap: 8px;
-}
-
-.stock-treemap-cell {
-  min-width: 0;
-  overflow: hidden;
-  padding: 13px;
+.stock-data-quality {
+  margin-top: 14px;
+  padding-top: 12px;
   display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  border: 1px solid var(--panel-card-border);
-  border-radius: 14px;
-  background: linear-gradient(145deg, rgba(31, 36, 45, .95), rgba(18, 22, 29, .95));
-}
-
-.stock-treemap-cell strong {
-  color: var(--panel-text);
-  font-size: .86rem;
-}
-
-.stock-treemap-cell span {
-  margin-top: 4px;
-  color: var(--panel-muted-light);
+  flex-wrap: wrap;
+  gap: 7px 14px;
+  border-top: 1px solid var(--panel-card-border);
+  color: var(--panel-muted);
   font-size: .68rem;
 }
 
+.stock-data-quality strong {
+  width: 100%;
+  color: var(--panel-muted-light);
+  font-size: .69rem;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.stock-line-treemap-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.stock-line-treemap {
+  min-width: 0;
+  padding: 11px;
+  border: 1px solid var(--panel-card-border);
+  border-radius: 15px;
+  background: rgba(9, 13, 19, .38);
+}
+
+.stock-line-treemap:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.stock-line-treemap-head {
+  margin-bottom: 9px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stock-line-treemap-head > div {
+  display: grid;
+  gap: 2px;
+}
+
+.stock-line-treemap-head strong {
+  color: var(--panel-text);
+  font-size: .8rem;
+}
+
+.stock-line-treemap-head span {
+  color: var(--panel-muted);
+  font-size: .64rem;
+}
+
+.stock-item-treemap {
+  min-height: 190px;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: 48px;
+  grid-auto-flow: dense;
+  gap: 5px;
+}
+
+.stock-item-tile {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 7px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 9px;
+  color: rgba(255, 255, 255, .96);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
+}
+
+.stock-item-tile[data-aggregate='true'] {
+  border-style: dashed;
+}
+
+.stock-item-tile strong,
+.stock-item-tile span,
+.stock-item-tile small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stock-item-tile strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: .65rem;
+  line-height: 1.12;
+}
+
+.stock-item-tile span {
+  margin-top: 3px;
+  white-space: nowrap;
+  font-size: .66rem;
+  font-weight: var(--panel-weight-heavy);
+}
+
+.stock-item-tile small {
+  margin-top: 2px;
+  white-space: nowrap;
+  opacity: .76;
+  font-size: .56rem;
+}
+
+.stock-line-empty {
+  min-height: 110px;
+  display: grid;
+  place-items: center;
+  color: var(--panel-muted);
+  font-size: .72rem;
+}
+
 .stock-analysis-note {
+  margin-top: 12px;
   display: flex;
   gap: 8px 18px;
   flex-wrap: wrap;
@@ -204,10 +312,15 @@
 
 @media (max-width: 1350px) {
   .stock-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .stock-health-grid { grid-template-columns: 1fr; }
+  .stock-overview-main-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 850px) {
+  .stock-line-treemap-grid { grid-template-columns: 1fr; }
+  .stock-line-treemap:last-child:nth-child(odd) { grid-column: auto; }
 }
 
 @media (max-width: 700px) {
   .stock-metric-grid { grid-template-columns: 1fr; }
-  .stock-treemap { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .stock-item-treemap { grid-template-columns: repeat(8, minmax(0, 1fr)); }
 }
