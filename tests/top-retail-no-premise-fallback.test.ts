@@ -1,0 +1,1 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';const model=fs.readFileSync(new URL('../src/canonical/topRetailNetworksModel.ts',import.meta.url),'utf8');test('modelo Top Varejistas não usa fallback de rede',()=>{assert.doesNotMatch(model,/premise_network|canonical_network|\?\?.*top_network/);});
