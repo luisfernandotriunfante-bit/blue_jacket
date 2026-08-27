@@ -260,7 +260,7 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const inbound = m3Records.filter(fact => fact.fact_type === 'INBOUND_ORDER');
   const receipts218 = m3Records.filter(fact => fact.fact_type === 'RECEIPT');
   const historical = m4Records.filter(fact => fact.row_type === 'TRANSACTION_379');
-  const receipts12322 = m4Records.filter(fact => fact.row_type === 'RECEIPT_12322' && normalized(fact.receipt_class) === 'MERCHANDISE');
+  const receipts12322 = m4Records.filter(fact => fact.row_type === 'RECEIPT_12322');
 
   const indexes = buildItemIndexes(m1);
   augmentSkuAliasesFromSales(sales, indexes);
@@ -332,19 +332,21 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     const item = currentItemForFact(fact, indexes);
     const itemId = item ? itemKey(item) : null;
 
+    const matchedIn12322 = Boolean(invoice && receiptInvoices12322.has(invoice));
+    const matchedIn218 = Boolean(invoice && receiptInvoices218.has(invoice));
+    const invoiceAlreadyReceived = matchedIn12322 || matchedIn218;
     let receivedBillQty = 0;
-    if (billQty > 0 && invoice && receiptInvoices12322.has(invoice)) {
+    if (billQty > 0 && matchedIn12322) {
       receivedBillQty = billQty;
-      matched12322.add(invoice);
-    } else if (billQty > 0 && invoice && receiptInvoices218.has(invoice)) {
+      matched12322.add(invoice!);
+    } else if (billQty > 0 && matchedIn218) {
       receivedBillQty = billQty;
-      matched218.add(invoice);
+      matched218.add(invoice!);
     }
 
     const outstandingBillQty = Math.max(0, billQty - receivedBillQty);
     const outstandingQty = orderQty + outstandingBillQty;
-    const outstandingRatio = grossQty > 0 ? outstandingQty / grossQty : 1;
-    const outstandingValue = netValue * Math.max(0, Math.min(1, outstandingRatio));
+    const outstandingValue = invoiceAlreadyReceived ? 0 : netValue;
 
     grossInboundQty += grossQty;
     grossInboundValue += netValue;
