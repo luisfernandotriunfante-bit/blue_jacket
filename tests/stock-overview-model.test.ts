@@ -176,6 +176,31 @@ test('Visão Geral não reaplica checkpoint: consome exatamente a Carteira já v
   assert.equal(model.totals.inboundValue, 5000);
 });
 
+
+test('fotografia atual da Carteira pode virar baseline sem reproduzir o checkpoint antigo', () => {
+  const row = (order: string, date: string, value: number) => ({
+    industry_order_number: { raw: order, typed: order },
+    order_date: { raw: date, typed: date },
+    net_value: { raw: value, typed: value },
+  });
+  const parsed = {
+    source: 'CARTEIRA 24.08.xlsx',
+    fileName: 'CARTEIRA 24.08.xlsx',
+    sheet: 'Carteira',
+    rows: [
+      row('1160096370', '2026-08-17', 100),
+      row('9990000001', '2026-07-10', 5000),
+      row('1160110441', '2026-08-18', 50),
+    ],
+    audits: [],
+  };
+  const current = sourceImportTestHelpers.acceptCurrentPortfolioAsBaseline(parsed, 'CARTEIRA 24.08.xlsx', 'hash-24');
+  assert.equal(current.snapshot.mode, 'BASELINE_CURRENT');
+  assert.equal(current.parsed.rows.length, 3);
+  assert.equal(current.snapshot.acceptedValue, 5150);
+  assert.deepEqual(current.snapshot.orderNumbers, ['1160096370', '1160110441', '9990000001']);
+});
+
 test('continuidade dinâmica usa bootstrap uma vez e depois usa a fotografia anterior como nova âncora', () => {
   const row = (order: string, date: string, value: number) => ({
     industry_order_number: { raw: order, typed: order },
