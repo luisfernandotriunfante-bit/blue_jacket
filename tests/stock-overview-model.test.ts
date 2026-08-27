@@ -205,7 +205,7 @@ test('continuidade dinâmica usa bootstrap uma vez e depois usa a fotografia ant
     rows: [
       row('1160096370', '2026-08-17', 80),
       row('1160110441', '2026-08-18', 40),
-      row('7770000000', '2026-08-20', 70),
+      row('7770000000', '2026-08-25', 70),
       row('8880000000', '2026-07-01', 9000),
     ],
   };
