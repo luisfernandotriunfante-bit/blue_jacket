@@ -95,6 +95,18 @@ const LOW_COVERAGE_DAYS = 30;
 const ANALYSIS_DAYS = 90;
 const MAX_TILES_PER_LINE = 18;
 
+// Checkpoint de continuidade homologado antes do reset da arquitetura.
+// Ele evita que uma fotografia nova da Carteira reintroduza pedidos antigos já tratados
+// pelo sistema anterior. Pedidos já acompanhados permanecem; pedidos posteriores ao
+// checkpoint entram normalmente.
+const PORTFOLIO_CONTINUITY_DATE = '2026-08-17';
+const APPROVED_PORTFOLIO_ORDERS = new Set([
+  '1160096370','1160102681','1160103178','1160103179','1160103180','1160103181','1160103182','1160103183',
+  '1160104097','1160104266','1160104267','1160104268','1160104269','1160104270','1160106125','1160106422',
+  '1160106597','1160106601','1160106609','1160106670','1160106674','1160106733','1160108199','1160108200',
+  '1160108201','1160108203','1160108206','1160109581',
+]);
+
 function firstText(record: RecordValue | undefined, fields: string[]) {
   for (const field of fields) {
     const value = text(record?.[field]);
@@ -257,7 +269,14 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const m3Records = m3.records as RecordValue[];
   const m4Records = m4.records as RecordValue[];
   const sales = m3Records.filter(fact => fact.fact_type === 'SALE');
-  const inbound = m3Records.filter(fact => fact.fact_type === 'INBOUND_ORDER');
+  const inboundRaw = m3Records.filter(fact => fact.fact_type === 'INBOUND_ORDER');
+  const inbound = inboundRaw.filter(fact => {
+    const orderNumber = comparableCode(fact.industry_order_number);
+    const orderDate = text(fact.order_date);
+    if (!orderNumber) return true;
+    return APPROVED_PORTFOLIO_ORDERS.has(orderNumber)
+      || Boolean(orderDate && isIsoDate(orderDate) && orderDate > PORTFOLIO_CONTINUITY_DATE);
+  });
   const receipts218 = m3Records.filter(fact => fact.fact_type === 'RECEIPT');
   const historical = m4Records.filter(fact => fact.row_type === 'TRANSACTION_379');
   const receipts12322 = m4Records.filter(fact => fact.row_type === 'RECEIPT_12322');
