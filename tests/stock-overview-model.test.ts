@@ -91,7 +91,7 @@ test('218 baixa todo Bill Qty da NF recebida, inclusive linhas cujo item não fo
   assert.equal(model.totals.inboundQty, 0);
 });
 
-test('218 considera a NF recebida integralmente e preserva apenas Order Qty em aberto', () => {
+test('NF encontrada no 218 zera todo o valor financeiro da linha, mesmo com Order Qty ainda aberto', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),
     { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '123', order_qty: 7, bill_qty: 10, inbound_net_value: 170 },
@@ -100,7 +100,7 @@ test('218 considera a NF recebida integralmente e preserva apenas Order Qty em a
   const model = buildStockOverviewModel({ m1, m3: localM3, m4 });
   assert.equal(model.totals.receivedInboundQty, 10);
   assert.equal(model.totals.totalInboundQty, 7);
-  assert.equal(model.totals.inboundValue, 70);
+  assert.equal(model.totals.inboundValue, 0);
   assert.equal(model.totals.inboundQty, 42);
 });
 
@@ -116,7 +116,7 @@ test('normalização de NF encontra o maior bloco numérico quando série vem an
   assert.equal(model.totals.matchedReceiptInvoices218, 1);
 });
 
-test('12.322 MERCHANDISE baixa Bill Qty no grão de NF e SUPPLIES não baixa Carteira', () => {
+test('qualquer NF já existente no 12.322 sai integralmente da Carteira, independente da classificação', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),
     { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '456', order_qty: 0, bill_qty: 10, inbound_net_value: 100 },
@@ -127,10 +127,10 @@ test('12.322 MERCHANDISE baixa Bill Qty no grão de NF e SUPPLIES não baixa Car
     { row_type: 'RECEIPT_12322', receipt_class: 'SUPPLIES', invoice_number: '00000789', invoice_value: 50 },
   ]);
   const model = buildStockOverviewModel({ m1, m3: localM3, m4: localM4 });
-  assert.equal(model.totals.receivedInboundQty, 10);
-  assert.equal(model.totals.totalInboundQty, 5);
-  assert.equal(model.totals.inboundValue, 50);
-  assert.equal(model.totals.matchedReceiptInvoices12322, 1);
+  assert.equal(model.totals.receivedInboundQty, 15);
+  assert.equal(model.totals.totalInboundQty, 0);
+  assert.equal(model.totals.inboundValue, 0);
+  assert.equal(model.totals.matchedReceiptInvoices12322, 2);
 });
 
 test('mesma NF em 218 e 12.322 não baixa Bill Qty duas vezes', () => {
@@ -146,7 +146,7 @@ test('mesma NF em 218 e 12.322 não baixa Bill Qty duas vezes', () => {
   assert.equal(model.totals.grossInboundQty, 30);
   assert.equal(model.totals.receivedInboundQty, 10);
   assert.equal(model.totals.totalInboundQty, 20);
-  assert.equal(model.totals.inboundValue, 200);
+  assert.equal(model.totals.inboundValue, 0);
 });
 
 test('ponte 8022 liga material Colgate ao Winthor quando M1 ainda não traz fabricante', () => {
