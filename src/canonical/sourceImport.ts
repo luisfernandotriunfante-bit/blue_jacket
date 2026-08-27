@@ -72,7 +72,7 @@ type PortfolioContinuitySnapshot = {
   acceptedRows: number;
   rawValue: number;
   acceptedValue: number;
-  mode: 'BOOTSTRAP_2026_08_17' | 'ROLL_FORWARD';
+  mode: 'BASELINE_CURRENT' | 'BOOTSTRAP_2026_08_17' | 'ROLL_FORWARD';
   updatedAt: string;
 };
 
@@ -123,6 +123,26 @@ function snapshotDateFromFile(fileName: string, parsed: ParsedSource) {
 function rowMoney(row: ParsedSource['rows'][number]) {
   const value = Number(rowTyped(row, 'net_value') ?? 0);
   return Number.isFinite(value) ? Math.max(value, 0) : 0;
+}
+
+function acceptCurrentPortfolioAsBaseline(parsed: ParsedSource, fileName: string, fileHash: string) {
+  const acceptedRows = parsed.rows.filter(row => Boolean(normalizeOrderNumber(rowTyped(row, 'industry_order_number'))));
+  const snapshotDate = snapshotDateFromFile(fileName, parsed);
+  const snapshot: PortfolioContinuitySnapshot = {
+    id: 'portfolio-continuity',
+    source: 'CARTEIRA 24.08.xlsx',
+    fileName,
+    fileHash,
+    snapshotDate,
+    orderNumbers: [...new Set(acceptedRows.map(row => normalizeOrderNumber(rowTyped(row, 'industry_order_number'))).filter(Boolean))].sort(),
+    rawRows: parsed.rows.length,
+    acceptedRows: acceptedRows.length,
+    rawValue: parsed.rows.reduce((sum, row) => sum + rowMoney(row), 0),
+    acceptedValue: acceptedRows.reduce((sum, row) => sum + rowMoney(row), 0),
+    mode: 'BASELINE_CURRENT',
+    updatedAt: new Date().toISOString(),
+  };
+  return { parsed: { ...parsed, rows: acceptedRows }, snapshot };
 }
 
 function applyPortfolioContinuity(parsed: ParsedSource, fileName: string, fileHash: string, previous?: PortfolioContinuitySnapshot) {
@@ -287,7 +307,18 @@ async function stageOne(source: string, file: File, onProgress?: (progress: Sour
   let portfolioSnapshot: PortfolioContinuitySnapshot | undefined;
   if (source === 'CARTEIRA 24.08.xlsx') {
     const previousContinuity = await idbGet<PortfolioContinuitySnapshot>(BUILDS_STORE, PORTFOLIO_CONTINUITY_KEY);
-    const continuity = applyPortfolioContinuity(parsed, file.name, hash, previousContinuity);
+
+    // Migração correta: se esta mesma fotografia já estava carregada antes da regra de continuidade
+    // (ou foi filtrada uma única vez pelo bootstrap de 17/08), ela própria vira a baseline atual.
+    // Assim a Carteira 24.08 é a verdade da fotografia corrente e o checkpoint antigo não força
+    // o valor homologado de uma fotografia anterior. Somente cargas futuras usam roll-forward.
+    const sameCurrentSnapshot = previous?.manifest.fileHash === hash;
+    const bootstrapAppliedToThisSameFile = previousContinuity?.mode === 'BOOTSTRAP_2026_08_17'
+      && previousContinuity.fileHash === hash;
+    const continuity = (sameCurrentSnapshot || bootstrapAppliedToThisSameFile)
+      ? acceptCurrentPortfolioAsBaseline(parsed, file.name, hash)
+      : applyPortfolioContinuity(parsed, file.name, hash, previousContinuity);
+
     parsed = continuity.parsed;
     portfolioSnapshot = continuity.snapshot;
   }
@@ -408,4 +439,4 @@ export async function loadGeneratedCanonicalManifest(buildId: string) {
   return { status: 'VALID', generatedAt: build.generatedAt, lists };
 }
 
-export const sourceImportTestHelpers = { normalizedFileName, sha256Bytes, parserVersionFor, applyPortfolioContinuity, snapshotDateFromFile, normalizeOrderNumber };
+export const sourceImportTestHelpers = { normalizedFileName, sha256Bytes, parserVersionFor, applyPortfolioContinuity, acceptCurrentPortfolioAsBaseline, snapshotDateFromFile, normalizeOrderNumber };
