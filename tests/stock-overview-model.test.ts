@@ -164,6 +164,20 @@ test('ponte 8022 liga material Colgate ao Winthor quando M1 ainda não traz fabr
   assert.equal(model.dataQuality.inboundUnmappedRows, 0);
 });
 
+
+test('continuidade homologada exclui pedido histórico retroativo e mantém pedido acompanhado ou novo', () => {
+  const localM3 = list('M3_MOVIMENTO_VENDAS', [
+    ...m3.records.filter(row => row.fact_type === 'SALE'),
+    { fact_type: 'INBOUND_ORDER', industry_order_number: '1160096370', order_date: '2026-08-17', industry_material: '61052478', order_qty: 2, bill_qty: 0, inbound_net_value: 20 },
+    { fact_type: 'INBOUND_ORDER', industry_order_number: '9990000001', order_date: '2026-07-10', industry_material: '61052478', order_qty: 50, bill_qty: 0, inbound_net_value: 5000 },
+    { fact_type: 'INBOUND_ORDER', industry_order_number: '1160110441', order_date: '2026-08-18', industry_material: '61052478', order_qty: 3, bill_qty: 0, inbound_net_value: 30 },
+  ]);
+  const model = buildStockOverviewModel({ m1, m3: localM3, m4 });
+  assert.equal(model.totals.totalInboundQty, 5);
+  assert.equal(model.totals.inboundValue, 50);
+  assert.equal(model.totals.inboundQty, 30);
+});
+
 test('treemap usa valor do estoque por item dentro das cinco linhas', () => {
   const model = buildStockOverviewModel({ m1, m3, m4 });
   const dental = model.treemap.find(group => group.line === 'Creme Dental');
