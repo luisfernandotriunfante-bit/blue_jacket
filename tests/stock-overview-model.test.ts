@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { buildStockOverviewModel } from '../src/canonical/stockOverviewModel.ts';
+import { sourceImportTestHelpers } from '../src/canonical/sourceImport.ts';
 import type { CanonicalList } from '../src/canonical/types.ts';
 
 function list(id: CanonicalList['id'], records: Array<Record<string, unknown>>): CanonicalList {
@@ -165,17 +166,55 @@ test('ponte 8022 liga material Colgate ao Winthor quando M1 ainda não traz fabr
 });
 
 
-test('continuidade homologada exclui pedido histórico retroativo e mantém pedido acompanhado ou novo', () => {
+test('Visão Geral não reaplica checkpoint: consome exatamente a Carteira já validada no staging', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),
-    { fact_type: 'INBOUND_ORDER', industry_order_number: '1160096370', order_date: '2026-08-17', industry_material: '61052478', order_qty: 2, bill_qty: 0, inbound_net_value: 20 },
     { fact_type: 'INBOUND_ORDER', industry_order_number: '9990000001', order_date: '2026-07-10', industry_material: '61052478', order_qty: 50, bill_qty: 0, inbound_net_value: 5000 },
-    { fact_type: 'INBOUND_ORDER', industry_order_number: '1160110441', order_date: '2026-08-18', industry_material: '61052478', order_qty: 3, bill_qty: 0, inbound_net_value: 30 },
   ]);
   const model = buildStockOverviewModel({ m1, m3: localM3, m4 });
-  assert.equal(model.totals.totalInboundQty, 5);
-  assert.equal(model.totals.inboundValue, 50);
-  assert.equal(model.totals.inboundQty, 30);
+  assert.equal(model.totals.totalInboundQty, 50);
+  assert.equal(model.totals.inboundValue, 5000);
+});
+
+test('continuidade dinâmica usa bootstrap uma vez e depois usa a fotografia anterior como nova âncora', () => {
+  const row = (order: string, date: string, value: number) => ({
+    industry_order_number: { raw: order, typed: order },
+    order_date: { raw: date, typed: date },
+    net_value: { raw: value, typed: value },
+  });
+  const firstParsed = {
+    source: 'CARTEIRA 24.08.xlsx',
+    fileName: 'CARTEIRA 24.08.xlsx',
+    sheet: 'Carteira',
+    rows: [
+      row('1160096370', '2026-08-17', 100),
+      row('9990000001', '2026-07-10', 5000),
+      row('1160110441', '2026-08-18', 50),
+    ],
+    audits: [],
+  };
+  const first = sourceImportTestHelpers.applyPortfolioContinuity(firstParsed, 'CARTEIRA 24.08.xlsx', 'hash-24');
+  assert.equal(first.snapshot.mode, 'BOOTSTRAP_2026_08_17');
+  assert.equal(first.parsed.rows.length, 2);
+  assert.equal(first.snapshot.acceptedValue, 150);
+  assert.deepEqual(first.snapshot.orderNumbers, ['1160096370', '1160110441']);
+
+  const secondParsed = {
+    ...firstParsed,
+    fileName: 'CARTEIRA 27.08.xlsx',
+    rows: [
+      row('1160096370', '2026-08-17', 80),
+      row('1160110441', '2026-08-18', 40),
+      row('7770000000', '2026-08-25', 70),
+      row('8880000000', '2026-07-01', 9000),
+    ],
+  };
+  const second = sourceImportTestHelpers.applyPortfolioContinuity(secondParsed, 'CARTEIRA 27.08.xlsx', 'hash-27', first.snapshot);
+  assert.equal(second.snapshot.mode, 'ROLL_FORWARD');
+  assert.equal(second.parsed.rows.length, 3);
+  assert.equal(second.snapshot.acceptedValue, 190);
+  assert.deepEqual(second.snapshot.orderNumbers, ['1160096370', '1160110441', '7770000000']);
+  assert.equal(second.snapshot.snapshotDate, '2026-08-27');
 });
 
 test('treemap usa valor do estoque por item dentro das cinco linhas', () => {

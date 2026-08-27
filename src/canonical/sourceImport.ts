@@ -13,6 +13,7 @@ const DEFAULT_PARSER_VERSION = 'browser-v1';
 const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   '310 total 2026.txt': 'browser-v2-rca310',
   "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v2-route-sheet-scope',
+  'CARTEIRA 24.08.xlsx': 'browser-v3-portfolio-continuity-dynamic',
 };
 const SCHEMA_VERSION = 'v1';
 const ENGINE_VERSION = 'browser-stage3-top-retail-v3';
@@ -59,6 +60,97 @@ export type SourceStageManifest = {
 type StoredStage = { source: string; manifest: SourceStageManifest; parsed: ParsedSource };
 type StoredBuild = { id: string; active: ActiveCanonicalBundle; generatedAt: string; sourceHashes: Record<string, string> };
 type StoredList = { id: string; buildId: string; listId: CanonicalList['id']; list: CanonicalList };
+
+type PortfolioContinuitySnapshot = {
+  id: 'portfolio-continuity';
+  source: 'CARTEIRA 24.08.xlsx';
+  fileName: string;
+  fileHash: string;
+  snapshotDate: string;
+  orderNumbers: string[];
+  rawRows: number;
+  acceptedRows: number;
+  rawValue: number;
+  acceptedValue: number;
+  mode: 'BOOTSTRAP_2026_08_17' | 'ROLL_FORWARD';
+  updatedAt: string;
+};
+
+const PORTFOLIO_CONTINUITY_KEY = 'portfolio-continuity';
+const PORTFOLIO_BOOTSTRAP_DATE = '2026-08-17';
+const PORTFOLIO_BOOTSTRAP_ORDERS = [
+  '1160096370','1160102681','1160103178','1160103179','1160103180','1160103181','1160103182','1160103183',
+  '1160104097','1160104266','1160104267','1160104268','1160104269','1160104270','1160106125','1160106422',
+  '1160106597','1160106601','1160106609','1160106670','1160106674','1160106733','1160108199','1160108200',
+  '1160108201','1160108203','1160108206','1160109581',
+];
+
+function rowTyped(row: ParsedSource['rows'][number], field: string) {
+  const cell = row[field];
+  return cell?.typed ?? cell?.raw ?? null;
+}
+
+function normalizeOrderNumber(value: unknown) {
+  return String(value ?? '').trim().replace(/\.0+$/, '').replace(/\D/g, '');
+}
+
+function normalizeIsoDate(value: unknown) {
+  if (!value) return '';
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString().slice(0, 10);
+  const raw = String(value).trim();
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const br = raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})$/);
+  if (br) {
+    const year = br[3].length === 2 ? `20${br[3]}` : br[3];
+    return `${year}-${br[2].padStart(2, '0')}-${br[1].padStart(2, '0')}`;
+  }
+  return '';
+}
+
+function snapshotDateFromFile(fileName: string, parsed: ParsedSource) {
+  const base = fileName.replace(/\.[^.]+$/, '');
+  const match = base.match(/(?:^|[^0-9])(\d{1,2})[._\-\s](\d{1,2})(?:[._\-\s](\d{2,4}))?(?:$|[^0-9])/);
+  if (match) {
+    const years = parsed.rows.map(row => normalizeIsoDate(rowTyped(row, 'order_date')).slice(0, 4)).filter(year => /^\d{4}$/.test(year));
+    const inferredYear = years.sort().at(-1) || String(new Date().getFullYear());
+    const year = match[3] ? (match[3].length === 2 ? `20${match[3]}` : match[3]) : inferredYear;
+    return `${year}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+  }
+  return parsed.rows.map(row => normalizeIsoDate(rowTyped(row, 'order_date'))).filter(Boolean).sort().at(-1) || '';
+}
+
+function rowMoney(row: ParsedSource['rows'][number]) {
+  const value = Number(rowTyped(row, 'net_value') ?? 0);
+  return Number.isFinite(value) ? Math.max(value, 0) : 0;
+}
+
+function applyPortfolioContinuity(parsed: ParsedSource, fileName: string, fileHash: string, previous?: PortfolioContinuitySnapshot) {
+  const anchorDate = previous?.snapshotDate || PORTFOLIO_BOOTSTRAP_DATE;
+  const anchorOrders = new Set((previous?.orderNumbers?.length ? previous.orderNumbers : PORTFOLIO_BOOTSTRAP_ORDERS).map(normalizeOrderNumber));
+  const acceptedRows = parsed.rows.filter(row => {
+    const orderNumber = normalizeOrderNumber(rowTyped(row, 'industry_order_number'));
+    const orderDate = normalizeIsoDate(rowTyped(row, 'order_date'));
+    if (!orderNumber) return false;
+    return anchorOrders.has(orderNumber) || Boolean(orderDate && orderDate > anchorDate);
+  });
+  const snapshotDate = snapshotDateFromFile(fileName, parsed) || anchorDate;
+  const snapshot: PortfolioContinuitySnapshot = {
+    id: 'portfolio-continuity',
+    source: 'CARTEIRA 24.08.xlsx',
+    fileName,
+    fileHash,
+    snapshotDate,
+    orderNumbers: [...new Set(acceptedRows.map(row => normalizeOrderNumber(rowTyped(row, 'industry_order_number'))).filter(Boolean))].sort(),
+    rawRows: parsed.rows.length,
+    acceptedRows: acceptedRows.length,
+    rawValue: parsed.rows.reduce((sum, row) => sum + rowMoney(row), 0),
+    acceptedValue: acceptedRows.reduce((sum, row) => sum + rowMoney(row), 0),
+    mode: previous ? 'ROLL_FORWARD' : 'BOOTSTRAP_2026_08_17',
+    updatedAt: new Date().toISOString(),
+  };
+  return { parsed: { ...parsed, rows: acceptedRows }, snapshot };
+}
 
 export type SourceUpdateProgress = {
   source: string;
@@ -188,9 +280,17 @@ async function stageOne(source: string, file: File, onProgress?: (progress: Sour
   if (previous?.manifest.fileHash === hash && previous.manifest.status === 'VALID' && previous.manifest.parserVersion === parserVersion && previous.manifest.schemaVersion === SCHEMA_VERSION) return { status: 'UNCHANGED' as const, manifest: previous.manifest };
 
   onProgress?.({ source, label, index, total, phase: 'PARSING', message: `Validando ${file.name}` });
-  const parsed = await parseSource(source, file);
+  let parsed = await parseSource(source, file);
   const blocking = parsed.audits.filter(audit => audit.severity === 'BLOCKED' || audit.severity === 'BLOCKED_DEPENDENT_CALC');
   if (blocking.length) return { status: 'REJECTED' as const, errors: blocking.map(audit => `${audit.code}: ${audit.message}`), parsed };
+
+  let portfolioSnapshot: PortfolioContinuitySnapshot | undefined;
+  if (source === 'CARTEIRA 24.08.xlsx') {
+    const previousContinuity = await idbGet<PortfolioContinuitySnapshot>(BUILDS_STORE, PORTFOLIO_CONTINUITY_KEY);
+    const continuity = applyPortfolioContinuity(parsed, file.name, hash, previousContinuity);
+    parsed = continuity.parsed;
+    portfolioSnapshot = continuity.snapshot;
+  }
 
   const manifest: SourceStageManifest = {
     source,
@@ -206,6 +306,7 @@ async function stageOne(source: string, file: File, onProgress?: (progress: Sour
   };
   onProgress?.({ source, label, index, total, phase: 'STORING', message: `Persistindo staging de ${label}` });
   await idbPut<StoredStage>(STAGING_STORE, { source, manifest, parsed });
+  if (portfolioSnapshot) await idbPut<PortfolioContinuitySnapshot>(BUILDS_STORE, portfolioSnapshot);
   return { status: 'VALID' as const, manifest };
 }
 
@@ -307,4 +408,4 @@ export async function loadGeneratedCanonicalManifest(buildId: string) {
   return { status: 'VALID', generatedAt: build.generatedAt, lists };
 }
 
-export const sourceImportTestHelpers = { normalizedFileName, sha256Bytes, parserVersionFor };
+export const sourceImportTestHelpers = { normalizedFileName, sha256Bytes, parserVersionFor, applyPortfolioContinuity, snapshotDateFromFile, normalizeOrderNumber };
