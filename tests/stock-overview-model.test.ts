@@ -177,6 +177,10 @@ test('Visão Geral não reaplica checkpoint: consome exatamente a Carteira já v
 });
 
 
+test('versão da Carteira invalida staging anterior após correção de baseline', () => {
+  assert.equal(sourceImportTestHelpers.parserVersionFor('CARTEIRA 24.08.xlsx'), 'browser-v4-portfolio-baseline-current');
+});
+
 test('fotografia atual da Carteira pode virar baseline sem reproduzir o checkpoint antigo', () => {
   const row = (order: string, date: string, value: number) => ({
     industry_order_number: { raw: order, typed: order },
