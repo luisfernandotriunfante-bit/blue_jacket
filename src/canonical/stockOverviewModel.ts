@@ -52,11 +52,9 @@ export type StockOverviewModel = {
     receivedInboundValue: number;
     matchedReceiptInvoices218: number;
     matchedReceiptInvoices12322: number;
-    matchedReceiptInvoices379: number;
     additionalReceiptInvoices218: number;
     receiptOverlapInvoices: number;
     unmatchedBilledInvoices: number;
-    deductedBy379Value: number;
     deductedBy12322Value: number;
     deductedBy218Value: number;
     mappedInboundQty: number;
@@ -268,10 +266,6 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const inbound = m3Records.filter(fact => fact.fact_type === 'INBOUND_ORDER');
   const receipts218 = m3Records.filter(fact => fact.fact_type === 'RECEIPT');
   const historical = m4Records.filter(fact => fact.row_type === 'TRANSACTION_379');
-  const receipts379 = historical.filter(fact =>
-    String(fact.operation_code ?? '').trim() === '21201'
-    && ['2102', '2403'].includes(String(fact.cfop ?? '').trim())
-  );
   const receipts12322 = m4Records.filter(fact => fact.row_type === 'RECEIPT_12322');
 
   const indexes = buildItemIndexes(m1);
@@ -280,7 +274,6 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
 
   const receiptInvoices218 = new Set(receipts218.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
   const receiptInvoices12322 = new Set(receipts12322.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
-  const receiptInvoices379 = new Set(receipts379.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
 
   const validDates = [
     ...sales.map(fact => text(fact.event_date)).filter(isIsoDate) as string[],
@@ -335,11 +328,9 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   let totalInboundRows = 0;
   const matched218 = new Set<string>();
   const matched12322 = new Set<string>();
-  const matched379 = new Set<string>();
   const additional218 = new Set<string>();
   const unmatchedBilled = new Set<string>();
   const overlapReceiptInvoices = new Set<string>();
-  let deductedBy379Value = 0;
   let deductedBy12322Value = 0;
   let deductedBy218Value = 0;
 
@@ -352,23 +343,27 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     const item = currentItemForFact(fact, indexes);
     const itemId = item ? itemKey(item) : null;
 
-    const matchedIn379 = Boolean(invoice && receiptInvoices379.has(invoice));
+    // Regra financeira da Carteira:
+    // 1) procura a NF no 12.322; se encontrar, zera integralmente o valor da NF;
+    // 2) somente se não estiver no 12.322, procura no 218 e zera integralmente o valor;
+    // 3) se estiver nos dois, a baixa pertence ao 12.322 e não é contada novamente no 218.
     const matchedIn12322 = Boolean(invoice && receiptInvoices12322.has(invoice));
     const matchedIn218 = Boolean(invoice && receiptInvoices218.has(invoice));
-    const invoiceAlreadyReceived = matchedIn379 || matchedIn12322 || matchedIn218;
+    const invoiceAlreadyReceived = matchedIn12322 || matchedIn218;
 
     if (billQty > 0 && invoice) {
-      const sourceMatches = Number(matchedIn379) + Number(matchedIn12322) + Number(matchedIn218);
-      if (sourceMatches > 1) overlapReceiptInvoices.add(invoice);
+      if (matchedIn12322 && matchedIn218) overlapReceiptInvoices.add(invoice);
       if (!invoiceAlreadyReceived) unmatchedBilled.add(invoice);
     }
 
     let receivedBillQty = 0;
     if (billQty > 0 && invoiceAlreadyReceived) {
       receivedBillQty = billQty;
-      if (matchedIn379) matched379.add(invoice!);
-      if (matchedIn12322) matched12322.add(invoice!);
-      if (matchedIn218) matched218.add(invoice!);
+      if (matchedIn12322) matched12322.add(invoice);
+      else if (matchedIn218) {
+        matched218.add(invoice);
+        additional218.add(invoice);
+      }
     }
 
     const outstandingBillQty = Math.max(0, billQty - receivedBillQty);
@@ -376,14 +371,8 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     const outstandingValue = invoiceAlreadyReceived ? 0 : netValue;
 
     if (invoiceAlreadyReceived && netValue > 0) {
-      if (matchedIn379) {
-        deductedBy379Value += netValue;
-      } else if (matchedIn12322) {
-        deductedBy12322Value += netValue;
-      } else if (matchedIn218) {
-        deductedBy218Value += netValue;
-        if (invoice) additional218.add(invoice);
-      }
+      if (matchedIn12322) deductedBy12322Value += netValue;
+      else if (matchedIn218) deductedBy218Value += netValue;
     }
 
     grossInboundQty += grossQty;
@@ -538,11 +527,9 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
       receivedInboundValue: round(receivedInboundValue),
       matchedReceiptInvoices218: matched218.size,
       matchedReceiptInvoices12322: matched12322.size,
-      matchedReceiptInvoices379: matched379.size,
       additionalReceiptInvoices218: additional218.size,
       receiptOverlapInvoices: overlapReceiptInvoices.size,
       unmatchedBilledInvoices: unmatchedBilled.size,
-      deductedBy379Value: round(deductedBy379Value),
       deductedBy12322Value: round(deductedBy12322Value),
       deductedBy218Value: round(deductedBy218Value),
       mappedInboundQty: round(mappedInboundQty),
