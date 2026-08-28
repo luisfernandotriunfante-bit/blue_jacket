@@ -134,7 +134,7 @@ test('qualquer NF já existente no 12.322 sai integralmente da Carteira, indepen
   assert.equal(model.totals.matchedReceiptInvoices12322, 2);
 });
 
-test('379 de entrada Colgate também baixa integralmente a NF da Carteira', () => {
+test('379 não participa da baixa financeira da Carteira', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),
     { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '002941255-1', order_qty: 0, bill_qty: 10, inbound_net_value: 100 },
@@ -143,9 +143,7 @@ test('379 de entrada Colgate também baixa integralmente a NF da Carteira', () =
     { row_type: 'TRANSACTION_379', operation_code: '21201', cfop: '2102', invoice_number: '2941255' },
   ]);
   const model = buildStockOverviewModel({ m1, m3: localM3, m4: localM4 });
-  assert.equal(model.totals.inboundValue, 0);
-  assert.equal(model.totals.matchedReceiptInvoices379, 1);
-  assert.equal(model.totals.deductedBy379Value, 100);
+  assert.equal(model.totals.inboundValue, 100);
   assert.equal(model.totals.deductedBy12322Value, 0);
   assert.equal(model.totals.deductedBy218Value, 0);
 });
@@ -194,6 +192,10 @@ test('mesma NF em 218 e 12.322 não baixa Bill Qty duas vezes', () => {
   assert.equal(model.totals.receivedInboundQty, 10);
   assert.equal(model.totals.totalInboundQty, 20);
   assert.equal(model.totals.inboundValue, 0);
+  assert.equal(model.totals.deductedBy12322Value, 300);
+  assert.equal(model.totals.deductedBy218Value, 0);
+  assert.equal(model.totals.additionalReceiptInvoices218, 0);
+  assert.equal(model.totals.receiptOverlapInvoices, 1);
 });
 
 test('ponte 8022 liga material Colgate ao Winthor quando M1 ainda não traz fabricante', () => {

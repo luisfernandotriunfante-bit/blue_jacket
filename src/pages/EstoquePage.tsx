@@ -138,7 +138,7 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
           value={currency.format(model.totals.inboundValue)}
           progress={model.progress.inboundMapping}
           progressLabel={inboundCopy}
-          info={`Carteira ainda em aberto. A baixa financeira usa a união das NFs já recebidas no histórico 379 (operações de entrada 21201/2102 ou 21201/2403), no 12.322 e no 218. Uma mesma NF é baixada uma única vez. A Carteira bruta desta fotografia é ${currency.format(model.totals.grossInboundValue)} e já foram baixados ${currency.format(model.totals.receivedInboundValue)}. Quantidades da Carteira são caixas; a projeção física converte para unidades por Un/CX.`}
+          info={`Carteira ainda em aberto. Para cada NF faturada, o sistema procura primeiro no 12.322; se encontrar, retira todo o valor da NF. Se não encontrar no 12.322, procura no 218 e, se encontrar, também retira todo o valor. Uma mesma NF nunca é abatida duas vezes. A Carteira bruta desta fotografia é ${currency.format(model.totals.grossInboundValue)} e já foram baixados ${currency.format(model.totals.receivedInboundValue)}. Quantidades da Carteira são caixas; a projeção física converte para unidades por Un/CX.`}
         />
       </div>
     </section>
@@ -172,7 +172,7 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
           value={currency.format(model.totals.projectedPurchaseValue)}
           progress={model.totals.projectedPurchaseValue > 0 ? model.totals.inboundValue / model.totals.projectedPurchaseValue : null}
           progressLabel={`${currency.format(model.totals.inboundValue)} vêm da Carteira em aberto`}
-          info="Valor do estoque disponível a custo somado somente ao valor ainda em aberto da Carteira Colgate, depois da conciliação das NFs já recebidas no histórico 379, 12.322 e 218."
+          info="Valor do estoque disponível a custo somado somente ao valor ainda em aberto da Carteira Colgate, depois da conciliação das NFs recebidas no 12.322 e, quando não encontradas nele, no 218."
         />
       </div>
     </section>
@@ -181,13 +181,12 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
       <PanelSectionHeader
         eyebrow="CONCILIAÇÃO DA CARTEIRA"
         title="Da Carteira bruta ao saldo em aberto"
-        description="Leitura auditável por NF. Se uma NF da Carteira já existir como entrada em qualquer base oficial do sistema, todo o valor dessa NF sai do saldo. NFs repetidas entre fontes são baixadas uma única vez."
+        description="Leitura auditável por NF. Primeiro o sistema procura no 12.322; somente se não encontrar ali, procura no 218. Se encontrar em qualquer um dos dois, todo o valor daquela NF sai da Carteira. Uma mesma NF nunca é abatida duas vezes."
       />
       <div className="stock-analysis-note">
         <span>Carteira bruta: <strong>{currency.format(model.totals.grossInboundValue)}</strong></span>
-        <span>Baixado pelo histórico 379: <strong>{currency.format(model.totals.deductedBy379Value)}</strong> · {number.format(model.totals.matchedReceiptInvoices379)} NF(s)</span>
         <span>Baixado pelo 12.322: <strong>{currency.format(model.totals.deductedBy12322Value)}</strong> · {number.format(model.totals.matchedReceiptInvoices12322)} NF(s)</span>
-        <span>Baixado adicionalmente pelo 218: <strong>{currency.format(model.totals.deductedBy218Value)}</strong> · {number.format(model.totals.additionalReceiptInvoices218)} NF(s)</span>
+        <span>Baixado pelo 218: <strong>{currency.format(model.totals.deductedBy218Value)}</strong> · {number.format(model.totals.additionalReceiptInvoices218)} NF(s) adicionais</span>
         <span>Sobreposição entre fontes: {number.format(model.totals.receiptOverlapInvoices)} NF(s)</span>
         <span>NF(s) faturada(s) da Carteira sem recebimento encontrado: {number.format(model.totals.unmatchedBilledInvoices)}</span>
         <span>Saldo final: <strong>{currency.format(model.totals.inboundValue)}</strong></span>
