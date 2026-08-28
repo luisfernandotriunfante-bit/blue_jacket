@@ -134,6 +134,52 @@ test('qualquer NF já existente no 12.322 sai integralmente da Carteira, indepen
   assert.equal(model.totals.matchedReceiptInvoices12322, 2);
 });
 
+test('379 de entrada Colgate também baixa integralmente a NF da Carteira', () => {
+  const localM3 = list('M3_MOVIMENTO_VENDAS', [
+    ...m3.records.filter(row => row.fact_type === 'SALE'),
+    { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '002941255-1', order_qty: 0, bill_qty: 10, inbound_net_value: 100 },
+  ]);
+  const localM4 = list('M4_HISTORICO_TRANSICAO', [
+    { row_type: 'TRANSACTION_379', operation_code: '21201', cfop: '2102', invoice_number: '2941255' },
+  ]);
+  const model = buildStockOverviewModel({ m1, m3: localM3, m4: localM4 });
+  assert.equal(model.totals.inboundValue, 0);
+  assert.equal(model.totals.matchedReceiptInvoices379, 1);
+  assert.equal(model.totals.deductedBy379Value, 100);
+  assert.equal(model.totals.deductedBy12322Value, 0);
+  assert.equal(model.totals.deductedBy218Value, 0);
+});
+
+test('218 mede apenas a baixa adicional que não estava coberta por histórico/12.322', () => {
+  const localM3 = list('M3_MOVIMENTO_VENDAS', [
+    ...m3.records.filter(row => row.fact_type === 'SALE'),
+    { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '456', order_qty: 0, bill_qty: 10, inbound_net_value: 100 },
+    { fact_type: 'INBOUND_ORDER', industry_material: '61052479', invoice_number: '789', order_qty: 0, bill_qty: 5, inbound_net_value: 200 },
+    { fact_type: 'RECEIPT', invoice_number: '456', winthor_product_code: '1', received_units: 60 },
+    { fact_type: 'RECEIPT', invoice_number: '789', winthor_product_code: '2', received_units: 60 },
+  ]);
+  const localM4 = list('M4_HISTORICO_TRANSICAO', [
+    { row_type: 'RECEIPT_12322', invoice_number: '456', invoice_value: 100 },
+  ]);
+  const model = buildStockOverviewModel({ m1, m3: localM3, m4: localM4 });
+  assert.equal(model.totals.inboundValue, 0);
+  assert.equal(model.totals.deductedBy12322Value, 100);
+  assert.equal(model.totals.deductedBy218Value, 200);
+  assert.equal(model.totals.additionalReceiptInvoices218, 1);
+  assert.equal(model.totals.receiptOverlapInvoices, 1);
+  assert.equal(model.totals.unmatchedBilledInvoices, 0);
+});
+
+test('NF faturada sem recebimento permanece na Carteira e aparece na conciliação', () => {
+  const localM3 = list('M3_MOVIMENTO_VENDAS', [
+    ...m3.records.filter(row => row.fact_type === 'SALE'),
+    { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '999', order_qty: 0, bill_qty: 10, inbound_net_value: 100 },
+  ]);
+  const model = buildStockOverviewModel({ m1, m3: localM3, m4 });
+  assert.equal(model.totals.inboundValue, 100);
+  assert.equal(model.totals.unmatchedBilledInvoices, 1);
+});
+
 test('mesma NF em 218 e 12.322 não baixa Bill Qty duas vezes', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),

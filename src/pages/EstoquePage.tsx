@@ -138,7 +138,7 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
           value={currency.format(model.totals.inboundValue)}
           progress={model.progress.inboundMapping}
           progressLabel={inboundCopy}
-          info={`Carteira ainda em aberto. Order Qty permanece previsto; Bill Qty é baixado quando o recebimento é comprovado no 12.322 (NF histórica) ou no 218 (NF + item). A Carteira bruta desta fotografia é ${currency.format(model.totals.grossInboundValue)} e já foram baixados ${currency.format(model.totals.receivedInboundValue)}. Quantidades da Carteira são caixas; a projeção física converte para unidades por Un/CX.`}
+          info={`Carteira ainda em aberto. A baixa financeira usa a união das NFs já recebidas no histórico 379 (operações de entrada 21201/2102 ou 21201/2403), no 12.322 e no 218. Uma mesma NF é baixada uma única vez. A Carteira bruta desta fotografia é ${currency.format(model.totals.grossInboundValue)} e já foram baixados ${currency.format(model.totals.receivedInboundValue)}. Quantidades da Carteira são caixas; a projeção física converte para unidades por Un/CX.`}
         />
       </div>
     </section>
@@ -172,10 +172,27 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
           value={currency.format(model.totals.projectedPurchaseValue)}
           progress={model.totals.projectedPurchaseValue > 0 ? model.totals.inboundValue / model.totals.projectedPurchaseValue : null}
           progressLabel={`${currency.format(model.totals.inboundValue)} vêm da Carteira em aberto`}
-          info="Valor do estoque disponível a custo somado somente ao valor ainda em aberto da Carteira Colgate, depois da conciliação dos recebimentos 12.322 e 218."
+          info="Valor do estoque disponível a custo somado somente ao valor ainda em aberto da Carteira Colgate, depois da conciliação das NFs já recebidas no histórico 379, 12.322 e 218."
         />
       </div>
     </section>
+
+    <PanelCard>
+      <PanelSectionHeader
+        eyebrow="CONCILIAÇÃO DA CARTEIRA"
+        title="Da Carteira bruta ao saldo em aberto"
+        description="Leitura auditável por NF. Se uma NF da Carteira já existir como entrada em qualquer base oficial do sistema, todo o valor dessa NF sai do saldo. NFs repetidas entre fontes são baixadas uma única vez."
+      />
+      <div className="stock-analysis-note">
+        <span>Carteira bruta: <strong>{currency.format(model.totals.grossInboundValue)}</strong></span>
+        <span>Baixado pelo histórico 379: <strong>{currency.format(model.totals.deductedBy379Value)}</strong> · {number.format(model.totals.matchedReceiptInvoices379)} NF(s)</span>
+        <span>Baixado pelo 12.322: <strong>{currency.format(model.totals.deductedBy12322Value)}</strong> · {number.format(model.totals.matchedReceiptInvoices12322)} NF(s)</span>
+        <span>Baixado adicionalmente pelo 218: <strong>{currency.format(model.totals.deductedBy218Value)}</strong> · {number.format(model.totals.additionalReceiptInvoices218)} NF(s)</span>
+        <span>Sobreposição entre fontes: {number.format(model.totals.receiptOverlapInvoices)} NF(s)</span>
+        <span>NF(s) faturada(s) da Carteira sem recebimento encontrado: {number.format(model.totals.unmatchedBilledInvoices)}</span>
+        <span>Saldo final: <strong>{currency.format(model.totals.inboundValue)}</strong></span>
+      </div>
+    </PanelCard>
 
     <div className="stock-overview-main-grid">
       <HealthPanel model={model} />
