@@ -185,8 +185,8 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
       />
       <div className="stock-analysis-note">
         <span>Carteira bruta: <strong>{currency.format(model.totals.grossInboundValue)}</strong></span>
-        <span>Baixado pelo 12.322: <strong>{currency.format(model.totals.deductedBy12322Value)}</strong> · {number.format(model.totals.matchedReceiptInvoices12322)} NF(s)</span>
-        <span>Baixado pelo 218: <strong>{currency.format(model.totals.deductedBy218Value)}</strong> · {number.format(model.totals.additionalReceiptInvoices218)} NF(s) adicionais</span>
+        <span>12.322: {number.format(model.totals.receiptInvoices12322Read)} NF(s) lidas · <strong>{currency.format(model.totals.deductedBy12322Value)}</strong> baixados em {number.format(model.totals.matchedReceiptInvoices12322)} NF(s)</span>
+        <span>218: {number.format(model.totals.receiptInvoices218Read)} NF(s) lidas · <strong>{currency.format(model.totals.deductedBy218Value)}</strong> baixados em {number.format(model.totals.additionalReceiptInvoices218)} NF(s) adicionais</span>
         <span>Sobreposição entre fontes: {number.format(model.totals.receiptOverlapInvoices)} NF(s)</span>
         <span>NF(s) faturada(s) da Carteira sem recebimento encontrado: {number.format(model.totals.unmatchedBilledInvoices)}</span>
         <span>Saldo final: <strong>{currency.format(model.totals.inboundValue)}</strong></span>
