@@ -13,6 +13,7 @@ const DEFAULT_PARSER_VERSION = 'browser-v1';
 const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   '310 total 2026.txt': 'browser-v2-rca310',
   "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v2-route-sheet-scope',
+  'entrada-notas-218.xls': 'browser-v2-invoice-registry',
   'CARTEIRA 24.08.xlsx': 'browser-v4-portfolio-baseline-current',
 };
 const SCHEMA_VERSION = 'v1';
