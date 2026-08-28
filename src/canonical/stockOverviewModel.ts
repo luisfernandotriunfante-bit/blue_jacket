@@ -337,7 +337,6 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const matched12322 = new Set<string>();
   const matched379 = new Set<string>();
   const additional218 = new Set<string>();
-  const billedInvoices = new Set<string>();
   const unmatchedBilled = new Set<string>();
   const overlapReceiptInvoices = new Set<string>();
   let deductedBy379Value = 0;
@@ -359,7 +358,6 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     const invoiceAlreadyReceived = matchedIn379 || matchedIn12322 || matchedIn218;
 
     if (billQty > 0 && invoice) {
-      billedInvoices.add(invoice);
       const sourceMatches = Number(matchedIn379) + Number(matchedIn12322) + Number(matchedIn218);
       if (sourceMatches > 1) overlapReceiptInvoices.add(invoice);
       if (!invoiceAlreadyReceived) unmatchedBilled.add(invoice);
