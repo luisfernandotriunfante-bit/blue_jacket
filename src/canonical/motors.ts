@@ -154,7 +154,7 @@ export function buildM3(sources: ParsedSource[]) {
   }
   for (const row of rows(sources, 'entrada-notas-218.xls')) {
     const out = blank('M3_MOVIMENTO_VENDAS');
-    Object.assign(out, { fact_type: 'RECEIPT', competence: competence(), receipt_date: value(row, 'receipt_date'), invoice_issue_date: value(row, 'invoice_issue_date'), invoice_number: value(row, 'invoice_raw'), invoice_series: value(row, 'invoice_series'), winthor_product_code: value(row, 'receipt_item_code + description'), received_units: value(row, 'received_units'), receipt_unit_price: value(row, 'receipt_unit_price'), current_financial_cost: value(row, 'current_financial_cost'), fiscal_code: value(row, 'fiscal_code'), operation_code: value(row, 'operation_code'), source_lineage: '218' });
+    Object.assign(out, { fact_type: 'RECEIPT', competence: competence(), receipt_date: value(row, 'receipt_date'), invoice_issue_date: value(row, 'invoice_issue_date'), invoice_number: value(row, 'invoice_raw'), invoice_series: value(row, 'invoice_series'), winthor_product_code: value(row, 'receipt_item_code + description'), received_units: value(row, 'received_units'), receipt_unit_price: value(row, 'receipt_unit_price'), current_financial_cost: value(row, 'current_financial_cost'), fiscal_code: value(row, 'fiscal_code'), operation_code: value(row, 'operation_code'), receipt_scope: value(row, '__receipt_scope') ?? 'ITEM', source_lineage: value(row, '__receipt_scope') === 'INVOICE' ? '218:NF' : '218:ITEM' });
     records.push(out);
   }
   for (const row of rows(sources, 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) {
