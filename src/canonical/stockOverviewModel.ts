@@ -357,7 +357,7 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     }
 
     let receivedBillQty = 0;
-    if (billQty > 0 && invoiceAlreadyReceived) {
+    if (billQty > 0 && invoice && invoiceAlreadyReceived) {
       receivedBillQty = billQty;
       if (matchedIn12322) matched12322.add(invoice);
       else if (matchedIn218) {
