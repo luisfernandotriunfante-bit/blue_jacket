@@ -52,6 +52,8 @@ export type StockOverviewModel = {
     receivedInboundValue: number;
     matchedReceiptInvoices218: number;
     matchedReceiptInvoices12322: number;
+    receiptInvoices218Read: number;
+    receiptInvoices12322Read: number;
     additionalReceiptInvoices218: number;
     receiptOverlapInvoices: number;
     unmatchedBilledInvoices: number;
@@ -272,7 +274,9 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   augmentSkuAliasesFromSales(sales, indexes);
   const unitsPerCase = unitsPerCaseIndex(items, sales, indexes);
 
-  const receiptInvoices218 = new Set(receipts218.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
+  const invoiceHeaderReceipts218 = receipts218.filter(fact => normalized(fact.receipt_scope) === 'INVOICE');
+  const receiptRegistry218 = invoiceHeaderReceipts218.length ? invoiceHeaderReceipts218 : receipts218;
+  const receiptInvoices218 = new Set(receiptRegistry218.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
   const receiptInvoices12322 = new Set(receipts12322.map(fact => invoiceKey(fact.invoice_number)).filter(Boolean) as string[]);
 
   const validDates = [
@@ -527,6 +531,8 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
       receivedInboundValue: round(receivedInboundValue),
       matchedReceiptInvoices218: matched218.size,
       matchedReceiptInvoices12322: matched12322.size,
+      receiptInvoices218Read: receiptInvoices218.size,
+      receiptInvoices12322Read: receiptInvoices12322.size,
       additionalReceiptInvoices218: additional218.size,
       receiptOverlapInvoices: overlapReceiptInvoices.size,
       unmatchedBilledInvoices: unmatchedBilled.size,
