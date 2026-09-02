@@ -75,3 +75,20 @@ test('M2, SALE, TARGET and historical facts use one canonical RCA resolver', () 
   assert.equal(aggregate310?.seller_code_310, '706');
   assert.equal(aggregate310?.rca_canonical_id, 'RCA:1064');
 });
+
+test('M1 materializa a sub-brand oficial do 8013 pelo EAN, sem derivar da descrição', () => {
+  const sources = baseSources.map(item => {
+    if (item.source === 'cadastro-itens-286.xls') return source(item.source, [row({ winthor_code: '9001', internal_ean: '7891234567890', manufacturer_code: '61000000', description_286: 'CD TESTE 90G' })]);
+    if (item.source === 'posicao-estoque-105.xls') return source(item.source, [row({ winthor_code: '9001', physical_stock_units: 12, unit_cost_real: 5 })]);
+    if (item.source === 'estoque-8013.xls') return source(item.source, [row({ ean13: '7891234567890', dun14: '17891234567897', category_8013: 'ORAL CARE', subbrand_8013: 'Colgate Total', description_8013: 'COLGATE TOTAL 90G', unit_weight_kg: 0.09, case_weight_kg: 1.08, stock_units_8013: 12, stock_cases_8013: 1, stock_weight_kg: 1.08 })]);
+    if (item.source === 'pctabpr 13.xlsx') return source(item.source, [row({ codprod: '9001', pvenda1: 10 })]);
+    return item;
+  });
+
+  const bundle = buildCanonicalBundleFromStaging(sources);
+  const item = bundle.lists.M1_ITEM_ESTOQUE.records.find(record => record.winthor_code === '9001');
+  assert.equal(item?.subbrand, 'Colgate Total');
+  assert.equal(item?.category, 'ORAL CARE');
+  assert.equal(item?.stock_8013_units, 12);
+  assert.equal(item?.source_lineage, '286|105|PCTABPR|8013|Lançamentos');
+});
