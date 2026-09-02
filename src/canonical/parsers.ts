@@ -13,6 +13,9 @@ const col=(coordinate:string)=>{const m=coordinate.match(/^([A-Z]+)(?:\b|\/|:)/)
 const cell=(row:unknown[], coordinate:string)=>row[col(coordinate)];
 const key=(value:unknown)=>text(value).toUpperCase().replace(/\s+/g,' ');
 const result=(source:string,file:File,sheet:string,rows:Array<Record<string,RawTyped>>,audits:CanonicalAudit[]):ParsedSource=>({source,fileName:file.name,sheet,rows,audits});
+const TOP_RETAIL_ROUTE_SOURCE="08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx";
+const MONTHLY_TOP_TARGET_HEADER=/^META (?:JAN|FEV|MAR|ABR|MAI|JUN|JUL|AGO|SET|OUT|NOV|DEZ)(?:['./ -]?(?:\d{2}|\d{4}))?$/;
+const headerMatches=(source:string,field:Field,actual:unknown)=>source===TOP_RETAIL_ROUTE_SOURCE&&field.output_field==='top_target'?MONTHLY_TOP_TARGET_HEADER.test(key(actual)):key(actual)===key(field.header);
 
 /** Strict tabular reader. It is invoked only by the parser named for a source. */
 async function tabular(source:string,file:File, options:{sheet?:string; filter?:(row:unknown[])=>boolean}={}) {
@@ -24,9 +27,9 @@ async function tabular(source:string,file:File, options:{sheet?:string; filter?:
  if(!actual)return result(source,file,expected,[],[audit(source,file.name,'PARSER_SCHEMA_CHANGED',`Aba esperada: ${expected}; recebidas: ${wb.SheetNames.join(', ')||'(nenhuma)'}.`,'Validar e aprovar a nova versão antes de processar.')]);
  const matrix=XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[actual],{header:1,defval:'',raw:true});
  const columns=fs.filter(f=>col(f.coordinate)>=0), required=columns.filter(f=>f.required==='SIM'&&!f.header.startsWith('('));
- const h=matrix.findIndex(row=>required.filter(f=>key(row[col(f.coordinate)])===key(f.header)).length>=Math.max(1,Math.ceil(required.length*.7)));
+ const h=matrix.findIndex(row=>required.filter(f=>headerMatches(source,f,row[col(f.coordinate)])).length>=Math.max(1,Math.ceil(required.length*.7)));
  if(h<0)return result(source,file,actual,[],[audit(source,file.name,'PARSER_REQUIRED_COLUMN_MISSING',`Cabeçalho contratado não encontrado: ${required.map(f=>f.header).join(' | ')}.`,'Corrigir a fonte ou validar formalmente a nova estrutura.')]);
- const issues:CanonicalAudit[]=[];for(const f of required)if(key(matrix[h][col(f.coordinate)])!==key(f.header))issues.push(audit(source,file.name,'PARSER_SCHEMA_CHANGED',`Posição ${f.coordinate}: esperado “${f.header}”; recebido “${text(matrix[h][col(f.coordinate)])||'(vazio)'}”.`,'Validar nova versão do relatório antes de recalcular.',h+1));
+ const issues:CanonicalAudit[]=[];for(const f of required)if(!headerMatches(source,f,matrix[h][col(f.coordinate)]))issues.push(audit(source,file.name,'PARSER_SCHEMA_CHANGED',`Posição ${f.coordinate}: esperado “${f.header}”; recebido “${text(matrix[h][col(f.coordinate)])||'(vazio)'}”.`,'Validar nova versão do relatório antes de recalcular.',h+1));
  if(issues.length)return result(source,file,actual,[],issues);
  const rows=matrix.slice(h+1).filter(row=>row.some(v=>text(v))).filter(row=>!options.filter||options.filter(row)).map((row,i)=>{const out:Record<string,RawTyped>={};for(const f of columns)out[f.output_field]=typed(cell(row,f.coordinate),f.type);out.__source_row={raw:h+2+i,typed:h+2+i};out.__schema_version={raw:'v1',typed:'v1'};return out});
  return result(source,file,actual,rows,[]);
