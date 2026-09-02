@@ -226,7 +226,7 @@ test('Visão Geral não reaplica checkpoint: consome exatamente a Carteira já v
 
 
 test('versão da Carteira invalida staging anterior após correção de baseline', () => {
-  assert.equal(sourceImportTestHelpers.parserVersionFor('CARTEIRA 24.08.xlsx'), 'browser-v4-portfolio-baseline-current');
+  assert.equal(sourceImportTestHelpers.parserVersionFor('CARTEIRA 24.08.xlsx'), 'browser-v5-portfolio-current-snapshot');
 });
 
 test('fotografia atual da Carteira pode virar baseline sem reproduzir o checkpoint antigo', () => {
@@ -253,13 +253,13 @@ test('fotografia atual da Carteira pode virar baseline sem reproduzir o checkpoi
   assert.deepEqual(current.snapshot.orderNumbers, ['1160096370', '1160110441', '9990000001']);
 });
 
-test('continuidade dinâmica usa bootstrap uma vez e depois usa a fotografia anterior como nova âncora', () => {
+test('nova fotografia da Carteira preserva pedidos antigos e novos por inteiro', () => {
   const row = (order: string, date: string, value: number) => ({
     industry_order_number: { raw: order, typed: order },
     order_date: { raw: date, typed: date },
     net_value: { raw: value, typed: value },
   });
-  const firstParsed = {
+  const currentParsed = {
     source: 'CARTEIRA 24.08.xlsx',
     fileName: 'CARTEIRA 24.08.xlsx',
     sheet: 'Carteira',
@@ -270,14 +270,8 @@ test('continuidade dinâmica usa bootstrap uma vez e depois usa a fotografia ant
     ],
     audits: [],
   };
-  const first = sourceImportTestHelpers.applyPortfolioContinuity(firstParsed, 'CARTEIRA 24.08.xlsx', 'hash-24');
-  assert.equal(first.snapshot.mode, 'BOOTSTRAP_2026_08_17');
-  assert.equal(first.parsed.rows.length, 2);
-  assert.equal(first.snapshot.acceptedValue, 150);
-  assert.deepEqual(first.snapshot.orderNumbers, ['1160096370', '1160110441']);
-
-  const secondParsed = {
-    ...firstParsed,
+  const nextParsed = {
+    ...currentParsed,
     fileName: 'CARTEIRA 27.08.xlsx',
     rows: [
       row('1160096370', '2026-08-17', 80),
@@ -286,12 +280,12 @@ test('continuidade dinâmica usa bootstrap uma vez e depois usa a fotografia ant
       row('8880000000', '2026-07-01', 9000),
     ],
   };
-  const second = sourceImportTestHelpers.applyPortfolioContinuity(secondParsed, 'CARTEIRA 27.08.xlsx', 'hash-27', first.snapshot);
-  assert.equal(second.snapshot.mode, 'ROLL_FORWARD');
-  assert.equal(second.parsed.rows.length, 3);
-  assert.equal(second.snapshot.acceptedValue, 190);
-  assert.deepEqual(second.snapshot.orderNumbers, ['1160096370', '1160110441', '7770000000']);
-  assert.equal(second.snapshot.snapshotDate, '2026-08-27');
+  const next = sourceImportTestHelpers.acceptCurrentPortfolioAsBaseline(nextParsed, 'CARTEIRA 27.08.xlsx', 'hash-27');
+  assert.equal(next.snapshot.mode, 'BASELINE_CURRENT');
+  assert.equal(next.parsed.rows.length, 4);
+  assert.equal(next.snapshot.acceptedValue, 9190);
+  assert.deepEqual(next.snapshot.orderNumbers, ['1160096370', '1160110441', '7770000000', '8880000000']);
+  assert.equal(next.snapshot.snapshotDate, '2026-08-27');
 });
 
 test('treemap usa valor do estoque por item dentro das cinco linhas', () => {
