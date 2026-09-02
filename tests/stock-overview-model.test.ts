@@ -288,13 +288,30 @@ test('nova fotografia da Carteira preserva pedidos antigos e novos por inteiro',
   assert.equal(next.snapshot.snapshotDate, '2026-08-27');
 });
 
-test('treemap usa valor do estoque por item dentro das cinco linhas', () => {
-  const model = buildStockOverviewModel({ m1, m3, m4 });
+test('treemap consolida o valor do estoque por sub-brand dentro das cinco linhas', () => {
+  const localM1 = list('M1_ITEM_ESTOQUE', [
+    { ...m1.records[0], subbrand: 'Colgate Total' },
+    { ...m1.records[1], subbrand: 'Palmolive Naturals' },
+    { ...m1.records[0], item_canonical_id: 'ITEM:3', winthor_code: '3', physical_stock_units: 50, subbrand: 'Colgate Total' },
+  ]);
+  const model = buildStockOverviewModel({ m1: localM1, m3, m4 });
   const dental = model.treemap.find(group => group.line === 'Creme Dental');
   const soap = model.treemap.find(group => group.line === 'Sabonetes');
-  assert.equal(dental?.totalValue, 1800);
+  assert.equal(dental?.totalValue, 2800);
   assert.equal(soap?.totalValue, 1800);
-  assert.equal(dental?.tiles[0]?.saleValue, 1800);
+  assert.equal(dental?.subbrands, 1);
+  assert.equal(dental?.items, 2);
+  assert.equal(dental?.tiles[0]?.label, 'Colgate Total');
+  assert.equal(dental?.tiles[0]?.items, 2);
+  assert.equal(dental?.tiles[0]?.saleValue, 2800);
+});
+
+test('treemap não inventa sub-brand pela descrição do produto', () => {
+  const model = buildStockOverviewModel({ m1, m3, m4 });
+  const dental = model.treemap.find(group => group.line === 'Creme Dental');
+  assert.equal(dental?.subbrands, 0);
+  assert.equal(dental?.itemsWithoutSubbrand, 1);
+  assert.equal(dental?.tiles[0]?.label, 'Sem sub-brand informada');
 });
 
 test('Visão Geral do Estoque continua passiva e não lê arquivos originais', () => {
