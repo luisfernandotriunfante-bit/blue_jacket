@@ -12,7 +12,7 @@ const LISTS_STORE = 'lists';
 const DEFAULT_PARSER_VERSION = 'browser-v1';
 const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   '310 total 2026.txt': 'browser-v2-rca310',
-  "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v2-route-sheet-scope',
+  "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v3-route-monthly-meta',
   'entrada-notas-218.xls': 'browser-v2-invoice-registry',
   // A Carteira é sempre uma fotografia completa enviada pelo usuário. A versão
   // também força o reprocessamento de um staging que poderia ter sido filtrado
