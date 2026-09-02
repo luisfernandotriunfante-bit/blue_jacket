@@ -14,7 +14,10 @@ const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   '310 total 2026.txt': 'browser-v2-rca310',
   "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v2-route-sheet-scope',
   'entrada-notas-218.xls': 'browser-v2-invoice-registry',
-  'CARTEIRA 24.08.xlsx': 'browser-v4-portfolio-baseline-current',
+  // A Carteira é sempre uma fotografia completa enviada pelo usuário. A versão
+  // também força o reprocessamento de um staging que poderia ter sido filtrado
+  // pela antiga regra de continuidade.
+  'CARTEIRA 24.08.xlsx': 'browser-v5-portfolio-current-snapshot',
 };
 const SCHEMA_VERSION = 'v1';
 const ENGINE_VERSION = 'browser-stage3-top-retail-v3';
@@ -78,14 +81,6 @@ type PortfolioContinuitySnapshot = {
 };
 
 const PORTFOLIO_CONTINUITY_KEY = 'portfolio-continuity';
-const PORTFOLIO_BOOTSTRAP_DATE = '2026-08-17';
-const PORTFOLIO_BOOTSTRAP_ORDERS = [
-  '1160096370','1160102681','1160103178','1160103179','1160103180','1160103181','1160103182','1160103183',
-  '1160104097','1160104266','1160104267','1160104268','1160104269','1160104270','1160106125','1160106422',
-  '1160106597','1160106601','1160106609','1160106670','1160106674','1160106733','1160108199','1160108200',
-  '1160108201','1160108203','1160108206','1160109581',
-];
-
 function rowTyped(row: ParsedSource['rows'][number], field: string) {
   const cell = row[field];
   return cell?.typed ?? cell?.raw ?? null;
@@ -141,33 +136,6 @@ function acceptCurrentPortfolioAsBaseline(parsed: ParsedSource, fileName: string
     rawValue: parsed.rows.reduce((sum, row) => sum + rowMoney(row), 0),
     acceptedValue: acceptedRows.reduce((sum, row) => sum + rowMoney(row), 0),
     mode: 'BASELINE_CURRENT',
-    updatedAt: new Date().toISOString(),
-  };
-  return { parsed: { ...parsed, rows: acceptedRows }, snapshot };
-}
-
-function applyPortfolioContinuity(parsed: ParsedSource, fileName: string, fileHash: string, previous?: PortfolioContinuitySnapshot) {
-  const anchorDate = previous?.snapshotDate || PORTFOLIO_BOOTSTRAP_DATE;
-  const anchorOrders = new Set((previous?.orderNumbers?.length ? previous.orderNumbers : PORTFOLIO_BOOTSTRAP_ORDERS).map(normalizeOrderNumber));
-  const acceptedRows = parsed.rows.filter(row => {
-    const orderNumber = normalizeOrderNumber(rowTyped(row, 'industry_order_number'));
-    const orderDate = normalizeIsoDate(rowTyped(row, 'order_date'));
-    if (!orderNumber) return false;
-    return anchorOrders.has(orderNumber) || Boolean(orderDate && orderDate > anchorDate);
-  });
-  const snapshotDate = snapshotDateFromFile(fileName, parsed) || anchorDate;
-  const snapshot: PortfolioContinuitySnapshot = {
-    id: 'portfolio-continuity',
-    source: 'CARTEIRA 24.08.xlsx',
-    fileName,
-    fileHash,
-    snapshotDate,
-    orderNumbers: [...new Set(acceptedRows.map(row => normalizeOrderNumber(rowTyped(row, 'industry_order_number'))).filter(Boolean))].sort(),
-    rawRows: parsed.rows.length,
-    acceptedRows: acceptedRows.length,
-    rawValue: parsed.rows.reduce((sum, row) => sum + rowMoney(row), 0),
-    acceptedValue: acceptedRows.reduce((sum, row) => sum + rowMoney(row), 0),
-    mode: previous ? 'ROLL_FORWARD' : 'BOOTSTRAP_2026_08_17',
     updatedAt: new Date().toISOString(),
   };
   return { parsed: { ...parsed, rows: acceptedRows }, snapshot };
@@ -314,18 +282,10 @@ async function stageOne(source: string, file: File, onProgress?: (progress: Sour
 
   let portfolioSnapshot: PortfolioContinuitySnapshot | undefined;
   if (source === 'CARTEIRA 24.08.xlsx') {
-    const previousContinuity = await idbGet<PortfolioContinuitySnapshot>(BUILDS_STORE, PORTFOLIO_CONTINUITY_KEY);
-
-    // Migração correta: se esta mesma fotografia já estava carregada antes da regra de continuidade
-    // (ou foi filtrada uma única vez pelo bootstrap de 17/08), ela própria vira a baseline atual.
-    // Assim a Carteira 24.08 é a verdade da fotografia corrente e o checkpoint antigo não força
-    // o valor homologado de uma fotografia anterior. Somente cargas futuras usam roll-forward.
-    const sameCurrentSnapshot = previous?.manifest.fileHash === hash;
-    const bootstrapAppliedToThisSameFile = previousContinuity?.mode === 'BOOTSTRAP_2026_08_17'
-      && previousContinuity.fileHash === hash;
-    const continuity = (sameCurrentSnapshot || bootstrapAppliedToThisSameFile)
-      ? acceptCurrentPortfolioAsBaseline(parsed, file.name, hash)
-      : applyPortfolioContinuity(parsed, file.name, hash, previousContinuity);
+    // A origem sempre é uma fotografia integral da Carteira no momento do envio.
+    // Logo, datas e pedidos de uma carga anterior não podem retirar linhas desta
+    // nova fotografia. A baixa das NFs acontece depois, nos motores M3/M4.
+    const continuity = acceptCurrentPortfolioAsBaseline(parsed, file.name, hash);
 
     parsed = continuity.parsed;
     portfolioSnapshot = continuity.snapshot;
@@ -501,4 +461,4 @@ export async function loadGeneratedCanonicalManifest(buildId: string) {
   return { status: 'VALID', generatedAt: build.generatedAt, lists };
 }
 
-export const sourceImportTestHelpers = { normalizedFileName, sha256Bytes, parserVersionFor, applyPortfolioContinuity, acceptCurrentPortfolioAsBaseline, snapshotDateFromFile, normalizeOrderNumber };
+export const sourceImportTestHelpers = { normalizedFileName, sha256Bytes, parserVersionFor, acceptCurrentPortfolioAsBaseline, snapshotDateFromFile, normalizeOrderNumber };
