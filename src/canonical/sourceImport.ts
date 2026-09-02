@@ -191,6 +191,13 @@ export type SourceUpdateResult = {
   manifests: SourceStageManifest[];
 };
 
+export type IncrementalBase = {
+  active: ActiveCanonicalBundle;
+  lists: Record<CanonicalList['id'], CanonicalList>;
+};
+
+const INCREMENTAL_PORTFOLIO_SOURCES = new Set(['CARTEIRA 24.08.xlsx', 'entrada-notas-218.xls', '12.322.txt']);
+
 function openDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -369,6 +376,52 @@ async function saveGeneratedBuild(active: ActiveCanonicalBundle, lists: Record<C
   if (!verified || verified.active.stagingManifestHash !== active.stagingManifestHash) throw new Error('CANONICAL_BUILD_STORAGE_VERIFY_FAILED');
 }
 
+function activeFromLists(lists: Record<CanonicalList['id'], CanonicalList>, stagingManifestHash: string) {
+  const motorBuildId = `motor-browser-${Date.now()}-${stagingManifestHash.slice(0, 10)}`;
+  const rowCounts = Object.fromEntries(Object.entries(lists).map(([id, list]) => [id, list.records.length])) as ActiveCanonicalBundle['rowCounts'];
+  return {
+    status: 'ACTIVE', motorBuildId, stagingManifestHash, schemaVersion: SCHEMA_VERSION, engineVersion: ENGINE_VERSION,
+    approvedAt: new Date().toISOString(), rowCounts, factTypeCounts: factTypeCounts(lists.M3_MOVIMENTO_VENDAS),
+  } satisfies ActiveCanonicalBundle;
+}
+
+async function buildIncrementalPortfolioUpdate(base: IncrementalBase, stages: StoredStage[]) {
+  const changed = new Set(stages.map(stage => stage.source));
+  const patch = buildCanonicalBundleFromStaging(stages.map(stage => stage.parsed)).lists;
+  const m3 = base.lists.M3_MOVIMENTO_VENDAS;
+  const m4 = base.lists.M4_HISTORICO_TRANSICAO;
+  let m3Records = [...m3.records];
+  let m4Records = [...m4.records];
+  if (changed.has('CARTEIRA 24.08.xlsx')) {
+    m3Records = m3Records.filter(record => record.source !== 'CARTEIRA_COLGATE');
+    m3Records.push(...patch.M3_MOVIMENTO_VENDAS.records.filter(record => record.source === 'CARTEIRA_COLGATE'));
+  }
+  if (changed.has('entrada-notas-218.xls')) {
+    m3Records = m3Records.filter(record => record.source !== '218');
+    m3Records.push(...patch.M3_MOVIMENTO_VENDAS.records.filter(record => record.source === '218'));
+  }
+  if (changed.has('12.322.txt')) {
+    m4Records = m4Records.filter(record => record.row_type !== 'RECEIPT_12322');
+    m4Records.push(...patch.M4_HISTORICO_TRANSICAO.records.filter(record => record.row_type === 'RECEIPT_12322'));
+  }
+  const generatedAt = new Date().toISOString();
+  const lists = {
+    ...base.lists,
+    M3_MOVIMENTO_VENDAS: { ...m3, records: m3Records, generatedAt },
+    M4_HISTORICO_TRANSICAO: { ...m4, records: m4Records, generatedAt },
+  };
+  const manifestHash = await sha256Bytes(new TextEncoder().encode(JSON.stringify([
+    'incremental-portfolio-v1', base.active.motorBuildId,
+    ...stages.map(stage => [stage.source, stage.manifest.fileHash]).sort((a, b) => a[0].localeCompare(b[0])),
+  ])));
+  const active = activeFromLists(lists, manifestHash);
+  await saveGeneratedBuild(active, lists, {
+    __base_build__: base.active.motorBuildId,
+    ...Object.fromEntries(stages.map(stage => [stage.source, stage.manifest.fileHash])),
+  });
+  return active;
+}
+
 export async function buildCanonicalFromStoredSources(onProgress?: (progress: SourceUpdateProgress) => void) {
   const stages: StoredStage[] = [];
   const outdated: string[] = [];
@@ -404,7 +457,7 @@ export async function buildCanonicalFromStoredSources(onProgress?: (progress: So
   return active;
 }
 
-export async function processSourceUpdates(filesBySource: Partial<Record<string, File>>, onProgress?: (progress: SourceUpdateProgress) => void): Promise<SourceUpdateResult> {
+export async function processSourceUpdates(filesBySource: Partial<Record<string, File>>, onProgress?: (progress: SourceUpdateProgress) => void, incrementalBase?: IncrementalBase): Promise<SourceUpdateResult> {
   const selected = Object.entries(filesBySource).filter((entry): entry is [string, File] => entry[1] instanceof File);
   const updated: string[] = []; const unchanged: string[] = []; const rejected: SourceUpdateResult['rejected'] = [];
   for (let i = 0; i < selected.length; i += 1) {
@@ -416,6 +469,14 @@ export async function processSourceUpdates(filesBySource: Partial<Record<string,
   }
   const manifests = await loadSourceStagingManifests();
   const missing = REQUIRED_SOURCE_IDS.filter(source => !manifests.some(manifest => manifest.source === source && manifest.status === 'VALID'));
+  const canPatchActivePortfolio = Boolean(incrementalBase) && selected.length > 0 && selected.every(([source]) => INCREMENTAL_PORTFOLIO_SOURCES.has(source));
+  if (!rejected.length && missing.length && canPatchActivePortfolio) {
+    onProgress?.({ source: 'ALL', label: 'Carteira', index: selected.length, total: selected.length, phase: 'BUILDING', message: 'Atualizando Carteira, 218 e 12.322 sobre o build ativo' });
+    const stages = await Promise.all(selected.map(([source]) => loadSourceStaging(source))) as StoredStage[];
+    const active = await buildIncrementalPortfolioUpdate(incrementalBase!, stages);
+    onProgress?.({ source: 'ALL', label: 'Atualização', index: selected.length, total: selected.length, phase: 'DONE', message: `Novo build ${active.motorBuildId} pronto para ativação` });
+    return { active, updated, unchanged, rejected, missing: [], manifests };
+  }
   if (rejected.length || missing.length) return { active: null, updated, unchanged, rejected, missing, manifests };
   const active = await buildCanonicalFromStoredSources(onProgress);
   onProgress?.({ source: 'ALL', label: 'Atualização', index: selected.length, total: selected.length, phase: 'DONE', message: `Novo build ${active.motorBuildId} pronto para ativação` });
