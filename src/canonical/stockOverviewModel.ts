@@ -121,12 +121,11 @@ function comparableCode(value: unknown) {
 function invoiceKey(value: unknown) {
   const raw = text(value)?.replace(/\.0$/, '').replace(/\s+/g, '') ?? '';
   if (!raw) return null;
-  const numericTokens = raw.match(/\d+/g) ?? [];
-  if (numericTokens.length) {
-    let primary = numericTokens[0] ?? '';
-    for (const token of numericTokens) if (token.length > primary.length) primary = token;
-    return primary.replace(/^0+(?=\d)/, '');
-  }
+  // NF é o primeiro bloco numérico do campo. 218 pode trazer "*000123-1":
+  // asteriscos, série, identificadores e qualquer sufixo após o traço não
+  // fazem parte da identidade da nota para a baixa integral da Carteira.
+  const firstNumericToken = raw.match(/\d+/)?.[0];
+  if (firstNumericToken) return firstNumericToken.replace(/^0+(?=\d)/, '');
   const comparable = normalized(raw).replace(/[^A-Z0-9]/g, '');
   return comparable || null;
 }

@@ -105,11 +105,11 @@ test('NF encontrada no 218 zera todo o valor financeiro da linha, mesmo com Orde
   assert.equal(model.totals.inboundQty, 42);
 });
 
-test('normalização de NF encontra o maior bloco numérico quando série vem antes ou depois', () => {
+test('normalização de NF usa somente o número da nota e ignora asterisco, série e identificador posterior', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),
-    { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '001/00000123', order_qty: 0, bill_qty: 10, inbound_net_value: 100 },
-    { fact_type: 'RECEIPT', invoice_number: '00000123-1', winthor_product_code: '1', received_units: 60 },
+    { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '00000123-1', order_qty: 0, bill_qty: 10, inbound_net_value: 100 },
+    { fact_type: 'RECEIPT', invoice_number: '*00000123-2026-IDENTIFICADOR', winthor_product_code: '1', received_units: 60 },
   ]);
   const model = buildStockOverviewModel({ m1, m3: localM3, m4 });
   assert.equal(model.totals.totalInboundQty, 0);
