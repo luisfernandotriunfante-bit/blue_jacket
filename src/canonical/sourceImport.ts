@@ -11,6 +11,7 @@ const BUILDS_STORE = 'builds';
 const LISTS_STORE = 'lists';
 const DEFAULT_PARSER_VERSION = 'browser-v1';
 const SOURCE_PARSER_VERSIONS: Record<string, string> = {
+  'cadastro-itens-286.xls': 'browser-v2-286-physical-column-layout',
   '310 total 2026.txt': 'browser-v2-rca310',
   "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v3-route-monthly-meta',
   'entrada-notas-218.xls': 'browser-v2-invoice-registry',
@@ -20,7 +21,7 @@ const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   'CARTEIRA 24.08.xlsx': 'browser-v5-portfolio-current-snapshot',
 };
 const SCHEMA_VERSION = 'v1';
-const ENGINE_VERSION = 'browser-stage4-subbrand-composition-v7';
+const ENGINE_VERSION = 'browser-stage4-subbrand-composition-v8';
 const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
 
 export const REQUIRED_SOURCE_IDS = [...new Set(SOURCE_IDS)];
