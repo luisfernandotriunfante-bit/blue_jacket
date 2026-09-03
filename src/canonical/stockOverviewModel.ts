@@ -39,6 +39,19 @@ export type StockInboundForecast = {
   invoices: Array<{ invoice: string; value: number; items: string[] }>;
 };
 
+export type StockInboundNote = {
+  invoice: string;
+  orderDate: string | null;
+  billingDate: string | null;
+  totalValue: number;
+  outstandingValue: number;
+  orderQty: number;
+  billQty: number;
+  outstandingQty: number;
+  received: boolean;
+  items: Array<{ label: string; quantity: number; units: number | null }>;
+};
+
 export type StockOverviewModel = {
   analysis: {
     startDate: string | null;
@@ -102,6 +115,7 @@ export type StockOverviewModel = {
   };
   treemap: StockLineTreemap[];
   inboundForecasts: StockInboundForecast[];
+  inboundNotes: StockInboundNote[];
 };
 
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : value === null || value === undefined ? null : String(value).trim() || null;
@@ -353,6 +367,7 @@ export function buildStockOverviewModel({ m1, m3, m4, forecasts = {} }: { m1: Ca
   let deductedBy12322Value = 0;
   let deductedBy218Value = 0;
   const forecastByDate = new Map<string | null, Map<string, { value: number; items: Set<string> }>>();
+  const notesByInvoice = new Map<string, { orderDate: string | null; billingDate: string | null; totalValue: number; outstandingValue: number; orderQty: number; billQty: number; outstandingQty: number; received: boolean; items: Map<string, { quantity: number; units: number | null }> }>();
 
   for (const fact of inbound) {
     const orderQty = Math.max(0, amount(fact.order_qty));
@@ -370,6 +385,24 @@ export function buildStockOverviewModel({ m1, m3, m4, forecasts = {} }: { m1: Ca
     const matchedIn12322 = Boolean(invoice && receiptInvoices12322.has(invoice));
     const matchedIn218 = Boolean(invoice && receiptInvoices218.has(invoice));
     const invoiceAlreadyReceived = matchedIn12322 || matchedIn218;
+    if (invoice) {
+      const note = notesByInvoice.get(invoice) ?? { orderDate: text(fact.order_date), billingDate: firstText(fact, ['billing_date', 'invoice_issue_date']), totalValue: 0, outstandingValue: 0, orderQty: 0, billQty: 0, outstandingQty: 0, received: false, items: new Map() };
+      note.orderDate ||= text(fact.order_date);
+      note.billingDate ||= firstText(fact, ['billing_date', 'invoice_issue_date']);
+      note.totalValue += netValue;
+      note.orderQty += orderQty;
+      note.billQty += billQty;
+      note.received ||= invoiceAlreadyReceived;
+      if (item) {
+        const label = itemLabel(item);
+        const factor = unitsPerCase.get(itemKey(item)) ?? 0;
+        const current = note.items.get(label) ?? { quantity: 0, units: factor > 0 ? 0 : null };
+        current.quantity += grossQty;
+        if (factor > 0) current.units = (current.units ?? 0) + grossQty * factor;
+        note.items.set(label, current);
+      }
+      notesByInvoice.set(invoice, note);
+    }
     if (invoice && !invoiceAlreadyReceived && netValue > 0) {
       const forecastDate = isIsoDate(forecasts[invoice] ?? null) ? forecasts[invoice]! : null;
       {
@@ -400,6 +433,11 @@ export function buildStockOverviewModel({ m1, m3, m4, forecasts = {} }: { m1: Ca
     const outstandingBillQty = Math.max(0, billQty - receivedBillQty);
     const outstandingQty = orderQty + outstandingBillQty;
     const outstandingValue = invoiceAlreadyReceived ? 0 : netValue;
+    if (invoice) {
+      const note = notesByInvoice.get(invoice)!;
+      note.outstandingValue += outstandingValue;
+      note.outstandingQty += outstandingQty;
+    }
 
     if (invoiceAlreadyReceived && netValue > 0) {
       if (matchedIn12322) deductedBy12322Value += netValue;
@@ -553,6 +591,9 @@ export function buildStockOverviewModel({ m1, m3, m4, forecasts = {} }: { m1: Ca
       totalValue: round([...invoices.values()].reduce((sum, row) => sum + row.value, 0)),
       invoices: [...invoices.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([invoice, row]) => ({ invoice, value: round(row.value), items: [...row.items].sort() })),
     }));
+  const inboundNotes: StockInboundNote[] = [...notesByInvoice.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([invoice, note]) => ({ invoice, orderDate: note.orderDate, billingDate: note.billingDate, totalValue: round(note.totalValue), outstandingValue: round(note.outstandingValue), orderQty: round(note.orderQty), billQty: round(note.billQty), outstandingQty: round(note.outstandingQty), received: note.received, items: [...note.items.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([label, item]) => ({ label, quantity: round(item.quantity), units: item.units === null ? null : round(item.units) })) }));
 
   return {
     analysis: {
@@ -617,5 +658,6 @@ export function buildStockOverviewModel({ m1, m3, m4, forecasts = {} }: { m1: Ca
     },
     treemap,
     inboundForecasts,
+    inboundNotes,
   };
 }
