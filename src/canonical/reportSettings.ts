@@ -3,11 +3,20 @@ export type ReportSettings = {
   networkAllocationByCompetence: Record<string, Record<string, number>>;
   sellOutTarget: number | null;
   positivityTarget: number | null;
+  /** Datas manuais de chegada por NF da Carteira, no formato ISO. */
+  inboundForecastByInvoice: Record<string, string>;
 };
 
 const KEY = 'blue-jacket-v3-report-settings';
 const validTarget = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
-const empty = (): ReportSettings => ({ networkTargetByCompetence: {}, networkAllocationByCompetence: {}, sellOutTarget: null, positivityTarget: null });
+const empty = (): ReportSettings => ({ networkTargetByCompetence: {}, networkAllocationByCompetence: {}, sellOutTarget: null, positivityTarget: null, inboundForecastByInvoice: {} });
+const invoiceKey = (value: unknown) => {
+  const raw = String(value ?? '').trim().replace(/\.0$/, '').replace(/\s+/g, '');
+  const first = raw.match(/\d+/)?.[0];
+  if (first) return first.replace(/^0+(?=\d)/, '');
+  return raw.toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
+};
+const validDate = (value: unknown) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
 
 function validAllocation(value: unknown): Record<string, number> {
   if (!value || typeof value !== 'object') return {};
@@ -30,11 +39,19 @@ function normalizedSettings(value: unknown): ReportSettings {
         return target === null ? [] : [[competence, target]];
       }))
       : {};
+    const forecasts = parsed.inboundForecastByInvoice && typeof parsed.inboundForecastByInvoice === 'object'
+      ? Object.fromEntries(Object.entries(parsed.inboundForecastByInvoice).flatMap(([invoice, date]) => {
+        const key = invoiceKey(invoice);
+        const valid = validDate(date);
+        return key && valid ? [[key, valid]] : [];
+      }))
+      : {};
     return {
       networkTargetByCompetence: targets,
       networkAllocationByCompetence: allocations,
       sellOutTarget: validTarget(parsed.sellOutTarget),
       positivityTarget: validTarget(parsed.positivityTarget),
+      inboundForecastByInvoice: forecasts,
     };
   } catch {
     return empty();
@@ -89,6 +106,24 @@ export function setSellOutTargets(sellOutTarget: number | null, positivityTarget
   settings.sellOutTarget = validTarget(sellOutTarget);
   settings.positivityTarget = validTarget(positivityTarget);
   return persist(settings);
+}
+
+export function inboundForecasts() {
+  return loadReportSettings().inboundForecastByInvoice;
+}
+
+export function setInboundForecast(invoice: string, date: string | null) {
+  const settings = loadReportSettings();
+  const key = invoiceKey(invoice);
+  if (!key) return settings;
+  const valid = validDate(date);
+  if (valid) settings.inboundForecastByInvoice[key] = valid;
+  else delete settings.inboundForecastByInvoice[key];
+  return persist(settings);
+}
+
+export function clearInboundForecast(invoice: string) {
+  return setInboundForecast(invoice, null);
 }
 
 export function proportionalNetworkTargets(total: number | null, weights: Array<{ network: string; realized: number }>) {

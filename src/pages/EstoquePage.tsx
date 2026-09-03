@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
 import { buildStockOverviewModel, type StockOverviewModel } from '../canonical/stockOverviewModel';
 import type { CanonicalList } from '../canonical/types';
+import { inboundForecasts } from '../canonical/reportSettings';
 import { useData } from '../store/DataContext';
 import { MigrationPage } from '../ui/pattern/MigrationEmptyState';
 import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
@@ -13,6 +14,7 @@ export type EstoqueView = 'overview' | 'products' | 'movements' | 'purchase-help
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const number = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
 const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFractionDigits: 1 });
+const dateFormatter = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
 function InfoHint({ text }: { text: string }) {
   return <span className="stock-info" tabIndex={0} aria-label={text}><span aria-hidden="true">i</span><span className="stock-info-tooltip" role="tooltip">{text}</span></span>;
@@ -117,8 +119,42 @@ function HealthPanel({ model }: { model: StockOverviewModel }) {
   </PanelCard>;
 }
 
+function InboundForecastPanel({ model }: { model: StockOverviewModel }) {
+  if (!model.inboundForecasts.length) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return <PanelCard>
+    <PanelSectionHeader eyebrow="ENTRADAS PREVISTAS" title="Próximas entradas previstas" description="Previsões informadas manualmente em Atualizar Bases. O valor vem da Carteira em aberto; notas já recebidas não aparecem aqui." />
+    <div className="stock-forecast-grid">
+      {model.inboundForecasts.map(forecast => {
+        const date = new Date(`${forecast.date}T12:00:00`);
+        const days = Math.ceil((date.getTime() - today.getTime()) / 86400000);
+        const horizon = days < 0 ? 'Entrada atrasada' : `Até ${days} dia${days === 1 ? '' : 's'}`;
+        return <article className="stock-forecast-card" key={forecast.date}>
+          <header><strong>{horizon}</strong><span>{dateFormatter.format(date)}</span></header>
+          <div className="stock-forecast-total">{currency.format(forecast.totalValue)}</div>
+          <small>{number.format(forecast.invoices.length)} NF(s) prevista(s)</small>
+          <div className="stock-forecast-invoices">
+            {forecast.invoices.map(invoice => <div className="stock-forecast-invoice" key={invoice.invoice}>
+              <strong>NF: {invoice.invoice}</strong>
+              <span>{currency.format(invoice.value)}</span>
+              {invoice.items.length ? <ul>{invoice.items.map(item => <li key={item}>{item}</li>)}</ul> : <em>Item não vinculado</em>}
+            </div>)}
+          </div>
+        </article>;
+      })}
+    </div>
+  </PanelCard>;
+}
+
 function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m4: CanonicalList }) {
-  const model = useMemo(() => buildStockOverviewModel({ m1, m3, m4 }), [m1, m3, m4]);
+  const [forecastVersion, setForecastVersion] = useState(0);
+  useEffect(() => {
+    const refresh = () => setForecastVersion(version => version + 1);
+    window.addEventListener('blue-jacket-report-settings-changed', refresh);
+    return () => window.removeEventListener('blue-jacket-report-settings-changed', refresh);
+  }, []);
+  const model = useMemo(() => buildStockOverviewModel({ m1, m3, m4, forecasts: inboundForecasts() }), [m1, m3, m4, forecastVersion]);
   const period = model.analysis.startDate && model.analysis.endDate ? `${new Date(`${model.analysis.startDate}T12:00:00`).toLocaleDateString('pt-BR')} — ${new Date(`${model.analysis.endDate}T12:00:00`).toLocaleDateString('pt-BR')}` : 'sem período histórico válido';
   const inboundMapping = model.progress.inboundMapping;
   const inboundCopy = model.totals.totalInboundQty > 0
@@ -168,6 +204,8 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
     </section>
 
     <StockTreemap model={model} />
+
+    <InboundForecastPanel model={model} />
 
     <PanelCard>
       <PanelSectionHeader
