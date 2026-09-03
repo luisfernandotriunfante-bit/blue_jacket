@@ -71,7 +71,9 @@ export type StockOverviewModel = {
     purchaseValue: number;
     saleValue: number;
     availablePurchaseValue: number;
+    availableSaleValue: number;
     projectedPurchaseValue: number;
+    projectedSaleValue: number;
     coverageDays: number | null;
     mappedDemandItems: number;
     pricedItemsWithStock: number;
@@ -411,6 +413,8 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   let purchaseValue = 0;
   let saleValue = 0;
   let availablePurchaseValue = 0;
+  let availableSaleValue = 0;
+  let projectedSaleValue = 0;
   let itemsWithStock = 0;
   let pricedItemsWithStock = 0;
   let mappedDemandItems = 0;
@@ -449,6 +453,11 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     purchaseValue += physical * cost;
     saleValue += itemSaleValue;
     availablePurchaseValue += Math.max(0, available) * cost;
+    availableSaleValue += Math.max(0, available) * price;
+    // A Carteira só entra na projeção quando a linha foi vinculada ao item e
+    // convertida para unidades. Ela é valorizada pelo mesmo PVENDA1 usado no
+    // estoque disponível — nunca pelo valor financeiro bruto da nota.
+    projectedSaleValue += (Math.max(0, available) + inboundItemUnits) * price;
     if (physical > 0) itemsWithStock += 1;
     if (physical > 0 && price > 0) pricedItemsWithStock += 1;
     if (dailyDemand > 0 && coverage !== null) {
@@ -557,7 +566,9 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
       purchaseValue: round(purchaseValue),
       saleValue: round(saleValue),
       availablePurchaseValue: round(availablePurchaseValue),
+      availableSaleValue: round(availableSaleValue),
       projectedPurchaseValue: round(projectedPurchaseValue),
+      projectedSaleValue: round(projectedSaleValue),
       coverageDays: coverageDays === null ? null : round(coverageDays),
       mappedDemandItems,
       pricedItemsWithStock,
