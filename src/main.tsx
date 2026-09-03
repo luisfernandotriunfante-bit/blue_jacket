@@ -15,6 +15,7 @@ import { CriacaoComboPage } from './pages/CriacaoComboPage'
 import { ClientesSortimentoPage, type ClientesSortimentoView } from './pages/ClientesSortimentoUnifiedPage'
 import { DataProvider, useData } from './store/DataContext'
 import { ListasCanonicasPage } from './pages/ListasCanonicasPage'
+import { AuditoriaPage } from './pages/AuditoriaPage'
 import { deviceSyncHasNewerRemoteSnapshot, deviceSyncIdentity, incomingDeviceSyncCode, restoreCurrentDeviceSnapshot } from './canonical/cloudSync'
 import './ui/theme/foundation.css'
 
@@ -62,6 +63,7 @@ function App() {
     { id: 'relatorios', label: 'Documentos', active: activeTab === 'relatorios', onSelect: () => selectSection('relatorios') },
     { id: 'metas', label: 'Metas', active: activeTab === 'metas', onSelect: () => selectSection('metas') },
     { id: 'listas-canonicas', label: 'Listas Canônicas', active: activeTab === 'listas-canonicas', onSelect: () => selectSection('listas-canonicas') },
+    { id: 'auditoria', label: 'Auditoria', active: activeTab === 'auditoria', onSelect: () => selectSection('auditoria') },
     { id: 'configuracoes', label: 'Atualizar Bases', active: activeTab === 'configuracoes', onSelect: () => selectSection('configuracoes') },
   ]
 
@@ -140,6 +142,7 @@ function App() {
       : activeTab === 'relatorios' ? <DocumentosPage />
       : activeTab === 'metas' ? <MetasPage />
       : activeTab === 'listas-canonicas' ? <ListasCanonicasPage />
+      : activeTab === 'auditoria' ? <AuditoriaPage />
       : activeTab === 'configuracoes' ? <ConfiguracoesPage />
       : (
         <PanelPage title={currentLabel}>
