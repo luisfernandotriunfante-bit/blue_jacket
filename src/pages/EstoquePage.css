@@ -16,18 +16,21 @@
 
 .stock-metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: 154px;
   gap: 10px;
 }
 
 .stock-metric-card {
   position: relative;
   min-width: 0;
-  min-height: 138px;
+  height: 100%;
+  min-height: 0;
   padding: 17px 17px 15px;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
+  display: grid;
+  grid-template-rows: 18px minmax(0, 1fr) 32px 5px;
+  gap: 8px;
+  box-sizing: border-box;
   border: 1px solid var(--panel-card-border);
   border-radius: 18px;
   background: linear-gradient(145deg, rgba(28, 33, 42, .95), rgba(19, 23, 30, .94));
@@ -57,12 +60,12 @@
 }
 
 .stock-progress-copy {
-  margin-top: auto;
   color: var(--panel-muted-light);
   font-size: .68rem;
   font-weight: var(--panel-weight-bold);
   line-height: 1.2;
   text-align: right;
+  align-self: end;
 }
 
 .stock-progress {
@@ -298,7 +301,7 @@
 }
 
 @media (max-width: 1350px) {
-  .stock-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stock-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .stock-overview-main-grid { grid-template-columns: 1fr; }
 }
 
@@ -309,11 +312,12 @@
 }
 
 @media (max-width: 780px) {
+  .stock-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stock-line-composition-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 700px) {
-  .stock-metric-grid { grid-template-columns: 1fr; }
+  .stock-metric-grid { grid-template-columns: 1fr; grid-auto-rows: 146px; }
   .stock-line-composition-list { grid-template-columns: 1fr; }
   .stock-line-composition-head { padding: .78rem .85rem .7rem; }
   .stock-subbrand-ledger { max-height: 15rem; }

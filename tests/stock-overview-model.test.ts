@@ -73,6 +73,7 @@ test('Carteira converte caixas em unidades por Un/CX e não usa descrição', ()
   assert.equal(model.totals.inboundValue, 120);
   assert.equal(model.totals.projectedUnits, 360);
   assert.equal(model.totals.projectedPurchaseValue, 1920);
+  assert.equal(model.totals.projectedSaleValue, 5400);
   assert.equal(model.dataQuality.inboundUnmappedRows, 0);
 });
 

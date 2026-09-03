@@ -157,6 +157,13 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
           progressLabel={`${currency.format(model.totals.inboundValue)} vêm da Carteira em aberto`}
           info="Valor do estoque disponível a custo somado somente ao valor ainda em aberto da Carteira Colgate, depois da conciliação das NFs recebidas no 12.322 e, quando não encontradas nele, no 218."
         />
+        <MetricCard
+          label="Projetado a venda"
+          value={currency.format(model.totals.projectedSaleValue)}
+          progress={model.totals.projectedSaleValue > 0 ? (model.totals.projectedSaleValue - model.totals.availableSaleValue) / model.totals.projectedSaleValue : null}
+          progressLabel={`${currency.format(Math.max(0, model.totals.projectedSaleValue - model.totals.availableSaleValue))} em entradas vinculadas`}
+          info="Estoque disponível mais as entradas abertas da Carteira que têm item, conversão Un/CX e PVENDA1. Toda a projeção é valorizada por PVENDA1; o valor bruto da nota não é usado como preço de venda."
+        />
       </div>
     </section>
 
