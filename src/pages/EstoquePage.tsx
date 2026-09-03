@@ -12,7 +12,6 @@ export type EstoqueView = 'overview' | 'products' | 'movements' | 'purchase-help
 
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const number = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
-const decimal = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 });
 const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFractionDigits: 1 });
 
 function InfoHint({ text }: { text: string }) {
@@ -128,15 +127,8 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
 
   return <PanelPage title="Estoque"><div className="panel-stack stock-page-stack">
     <section className="stock-metric-section">
-      <div className="stock-metric-section-head"><span>Resumo financeiro e cobertura</span></div>
+      <div className="stock-metric-section-head"><span>Indicadores de decisão</span></div>
       <div className="stock-metric-grid">
-        <MetricCard
-          label="Cobertura média"
-          value={model.totals.coverageDays === null ? '—' : `${decimal.format(model.totals.coverageDays)} dias`}
-          progress={model.progress.coverageVsReference}
-          progressLabel={model.totals.coverageDays === null ? 'Sem giro mapeado' : `${number.format(model.totals.mappedDemandItems)} SKUs com giro · ref. ${model.analysis.lowCoverageThresholdDays}d`}
-          info={`Média aritmética dos dias de cobertura de cada SKU que teve giro mapeado entre ${period}. Cada produto com giro pesa uma vez. Itens sem venda histórica ficam fora da média e não recebem cobertura artificial.`}
-        />
         <MetricCard
           label="Estoque a custo"
           value={currency.format(model.totals.purchaseValue)}
@@ -152,38 +144,11 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
           info="Saldo físico do M1 multiplicado exclusivamente pelo PVENDA1 da região 11 materializado no M1."
         />
         <MetricCard
-          label="Carteira Colgate"
+          label="Carteira em trânsito"
           value={currency.format(model.totals.inboundValue)}
           progress={model.progress.inboundMapping}
           progressLabel={inboundCopy}
           info={`Carteira ainda em aberto. Para cada NF faturada, o sistema procura primeiro no 12.322; se encontrar, retira todo o valor da NF. Se não encontrar no 12.322, procura no 218 e, se encontrar, também retira todo o valor. Uma mesma NF nunca é abatida duas vezes. A Carteira bruta desta fotografia é ${currency.format(model.totals.grossInboundValue)} e já foram baixados ${currency.format(model.totals.receivedInboundValue)}. Quantidades da Carteira são caixas; a projeção física converte para unidades por Un/CX.`}
-        />
-      </div>
-    </section>
-
-    <section className="stock-metric-section">
-      <div className="stock-metric-section-head"><span>Posição física e projeção</span></div>
-      <div className="stock-metric-grid">
-        <MetricCard
-          label="Estoque físico"
-          value={`${number.format(model.totals.physicalUnits)} un.`}
-          progress={model.progress.stockSkuShare}
-          progressLabel={model.progress.stockSkuShare === null ? 'Sem itens' : `${number.format(model.totals.itemsWithStock)} de ${number.format(model.totals.items)} SKUs com saldo`}
-          info="Posição física já materializada no M1 a partir do relatório 105."
-        />
-        <MetricCard
-          label="Disponível"
-          value={`${number.format(model.totals.availableUnits)} un.`}
-          progress={model.totals.physicalUnits > 0 ? Math.max(0, model.totals.availableUnits) / model.totals.physicalUnits : null}
-          progressLabel={`${number.format(model.totals.reservedUnits)} un. reservadas em pedidos a faturar`}
-          info="Estoque físico menos a reserva dos pedidos SALE com status A FATURAR. A reserva continua visível aqui sem ocupar um card próprio."
-        />
-        <MetricCard
-          label="Projetado"
-          value={`${number.format(model.totals.projectedUnits)} un.`}
-          progress={model.progress.projectedInboundShare}
-          progressLabel={model.progress.projectedInboundShare === null ? 'Sem projeção positiva' : `${percent.format(model.progress.projectedInboundShare)} do projetado vem da Carteira`}
-          info={`Disponível + ${number.format(model.totals.inboundQty)} unidades previstas da Carteira em aberto. As caixas só entram nesta projeção quando existe vínculo seguro do material com o item e fator Un/CX válido.`}
         />
         <MetricCard
           label="Projetado a custo"
@@ -194,6 +159,8 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
         />
       </div>
     </section>
+
+    <StockTreemap model={model} />
 
     <PanelCard>
       <PanelSectionHeader
@@ -212,7 +179,6 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
     </PanelCard>
 
     <HealthPanel model={model} />
-    <StockTreemap model={model} />
 
     <PanelCard>
       <PanelSectionHeader eyebrow="LEITURA" title="Base da análise" description="Resumo operacional da fotografia ativa. A futura lista de agrupamentos não foi criada nem presumida nesta alteração; vamos definir o contrato dela na próxima etapa." />
