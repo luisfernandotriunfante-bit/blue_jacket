@@ -314,6 +314,24 @@ test('treemap não inventa sub-brand pela descrição do produto', () => {
   assert.equal(dental?.tiles[0]?.label, 'Sem sub-brand informada');
 });
 
+test('treemap mantém cada sub-brand oficial, inclusive as menores', () => {
+  const localM1 = list('M1_ITEM_ESTOQUE', Array.from({ length: 11 }, (_, index) => ({
+    item_canonical_id: `ITEM:SUB:${index + 1}`,
+    winthor_code: `SUB${index + 1}`,
+    description_internal: 'CD TESTE 90G',
+    physical_stock_units: index + 1,
+    cost_unit_105: 5,
+    pVenda1_region11: 10,
+    subbrand: `Colgate Sub-brand ${index + 1}`,
+  })));
+  const model = buildStockOverviewModel({ m1: localM1, m3, m4 });
+  const dental = model.treemap.find(group => group.line === 'Creme Dental');
+  assert.equal(dental?.subbrands, 11);
+  assert.equal(dental?.tiles.length, 11);
+  assert.equal(dental?.tiles.some(tile => tile.aggregate || tile.label.startsWith('Outras ')), false);
+  assert.equal(dental?.totalValue, 660);
+});
+
 test('Visão Geral do Estoque continua passiva e não lê arquivos originais', () => {
   const page = fs.readFileSync(new URL('../src/pages/EstoquePage.tsx', import.meta.url), 'utf8');
   assert.ok(page.includes("loadCandidateList('M1_ITEM_ESTOQUE')"));
