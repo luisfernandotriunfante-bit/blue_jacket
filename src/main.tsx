@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BlueJacketShell } from './ui/BlueJacketShell'
 import { HoverSidebar } from './ui/navigation/HoverSidebar'
@@ -13,12 +13,35 @@ import { TopRetailNetworksPage } from './pages/TopRetailNetworksPage'
 import { DocumentosPage } from './pages/DocumentosPage'
 import { CriacaoComboPage } from './pages/CriacaoComboPage'
 import { ClientesSortimentoPage, type ClientesSortimentoView } from './pages/ClientesSortimentoUnifiedPage'
-import { DataProvider } from './store/DataContext'
+import { DataProvider, useData } from './store/DataContext'
 import { ListasCanonicasPage } from './pages/ListasCanonicasPage'
+import { deviceSyncHasNewerRemoteSnapshot, deviceSyncIdentity, incomingDeviceSyncCode, restoreCurrentDeviceSnapshot } from './canonical/cloudSync'
 import './ui/theme/foundation.css'
 
+/** Restores a newer paired snapshot on startup without replacing an unsynced local build. */
+function DeviceSyncBootstrap() {
+  const { activeCanonical, activateCanonical } = useData()
+
+  useEffect(() => {
+    if (incomingDeviceSyncCode()) return
+    const identity = deviceSyncIdentity()
+    if (!identity) return
+    void (async () => {
+      try {
+        if (activeCanonical && !(await deviceSyncHasNewerRemoteSnapshot(identity))) return
+        const restored = await restoreCurrentDeviceSnapshot(identity)
+        if (restored) activateCanonical(restored)
+      } catch {
+        // Offline, first-use, or integrity failures leave this device's local copy untouched.
+      }
+    })()
+  }, [])
+
+  return null
+}
+
 function App() {
-  const [activeTab, setActiveTab] = useState('estoque')
+  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.hash.replace(/^#/, '')).has('sync') ? 'configuracoes' : 'estoque')
   const [activeEstoqueTopTab, setActiveEstoqueTopTab] = useState('overview')
   const [activeSellOutTopTab, setActiveSellOutTopTab] = useState('resumo')
   const [activeAtividadesTopTab, setActiveAtividadesTopTab] = useState('combo')
@@ -128,5 +151,5 @@ function App() {
 }
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-  <React.StrictMode><DataProvider><App /></DataProvider></React.StrictMode>,
+  <React.StrictMode><DataProvider><DeviceSyncBootstrap /><App /></DataProvider></React.StrictMode>,
 )
