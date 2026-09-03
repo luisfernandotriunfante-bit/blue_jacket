@@ -33,6 +33,12 @@ export type StockLineTreemap = {
   tiles: StockTreemapTile[];
 };
 
+export type StockInboundForecast = {
+  date: string;
+  totalValue: number;
+  invoices: Array<{ invoice: string; value: number; items: string[] }>;
+};
+
 export type StockOverviewModel = {
   analysis: {
     startDate: string | null;
@@ -95,6 +101,7 @@ export type StockOverviewModel = {
     historicalUnmappedRows: number;
   };
   treemap: StockLineTreemap[];
+  inboundForecasts: StockInboundForecast[];
 };
 
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : value === null || value === undefined ? null : String(value).trim() || null;
@@ -268,7 +275,7 @@ function alert(code: string, tone: StockOverviewAlertTone, title: string, detail
   } satisfies StockOverviewAlert;
 }
 
-export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m4: CanonicalList }): StockOverviewModel {
+export function buildStockOverviewModel({ m1, m3, m4, forecasts = {} }: { m1: CanonicalList; m3: CanonicalList; m4: CanonicalList; forecasts?: Record<string, string> }): StockOverviewModel {
   const items = m1.records as RecordValue[];
   const m3Records = m3.records as RecordValue[];
   const m4Records = m4.records as RecordValue[];
@@ -345,6 +352,7 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const overlapReceiptInvoices = new Set<string>();
   let deductedBy12322Value = 0;
   let deductedBy218Value = 0;
+  const forecastByDate = new Map<string, Map<string, { value: number; items: Set<string> }>>();
 
   for (const fact of inbound) {
     const orderQty = Math.max(0, amount(fact.order_qty));
@@ -362,6 +370,17 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
     const matchedIn12322 = Boolean(invoice && receiptInvoices12322.has(invoice));
     const matchedIn218 = Boolean(invoice && receiptInvoices218.has(invoice));
     const invoiceAlreadyReceived = matchedIn12322 || matchedIn218;
+    if (invoice && !invoiceAlreadyReceived) {
+      const forecastDate = forecasts[invoice];
+      if (forecastDate && isIsoDate(forecastDate) && netValue > 0) {
+        const byInvoice = forecastByDate.get(forecastDate) ?? new Map<string, { value: number; items: Set<string> }>();
+        const entry = byInvoice.get(invoice) ?? { value: 0, items: new Set<string>() };
+        entry.value += netValue;
+        if (item) entry.items.add(itemLabel(item));
+        byInvoice.set(invoice, entry);
+        forecastByDate.set(forecastDate, byInvoice);
+      }
+    }
 
     if (billQty > 0 && invoice) {
       if (matchedIn12322 && matchedIn218) overlapReceiptInvoices.add(invoice);
@@ -527,6 +546,13 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const safeProjected = Math.max(0, projectedUnits);
   const stockSkuShare = items.length > 0 ? itemsWithStock / items.length : null;
   const pricedCoverage = itemsWithStock > 0 ? pricedItemsWithStock / itemsWithStock : null;
+  const inboundForecasts: StockInboundForecast[] = [...forecastByDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, invoices]) => ({
+      date,
+      totalValue: round([...invoices.values()].reduce((sum, row) => sum + row.value, 0)),
+      invoices: [...invoices.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([invoice, row]) => ({ invoice, value: round(row.value), items: [...row.items].sort() })),
+    }));
 
   return {
     analysis: {
@@ -590,5 +616,6 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
       historicalUnmappedRows: unmappedHistoricalRows,
     },
     treemap,
+    inboundForecasts,
   };
 }

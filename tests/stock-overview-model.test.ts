@@ -77,6 +77,19 @@ test('Carteira converte caixas em unidades por Un/CX e não usa descrição', ()
   assert.equal(model.dataQuality.inboundUnmappedRows, 0);
 });
 
+test('previsão manual de entrada agrupa NF, valor e itens da Carteira', () => {
+  const localM3 = list('M3_MOVIMENTO_VENDAS', [
+    ...m3.records.filter(row => row.fact_type === 'SALE'),
+    { ...m3.records.find(row => row.fact_type === 'INBOUND_ORDER'), invoice_number: '00000123' },
+  ]);
+  const model = buildStockOverviewModel({ m1, m3: localM3, m4, forecasts: { '123': '2026-09-10' } });
+  assert.equal(model.inboundForecasts.length, 1);
+  assert.equal(model.inboundForecasts[0]?.date, '2026-09-10');
+  assert.equal(model.inboundForecasts[0]?.totalValue, 120);
+  assert.equal(model.inboundForecasts[0]?.invoices[0]?.invoice, '123');
+  assert.equal(model.inboundForecasts[0]?.invoices[0]?.items.length, 1);
+});
+
 test('218 baixa todo Bill Qty da NF recebida, inclusive linhas cujo item não foi mapeado', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),
