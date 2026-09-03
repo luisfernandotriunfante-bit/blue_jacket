@@ -24,28 +24,44 @@ const codeKey = (input: unknown) => {
   return /^\d+$/.test(raw) ? raw.replace(/^0+(?=\d)/, '') : raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
 };
 
-/** UPC-A may appear com 12 dígitos no Winthor e com o zero à esquerda no 8013. */
-const ean13Key = (input: unknown) => {
-  const digits = String(input ?? '').replace(/\D/g, '');
-  if (digits.length === 12) return `0${digits}`;
-  return digits.length === 13 ? digits : null;
+const gtinCheckDigit = (payload: string) => {
+  let total = 0;
+  for (let index = payload.length - 1, weight = 3; index >= 0; index -= 1, weight = weight === 3 ? 1 : 3) total += Number(payload[index]) * weight;
+  return String((10 - total % 10) % 10);
 };
+
+/** UPC-A may appear com 12 dígitos e a embalagem pode trazer DUN-14 no Winthor. */
+const gtinKeys = (input: unknown) => {
+  const digits = String(input ?? '').replace(/\D/g, '');
+  if (digits.length === 12) return [`0${digits}`];
+  if (digits.length === 13) return [digits];
+  if (digits.length === 14) {
+    // DUN-14 = indicador + 12 dígitos do EAN + dígito verificador próprio.
+    // Reconstituímos o EAN-13 para encontrar a classificação do 8013.
+    const eanPayload = digits.slice(1, 13);
+    return [digits, `${eanPayload}${gtinCheckDigit(eanPayload)}`];
+  }
+  return [];
+};
+
+const ean13Key = (input: unknown) => gtinKeys(input).find(key => key.length === 13) ?? null;
 
 function stock8013ByEan(records: Array<Record<string, RawTyped>>) {
   const index = new Map<string, Record<string, RawTyped>>();
   const conflicted = new Set<string>();
   for (const record of records) {
-    const ean = ean13Key(value(record, 'ean13'));
-    if (!ean || conflicted.has(ean)) continue;
-    const previous = index.get(ean);
-    if (!previous) {
-      index.set(ean, record);
-      continue;
-    }
-    const sameClassification = ['subbrand_8013', 'category_8013'].every(field => value(previous, field) === value(record, field));
-    if (!sameClassification) {
-      index.delete(ean);
-      conflicted.add(ean);
+    for (const key of [...gtinKeys(value(record, 'ean13')), ...gtinKeys(value(record, 'dun14'))]) {
+      if (conflicted.has(key)) continue;
+      const previous = index.get(key);
+      if (!previous) {
+        index.set(key, record);
+        continue;
+      }
+      const sameClassification = ['subbrand_8013', 'category_8013'].every(field => value(previous, field) === value(record, field));
+      if (!sameClassification) {
+        index.delete(key);
+        conflicted.add(key);
+      }
     }
   }
   return index;
@@ -53,8 +69,10 @@ function stock8013ByEan(records: Array<Record<string, RawTyped>>) {
 
 function stock8013For(index: Map<string, Record<string, RawTyped>>, ...candidates: unknown[]) {
   for (const candidate of candidates) {
-    const found = index.get(ean13Key(candidate) ?? '');
-    if (found) return found;
+    for (const key of gtinKeys(candidate)) {
+      const found = index.get(key);
+      if (found) return found;
+    }
   }
   return undefined;
 }
@@ -115,7 +133,7 @@ export function buildM1(sources: ParsedSource[]) {
     const ean = value(row, 'ean', 'internal_ean', 'ean_internal');
     const manufacturer = value(row, 'manufacturer_code');
     const industry = listByEan.get(ean13Key(ean) ?? '') ?? listBySku.get(codeKey(manufacturer));
-    const source8013 = stock8013For(stock8013, ean, industry ? value(industry, 'ean') : null);
+    const source8013 = stock8013For(stock8013, ean, industry ? value(industry, 'ean') : null, industry ? value(industry, 'dun_14') : null);
     const id = winthor || String(ean ?? '');
     if (!id || seen.has(id)) return null;
     seen.add(id);
@@ -267,7 +285,7 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
     const ean = value(row, 'internal_ean');
     const manufacturer = value(row, 'manufacturer_code');
     const industry = listByEan.get(ean13Key(ean) ?? '') ?? listBySku.get(codeKey(manufacturer));
-    const source8013 = stock8013For(stock8013, ean, industry ? value(industry, 'ean') : null);
+    const source8013 = stock8013For(stock8013, ean, industry ? value(industry, 'ean') : null, industry ? value(industry, 'dun_14') : null);
     items.set(code, fieldOnly('M1_ITEM_ESTOQUE', {
       snapshot_date: snapshot, competence: comp, item_canonical_id: `ITEM:${code}`, winthor_code: code,
       manufacturer_code: manufacturer, industry_sku: industry ? value(industry, 'sku') : null,
