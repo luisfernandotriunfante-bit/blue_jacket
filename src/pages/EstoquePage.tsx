@@ -48,7 +48,7 @@ function StockTreemap({ model }: { model: StockOverviewModel }) {
     <PanelSectionHeader
       eyebrow="ESTOQUE POR LINHA"
       title="Composição por sub-brand"
-      description="Uma linha por painel. As sub-brands oficiais do 8013 aparecem nomeadas, com barra proporcional ao valor do estoque físico a PVENDA1."
+      description="Cada linha é um painel compacto. As sub-brands oficiais do 8013 aparecem nomeadas, com faixas proporcionais ao valor do estoque físico a PVENDA1."
     />
     {model.treemap.some(group => group.totalValue > 0) ? <>
       <div className="stock-line-composition-list" aria-label="Composição de estoque por linha comercial e sub-brand">
