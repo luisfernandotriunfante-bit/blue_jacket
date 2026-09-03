@@ -14,7 +14,6 @@ export type EstoqueView = 'overview' | 'products' | 'movements' | 'purchase-help
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const number = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
 const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFractionDigits: 1 });
-const dateFormatter = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 
 function InfoHint({ text }: { text: string }) {
   return <span className="stock-info" tabIndex={0} aria-label={text}><span aria-hidden="true">i</span><span className="stock-info-tooltip" role="tooltip">{text}</span></span>;
@@ -96,7 +95,7 @@ function StockTreemap({ model }: { model: StockOverviewModel }) {
   </PanelCard>;
 }
 
-function HealthPanel({ model }: { model: StockOverviewModel }) {
+export function HealthPanel({ model }: { model: StockOverviewModel }) {
   return <PanelCard>
     <PanelSectionHeader
       eyebrow="SAÚDE DO ESTOQUE"
@@ -120,29 +119,34 @@ function HealthPanel({ model }: { model: StockOverviewModel }) {
 }
 
 function InboundForecastPanel({ model }: { model: StockOverviewModel }) {
-  if (!model.inboundForecasts.length) return null;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  const buckets = [
+    { key: '0-7', label: 'Até 7 dias', match: (days: number | null) => days !== null && days >= 0 && days <= 7 },
+    { key: '8-15', label: '8 a 15 dias', match: (days: number | null) => days !== null && days >= 8 && days <= 15 },
+    { key: '16-30', label: '16 a 30 dias', match: (days: number | null) => days !== null && days >= 16 && days <= 30 },
+    { key: 'later', label: 'Após 30 dias', match: (days: number | null) => days !== null && days > 30 },
+    { key: 'none', label: 'Sem previsão', match: (days: number | null) => days === null },
+  ];
+  const grouped = buckets.map(bucket => {
+    const entries = model.inboundForecasts.filter(forecast => bucket.match(forecast.date ? Math.ceil((new Date(`${forecast.date}T12:00:00`).getTime() - today.getTime()) / 86400000) : null));
+    return { ...bucket, invoices: entries.flatMap(forecast => forecast.invoices), totalValue: entries.reduce((sum, forecast) => sum + forecast.totalValue, 0) };
+  });
   return <PanelCard>
     <PanelSectionHeader eyebrow="ENTRADAS PREVISTAS" title="Próximas entradas previstas" description="Previsões informadas manualmente em Atualizar Bases. O valor vem da Carteira em aberto; notas já recebidas não aparecem aqui." />
     <div className="stock-forecast-grid">
-      {model.inboundForecasts.map(forecast => {
-        const date = new Date(`${forecast.date}T12:00:00`);
-        const days = Math.ceil((date.getTime() - today.getTime()) / 86400000);
-        const horizon = days < 0 ? 'Entrada atrasada' : `Até ${days} dia${days === 1 ? '' : 's'}`;
-        return <article className="stock-forecast-card" key={forecast.date}>
-          <header><strong>{horizon}</strong><span>{dateFormatter.format(date)}</span></header>
-          <div className="stock-forecast-total">{currency.format(forecast.totalValue)}</div>
-          <small>{number.format(forecast.invoices.length)} NF(s) prevista(s)</small>
+      {grouped.map(group => <article className="stock-forecast-card" data-empty={!group.invoices.length} key={group.key}>
+          <header><strong>{group.label}</strong><span>{number.format(group.invoices.length)} NF(s)</span></header>
+          <div className="stock-forecast-total">{group.invoices.length ? currency.format(group.totalValue) : '—'}</div>
+          {!group.invoices.length ? <small>Nenhuma entrada cadastrada</small> : null}
           <div className="stock-forecast-invoices">
-            {forecast.invoices.map(invoice => <div className="stock-forecast-invoice" key={invoice.invoice}>
+            {group.invoices.map(invoice => <div className="stock-forecast-invoice" key={invoice.invoice}>
               <strong>NF: {invoice.invoice}</strong>
               <span>{currency.format(invoice.value)}</span>
-              {invoice.items.length ? <ul>{invoice.items.map(item => <li key={item}>{item}</li>)}</ul> : <em>Item não vinculado</em>}
+              {group.key === 'none' ? null : invoice.items.length ? <ul>{invoice.items.map(item => <li key={item}>{item}</li>)}</ul> : <em>Item não vinculado</em>}
             </div>)}
           </div>
-        </article>;
-      })}
+        </article>)}
     </div>
   </PanelCard>;
 }
@@ -155,7 +159,6 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
     return () => window.removeEventListener('blue-jacket-report-settings-changed', refresh);
   }, []);
   const model = useMemo(() => buildStockOverviewModel({ m1, m3, m4, forecasts: inboundForecasts() }), [m1, m3, m4, forecastVersion]);
-  const period = model.analysis.startDate && model.analysis.endDate ? `${new Date(`${model.analysis.startDate}T12:00:00`).toLocaleDateString('pt-BR')} — ${new Date(`${model.analysis.endDate}T12:00:00`).toLocaleDateString('pt-BR')}` : 'sem período histórico válido';
   const inboundMapping = model.progress.inboundMapping;
   const inboundCopy = model.totals.totalInboundQty > 0
     ? `${number.format(model.totals.totalInboundQty)} cx. em aberto · ${inboundMapping === null ? 'sem vínculo' : `${percent.format(inboundMapping)} com item + Un/CX`}`
@@ -206,34 +209,6 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
     <StockTreemap model={model} />
 
     <InboundForecastPanel model={model} />
-
-    <PanelCard>
-      <PanelSectionHeader
-        eyebrow="CONCILIAÇÃO DA CARTEIRA"
-        title="Da Carteira bruta ao saldo em aberto"
-        description="Leitura auditável por NF. Primeiro o sistema procura no 12.322; somente se não encontrar ali, procura no 218. Se encontrar em qualquer um dos dois, todo o valor daquela NF sai da Carteira. Uma mesma NF nunca é abatida duas vezes."
-      />
-      <div className="stock-analysis-note">
-        <span>Carteira bruta: <strong>{currency.format(model.totals.grossInboundValue)}</strong></span>
-        <span>12.322: {number.format(model.totals.receiptInvoices12322Read)} NF(s) lidas · <strong>{currency.format(model.totals.deductedBy12322Value)}</strong> baixados em {number.format(model.totals.matchedReceiptInvoices12322)} NF(s)</span>
-        <span>218: {number.format(model.totals.receiptInvoices218Read)} NF(s) lidas · <strong>{currency.format(model.totals.deductedBy218Value)}</strong> baixados em {number.format(model.totals.additionalReceiptInvoices218)} NF(s) adicionais</span>
-        <span>Sobreposição entre fontes: {number.format(model.totals.receiptOverlapInvoices)} NF(s)</span>
-        <span>NF(s) faturada(s) da Carteira sem recebimento encontrado: {number.format(model.totals.unmatchedBilledInvoices)}</span>
-        <span>Saldo final: <strong>{currency.format(model.totals.inboundValue)}</strong></span>
-      </div>
-    </PanelCard>
-
-    <HealthPanel model={model} />
-
-    <PanelCard>
-      <PanelSectionHeader eyebrow="LEITURA" title="Base da análise" description="Resumo operacional da fotografia ativa. A futura lista de agrupamentos não foi criada nem presumida nesta alteração; vamos definir o contrato dela na próxima etapa." />
-      <div className="stock-analysis-note">
-        <span>Janela de giro: {period}</span>
-        <span>{number.format(model.totals.mappedDemandItems)} SKUs com giro mapeado</span>
-        <span>{number.format(model.totals.mappedInboundRows)} de {number.format(model.totals.totalInboundRows)} linhas abertas da Carteira com item + Un/CX</span>
-        <span>{number.format(model.totals.launchItems)} lançamentos reconhecidos</span>
-      </div>
-    </PanelCard>
   </div></PanelPage>;
 }
 

@@ -12,9 +12,9 @@ import {
   type DeviceSyncIdentity,
 } from '../canonical/cloudSync';
 import { loadCandidateList } from '../canonical/candidateLists';
+import { buildStockOverviewModel, type StockOverviewModel } from '../canonical/stockOverviewModel';
 import { APPROVED_CANONICAL_BUILD } from '../canonical/runtime';
-import { networkTargetFor, setNetworkTargetFor } from '../canonical/reportSettings';
-import { clearInboundForecast, inboundForecasts, setInboundForecast } from '../canonical/reportSettings';
+import { clearInboundForecast, inboundForecasts, networkTargetFor, setInboundForecast, setNetworkTargetFor } from '../canonical/reportSettings';
 import {
   detectSourceForFileName,
   loadSourceStagingManifests,
@@ -53,14 +53,21 @@ export function ConfiguracoesPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncCode, setSyncCode] = useState('');
   const [syncNotice, setSyncNotice] = useState('');
-  const [forecastInvoice, setForecastInvoice] = useState('');
-  const [forecastDate, setForecastDate] = useState('');
   const [forecastVersion, setForecastVersion] = useState(0);
+  const [forecastModel, setForecastModel] = useState<StockOverviewModel | null>(null);
   const competence = '2026-08';
   const [networkTarget, setNetworkTarget] = useState(() => networkTargetFor(competence)?.toString() ?? '');
   const refresh = () => loadSourceStagingManifests().then(setManifests).catch(reason => setError(String(reason)));
 
   useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    if (!activeCanonical) { setForecastModel(null); return; }
+    let live = true;
+    Promise.all([loadCandidateList('M1_ITEM_ESTOQUE'), loadCandidateList('M3_MOVIMENTO_VENDAS'), loadCandidateList('M4_HISTORICO_TRANSICAO')])
+      .then(([m1, m3, m4]) => { if (live) setForecastModel(buildStockOverviewModel({ m1, m3, m4, forecasts: inboundForecasts() })); })
+      .catch(() => { if (live) setForecastModel(null); });
+    return () => { live = false; };
+  }, [activeCanonical, forecastVersion]);
   useEffect(() => {
     const incoming = incomingDeviceSyncCode();
     if (!incoming) return;
@@ -188,10 +195,9 @@ export function ConfiguracoesPage() {
     finally { setSyncing(false); }
   };
 
-  const saveInboundForecast = async () => {
-    if (!forecastInvoice.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(forecastDate)) { setError('Informe a NF e uma data válida para a previsão de entrada.'); return; }
-    setInboundForecast(forecastInvoice, forecastDate);
-    setForecastInvoice(''); setForecastDate(''); setForecastVersion(version => version + 1); setStatus('Previsão de entrada salva.'); setError('');
+  const saveInboundForecast = async (invoice: string, date: string) => {
+    setInboundForecast(invoice, date || null);
+    setForecastVersion(version => version + 1); setStatus(`Previsão da NF ${invoice} salva.`); setError('');
     if (!deviceSync) return;
     setSyncing(true);
     try { await uploadCurrentDeviceSnapshot(deviceSync); setSyncNotice('Previsão manual e bases foram sincronizadas com o outro aparelho.'); }
@@ -249,13 +255,8 @@ export function ConfiguracoesPage() {
     </PanelCard>
 
     <PanelCard>
-      <PanelSectionHeader eyebrow="PREVISÃO MANUAL" title="Entradas de notas" description="Informe a previsão de chegada de uma NF aberta da Carteira. A Visão Geral usará automaticamente o valor e os itens da Carteira para montar o bloco de próximas entradas." />
-      <div className="stock-forecast-form">
-        <label>NF<input className="panel-input" value={forecastInvoice} onChange={event => setForecastInvoice(event.target.value)} placeholder="Número da NF" inputMode="numeric" /></label>
-        <label>Previsão de entrada<input className="panel-input" type="date" value={forecastDate} onChange={event => setForecastDate(event.target.value)} /></label>
-        <button className="panel-button" disabled={syncing} onClick={() => void saveInboundForecast()}>Salvar previsão</button>
-      </div>
-      {forecastVersion >= 0 && Object.keys(inboundForecasts()).length ? <div className="stock-forecast-settings-list">{Object.entries(inboundForecasts()).sort(([a], [b]) => a.localeCompare(b)).map(([invoice, date]) => <div key={invoice}><span>NF {invoice}</span><strong>{new Date(`${date}T12:00:00`).toLocaleDateString('pt-BR')}</strong><button className="panel-button" onClick={() => void removeInboundForecast(invoice)}>Remover</button></div>)}</div> : <p className="panel-muted">Nenhuma previsão manual cadastrada.</p>}
+      <PanelSectionHeader eyebrow="PREVISÃO MANUAL" title="Entradas de notas" description="As NFs vêm automaticamente da Carteira. Informe somente a data prevista; o valor e os itens já são carregados da própria NF." />
+      {forecastModel?.inboundForecasts.length ? <div className="stock-forecast-settings-list">{forecastModel.inboundForecasts.flatMap(group => group.invoices.map(invoice => ({ ...invoice, date: group.date }))).map(invoice => <div key={invoice.invoice}><span>NF {invoice.invoice}</span><strong>{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(invoice.value)}</strong><input className="panel-input" type="date" value={invoice.date ?? ''} onChange={event => void saveInboundForecast(invoice.invoice, event.target.value)} disabled={syncing} /><button className="panel-button" onClick={() => void removeInboundForecast(invoice.invoice)}>Limpar</button></div>)}</div> : <p className="panel-muted">Nenhuma NF aberta encontrada na Carteira atual.</p>}
     </PanelCard>
 
     <PanelCard><PanelSectionHeader eyebrow="META MANUAL" title="Meta Redes Geral" description="Parâmetro separado da meta de Sell Out, por competência. Sem valor, o relatório mostra Não configurada." /><label className="panel-muted">Competência {competence} <input type="number" min="0" value={networkTarget} onChange={event => setNetworkTarget(event.target.value)} /></label>{' '}<button className="panel-button" disabled={syncing} onClick={() => void saveNetworkTarget()}>Salvar Meta Redes</button></PanelCard>

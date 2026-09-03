@@ -332,7 +332,8 @@
 .stock-forecast-form .panel-input { min-width: 180px; }
 .stock-forecast-settings-list { display: grid; gap: 6px; margin-top: 14px; }
 .stock-forecast-settings-list > div { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-top: 1px solid var(--panel-card-border); color: var(--panel-muted-light); font-size: .72rem; }
-.stock-forecast-settings-list > div strong { color: var(--panel-text); margin-right: auto; }
+.stock-forecast-settings-list > div strong { color: var(--panel-text); min-width: 8rem; }
+.stock-forecast-settings-list > div .panel-input { width: 10.5rem; }
 
 @media (max-width: 1350px) {
   .stock-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -355,6 +356,9 @@
   .stock-metric-grid { grid-template-columns: 1fr; grid-auto-rows: 146px; }
   .stock-line-composition-list { grid-template-columns: 1fr; }
   .stock-forecast-grid { grid-template-columns: 1fr; }
+  .stock-forecast-settings-list > div { align-items: stretch; flex-wrap: wrap; }
+  .stock-forecast-settings-list > div strong { margin-right: auto; }
+  .stock-forecast-settings-list > div .panel-input { width: 100%; }
   .stock-line-composition-head { padding: .78rem .85rem .7rem; }
   .stock-subbrand-ledger { max-height: 15rem; }
   .stock-subbrand-row { grid-template-columns: .55rem minmax(0, 1fr) minmax(5.7rem, .7fr); gap: .35rem; }
