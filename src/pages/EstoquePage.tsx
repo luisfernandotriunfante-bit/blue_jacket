@@ -210,10 +210,8 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
       </div>
     </PanelCard>
 
-    <div className="stock-overview-main-grid">
-      <HealthPanel model={model} />
-      <StockTreemap model={model} />
-    </div>
+    <HealthPanel model={model} />
+    <StockTreemap model={model} />
 
     <PanelCard>
       <PanelSectionHeader eyebrow="LEITURA" title="Base da análise" description="Resumo operacional da fotografia ativa. A futura lista de agrupamentos não foi criada nem presumida nesta alteração; vamos definir o contrato dela na próxima etapa." />
