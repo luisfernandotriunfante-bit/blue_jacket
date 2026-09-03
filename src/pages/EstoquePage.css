@@ -231,7 +231,15 @@
 .stock-line-composition-head > span { grid-area: value; color: #fff; font-size: .92rem; font-weight: var(--panel-weight-heavy); text-align: right; }
 .stock-line-composition-head small { grid-area: detail; color: var(--panel-muted-light); font-size: .64rem; line-height: 1.25; }
 
-.stock-line-composition-body { min-width: 0; padding: .65rem .8rem .75rem; }
+.stock-line-composition-body { min-width: 0; padding: .55rem; }
+.stock-subbrand-treemap { position: relative; height: 18rem; overflow: hidden; border-radius: 10px; background: rgba(255,255,255,.05); }
+.stock-subbrand-tile { position: absolute; display: grid; align-content: center; gap: .16rem; min-width: 0; overflow: hidden; padding: .45rem; border: 1px solid rgba(8,12,19,.85); color: #fff; box-shadow: inset 0 1px rgba(255,255,255,.1); outline: none; }
+.stock-subbrand-tile:hover, .stock-subbrand-tile:focus-visible { z-index: 2; filter: brightness(1.18); box-shadow: inset 0 0 0 2px rgba(255,255,255,.75); }
+.stock-subbrand-tile[data-classified='false'] { filter: grayscale(.8); }
+.stock-subbrand-tile strong, .stock-subbrand-tile span, .stock-subbrand-tile small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stock-subbrand-tile strong { font-size: .69rem; }
+.stock-subbrand-tile span { font-size: .64rem; font-weight: var(--panel-weight-heavy); }
+.stock-subbrand-tile small { font-size: .58rem; opacity: .78; }
 .stock-subbrand-strip { height: .7rem; display: flex; overflow: hidden; gap: 2px; border-radius: 999px; background: rgba(255,255,255,.06); }
 .stock-subbrand-strip span { min-width: 3px; transition: filter .16s ease; }
 .stock-subbrand-strip span:hover { filter: brightness(1.3); }

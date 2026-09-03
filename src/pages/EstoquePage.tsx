@@ -5,6 +5,7 @@ import type { CanonicalList } from '../canonical/types';
 import { useData } from '../store/DataContext';
 import { MigrationPage } from '../ui/pattern/MigrationEmptyState';
 import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
+import { buildHierarchicalTreemap } from '../ui/charts/hierarchicalTreemapLayout';
 import './EstoquePage.css';
 
 export type EstoqueView = 'overview' | 'products' | 'movements' | 'purchase-helper';
@@ -48,11 +49,12 @@ function StockTreemap({ model }: { model: StockOverviewModel }) {
     <PanelSectionHeader
       eyebrow="ESTOQUE POR LINHA"
       title="Composição por sub-brand"
-      description="Cada linha é um painel compacto. As sub-brands oficiais do 8013 aparecem nomeadas, com faixas proporcionais ao valor do estoque físico a PVENDA1."
+      description="Cada painel é um treemap: a área de cada bloco é proporcional ao valor da sub-brand no estoque físico a PVENDA1."
     />
     {model.treemap.some(group => group.totalValue > 0) ? <>
       <div className="stock-line-composition-list" aria-label="Composição de estoque por linha comercial e sub-brand">
         {model.treemap.map((group, lineIndex) => {
+          const rectangles = buildHierarchicalTreemap(group.tiles.map(tile => ({ id: tile.key, value: tile.saleValue, data: tile })), { x: 0, y: 0, width: 100, height: 100 });
           return <section className="stock-line-composition" key={group.line} data-hue={LINE_HUE_NAMES[lineIndex]} aria-label={`${group.line}: ${currency.format(group.totalValue)}`}>
           <header className="stock-line-composition-head">
             <strong>{group.line}</strong>
@@ -60,25 +62,24 @@ function StockTreemap({ model }: { model: StockOverviewModel }) {
             <small>{number.format(group.subbrands)} sub-brands · {percent.format(totalValue ? group.totalValue / totalValue : 0)} do estoque</small>
           </header>
           {group.tiles.length ? <div className="stock-line-composition-body">
-            <div className="stock-subbrand-strip" aria-label={`Distribuição proporcional das sub-brands de ${group.line}`}>
-              {group.tiles.map((tile, tileIndex) => <span key={tile.key} title={`${tile.label}: ${currency.format(tile.saleValue)}`} style={{ flexGrow: Math.max(tile.saleValue, 1), background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }} />)}
-            </div>
-            <div className="stock-subbrand-ledger">
+            <div className="stock-subbrand-treemap" aria-label={`Treemap proporcional das sub-brands de ${group.line}`}>
           {group.tiles.map((tile, tileIndex) => {
+            const rect = rectangles.get(tile.key);
+            if (!rect) return null;
             const share = group.totalValue > 0 ? tile.saleValue / group.totalValue : 0;
             const label = `${group.line}, ${tile.label}: ${currency.format(tile.saleValue)}; ${number.format(tile.items)} SKU(s); ${percent.format(share)} da linha.`;
             return <div
               key={tile.key}
-              className="stock-subbrand-row"
+              className="stock-subbrand-tile"
               data-classified={tile.classified ? 'true' : 'false'}
               tabIndex={0}
               aria-label={label}
+              title={label}
+              style={{ left: `${rect.x}%`, top: `${rect.y}%`, width: `${rect.width}%`, height: `${rect.height}%`, background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }}
             >
-              <span className="stock-subbrand-swatch" style={{ background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }} />
               <strong>{tile.label}</strong>
-              <span className="stock-subbrand-value">{currency.format(tile.saleValue)}</span>
-              <span className="stock-subbrand-share">{percent.format(share)}</span>
-              <span className="stock-subbrand-bar"><i style={{ width: `${Math.max(share * 100, .7)}%`, background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }} /></span>
+              <span>{currency.format(tile.saleValue)}</span>
+              <small>{percent.format(share)}</small>
             </div>;
           })}</div></div> : <div className="stock-line-composition-empty">Sem estoque valorizado nesta linha.</div>}
         </section>;
