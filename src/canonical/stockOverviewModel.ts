@@ -19,13 +19,17 @@ export type StockTreemapTile = {
   saleValue: number;
   physicalUnits: number;
   availableUnits: number;
+  items: number;
   aggregate: boolean;
+  classified: boolean;
 };
 
 export type StockLineTreemap = {
   line: SellOutCommercialLine;
   totalValue: number;
   items: number;
+  subbrands: number;
+  itemsWithoutSubbrand: number;
   tiles: StockTreemapTile[];
 };
 
@@ -100,7 +104,7 @@ const dateValue = (value: string) => Date.parse(`${value}T12:00:00Z`);
 const isoDate = (value: number) => new Date(value).toISOString().slice(0, 10);
 const LOW_COVERAGE_DAYS = 30;
 const ANALYSIS_DAYS = 90;
-const MAX_TILES_PER_LINE = 18;
+const MAX_SUBBRANDS_PER_LINE = 9;
 
 
 function firstText(record: RecordValue | undefined, fields: string[]) {
@@ -216,6 +220,10 @@ function itemLabel(item: RecordValue) {
   const code = firstText(item, ['winthor_code', 'manufacturer_code', 'internal_ean']) ?? 'sem código';
   const description = firstText(item, ['description_internal', 'description_286', 'description_105']) ?? 'sem descrição';
   return `${code} · ${description}`;
+}
+
+function itemSubbrand(item: RecordValue) {
+  return firstText(item, ['subbrand', 'subbrand_8013']) ?? 'Sem sub-brand informada';
 }
 
 function unitsPerCaseIndex(items: RecordValue[], sales: RecordValue[], indexes: ReturnType<typeof buildItemIndexes>) {
@@ -417,7 +425,7 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   const noPrice: RecordValue[] = [];
   const oversold: RecordValue[] = [];
   const unclassified: RecordValue[] = [];
-  const lineItemBuckets = new Map<SellOutCommercialLine, StockTreemapTile[]>(SELL_OUT_COMMERCIAL_LINES.map(line => [line, []]));
+  const lineSubbrandBuckets = new Map<SellOutCommercialLine, Map<string, StockTreemapTile>>(SELL_OUT_COMMERCIAL_LINES.map(line => [line, new Map()]));
 
   for (const item of items) {
     const key = itemKey(item);
@@ -452,14 +460,27 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
 
     const line = itemLine(item);
     if (line && itemSaleValue > 0) {
-      lineItemBuckets.get(line)!.push({
-        key,
-        label: itemLabel(item),
-        saleValue: round(itemSaleValue),
-        physicalUnits: round(physical),
-        availableUnits: round(available),
-        aggregate: false,
-      });
+      const label = itemSubbrand(item);
+      const subbrandKey = normalized(label) || label;
+      const buckets = lineSubbrandBuckets.get(line)!;
+      const previous = buckets.get(subbrandKey);
+      if (previous) {
+        previous.saleValue = round(previous.saleValue + itemSaleValue);
+        previous.physicalUnits = round(previous.physicalUnits + physical);
+        previous.availableUnits = round(previous.availableUnits + available);
+        previous.items += 1;
+      } else {
+        buckets.set(subbrandKey, {
+          key: `${line}:${subbrandKey}`,
+          label,
+          saleValue: round(itemSaleValue),
+          physicalUnits: round(physical),
+          availableUnits: round(available),
+          items: 1,
+          aggregate: false,
+          classified: label !== 'Sem sub-brand informada',
+        });
+      }
     } else if (!line) {
       unclassified.push(item);
     }
@@ -482,23 +503,27 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
   if (noTurnover.length) alerts.push(alert('NO_TURNOVER', 'info', 'Estoque sem giro na janela', `Itens com saldo disponível e nenhuma saída líquida mapeada nos últimos ${ANALYSIS_DAYS} dias.`, noTurnover));
 
   const treemap: StockLineTreemap[] = SELL_OUT_COMMERCIAL_LINES.map(line => {
-    const sorted = [...(lineItemBuckets.get(line) ?? [])].sort((a, b) => b.saleValue - a.saleValue);
-    const visible = sorted.slice(0, MAX_TILES_PER_LINE);
-    const hidden = sorted.slice(MAX_TILES_PER_LINE);
+    const sorted = [...(lineSubbrandBuckets.get(line)?.values() ?? [])].sort((a, b) => b.saleValue - a.saleValue);
+    const visible = sorted.slice(0, MAX_SUBBRANDS_PER_LINE);
+    const hidden = sorted.slice(MAX_SUBBRANDS_PER_LINE);
     if (hidden.length) {
       visible.push({
-        key: `${line}:OUTROS`,
-        label: `Outros ${hidden.length} itens`,
+        key: `${line}:OUTRAS_SUBBRANDS`,
+        label: `Outras ${hidden.length} sub-brands`,
         saleValue: round(hidden.reduce((sum, item) => sum + item.saleValue, 0)),
         physicalUnits: round(hidden.reduce((sum, item) => sum + item.physicalUnits, 0)),
         availableUnits: round(hidden.reduce((sum, item) => sum + item.availableUnits, 0)),
+        items: hidden.reduce((sum, item) => sum + item.items, 0),
         aggregate: true,
+        classified: hidden.every(item => item.classified),
       });
     }
     return {
       line,
       totalValue: round(sorted.reduce((sum, item) => sum + item.saleValue, 0)),
-      items: sorted.length,
+      items: sorted.reduce((sum, item) => sum + item.items, 0),
+      subbrands: sorted.filter(item => item.classified).length,
+      itemsWithoutSubbrand: sorted.filter(item => !item.classified).reduce((sum, item) => sum + item.items, 0),
       tiles: visible,
     };
   });

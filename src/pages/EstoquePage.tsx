@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
-import { buildStockOverviewModel, type StockLineTreemap, type StockOverviewModel, type StockTreemapTile } from '../canonical/stockOverviewModel';
+import { buildStockOverviewModel, type StockOverviewModel } from '../canonical/stockOverviewModel';
 import type { CanonicalList } from '../canonical/types';
 import { useData } from '../store/DataContext';
 import { MigrationPage } from '../ui/pattern/MigrationEmptyState';
@@ -28,51 +28,57 @@ function MetricCard({ label, value, progress, progressLabel, info }: { label: st
   </div>;
 }
 
-function tileSpan(tile: StockTreemapTile, group: StockLineTreemap) {
-  const share = group.totalValue > 0 ? tile.saleValue / group.totalValue : 0;
-  const area = Math.max(2, Math.min(24, Math.round(share * 42)));
-  const col = Math.max(2, Math.min(6, Math.round(Math.sqrt(area * 1.5))));
-  const row = Math.max(1, Math.min(4, Math.ceil(area / col)));
-  return { col, row };
-}
+const LINE_HUES = [351, 207, 148, 272, 38];
 
-function tileColor(lineIndex: number, tileIndex: number, aggregate: boolean) {
-  if (aggregate) return `hsl(${lineIndex * 68 + 18} 18% 27% / .88)`;
-  const hue = (lineIndex * 68 + tileIndex * 11 + 8) % 360;
-  const saturation = 36 + (tileIndex % 4) * 7;
-  const lightness = 24 + (tileIndex % 5) * 3;
-  return `hsl(${hue} ${saturation}% ${lightness}% / .92)`;
+function tileColor(lineIndex: number, tileIndex: number, aggregate: boolean, classified: boolean) {
+  if (!classified) return 'linear-gradient(145deg, rgba(86, 96, 112, .94), rgba(43, 50, 61, .96))';
+  const hue = LINE_HUES[lineIndex % LINE_HUES.length]!;
+  const shift = (tileIndex % 4) * 4;
+  if (aggregate) return `linear-gradient(145deg, hsl(${hue} 23% ${29 + shift}% / .96), hsl(${hue} 19% ${20 + shift}% / .98))`;
+  return `linear-gradient(145deg, hsl(${hue} ${58 - shift}% ${32 + shift}% / .98), hsl(${hue + 10} ${48 - shift}% ${22 + shift}% / .99))`;
 }
 
 function StockTreemap({ model }: { model: StockOverviewModel }) {
   return <PanelCard>
     <PanelSectionHeader
       eyebrow="ESTOQUE POR LINHA"
-      title="Valor do estoque por produto"
-      description="As cinco linhas são as mesmas do Sell Out. Dentro de cada linha, cada bloco representa um produto e cresce conforme o valor do estoque físico a PVENDA1. As cores servem apenas para diferenciar visualmente os itens."
+      title="Composição do estoque por sub-brand"
+      description="As cinco linhas oficiais do Sell Out permanecem iguais. Dentro de cada linha, os produtos são consolidados pela sub-brand declarada no 8013 e comparados pelo valor do estoque físico a PVENDA1."
     />
     <div className="stock-line-treemap-grid">{model.treemap.map((group, lineIndex) => <section className="stock-line-treemap" key={group.line}>
       <div className="stock-line-treemap-head">
-        <div><strong>{group.line}</strong><span>{number.format(group.items)} itens com valor</span></div>
+        <div>
+          <strong>{group.line}</strong>
+          <span>{group.subbrands ? `${number.format(group.subbrands)} sub-brands · ` : ''}{number.format(group.items)} SKUs com estoque{group.itemsWithoutSubbrand ? ` · ${number.format(group.itemsWithoutSubbrand)} sem sub-brand` : ''}</span>
+        </div>
         <strong>{currency.format(group.totalValue)}</strong>
       </div>
-      {group.tiles.length ? <div className="stock-item-treemap">{group.tiles.map((tile, tileIndex) => {
-        const span = tileSpan(tile, group);
-        return <div
-          key={tile.key}
-          className="stock-item-tile"
-          data-aggregate={tile.aggregate ? 'true' : 'false'}
-          style={{ gridColumn: `span ${span.col}`, gridRow: `span ${span.row}`, background: tileColor(lineIndex, tileIndex, tile.aggregate) }}
-          title={`${tile.label}\n${currency.format(tile.saleValue)}\n${number.format(tile.availableUnits)} disponíveis`}
-        >
-          <strong>{tile.label}</strong>
-          <span>{currency.format(tile.saleValue)}</span>
-          <small>{number.format(tile.availableUnits)} disponíveis</small>
-        </div>;
-      })}</div> : <div className="stock-line-empty">Sem estoque valorizado nesta linha</div>}
+      {group.tiles.length ? <>
+        <div className="stock-subbrand-composition" aria-label={`Participação das sub-brands em ${group.line}`}>{group.tiles.map((tile, tileIndex) => {
+          const share = group.totalValue > 0 ? tile.saleValue / group.totalValue : 0;
+          return <span key={tile.key} title={`${tile.label}: ${percent.format(share)}`} style={{ flex: `${Math.max(tile.saleValue, 1)} 1 0`, background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }} />;
+        })}</div>
+        <div className="stock-subbrand-grid">{group.tiles.map((tile, tileIndex) => {
+          const share = group.totalValue > 0 ? tile.saleValue / group.totalValue : 0;
+          return <div
+            key={tile.key}
+            className="stock-subbrand-tile"
+            data-aggregate={tile.aggregate ? 'true' : 'false'}
+            data-classified={tile.classified ? 'true' : 'false'}
+            style={{ background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }}
+            title={`${tile.label}\n${currency.format(tile.saleValue)}\n${number.format(tile.items)} SKU(s)\n${number.format(tile.availableUnits)} disponíveis`}
+          >
+            <strong>{tile.label}</strong>
+            <span>{currency.format(tile.saleValue)}</span>
+            <small>{number.format(tile.items)} SKUs · {percent.format(share)} da linha</small>
+            <div className="stock-subbrand-share"><span style={{ width: `${Math.max(4, share * 100)}%` }} /></div>
+          </div>;
+        })}</div>
+      </> : <div className="stock-line-empty">Sem estoque valorizado nesta linha</div>}
     </section>)}</div>
     <div className="stock-analysis-note">
-      <span>O mapa usa valor do estoque, não quantidade de SKUs, para definir o tamanho dos blocos.</span>
+      <span>A faixa colorida mostra a participação de cada sub-brand no valor da linha.</span>
+      <span>Produtos e fragrâncias individuais não entram como blocos: ficam consolidados na sub-brand oficial.</span>
     </div>
   </PanelCard>;
 }

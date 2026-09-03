@@ -23,6 +23,25 @@ const codeKey = (input: unknown) => {
   if (!raw) return '';
   return /^\d+$/.test(raw) ? raw.replace(/^0+(?=\d)/, '') : raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
 };
+function stock8013ByEan(records: Array<Record<string, RawTyped>>) {
+  const index = new Map<string, Record<string, RawTyped>>();
+  const conflicted = new Set<string>();
+  for (const record of records) {
+    const ean = String(value(record, 'ean13') ?? '');
+    if (!ean || conflicted.has(ean)) continue;
+    const previous = index.get(ean);
+    if (!previous) {
+      index.set(ean, record);
+      continue;
+    }
+    const sameClassification = ['subbrand_8013', 'category_8013'].every(field => value(previous, field) === value(record, field));
+    if (!sameClassification) {
+      index.delete(ean);
+      conflicted.add(ean);
+    }
+  }
+  return index;
+}
 const issue = (code: string, message: string, source = 'motor', severity: CanonicalAudit['severity'] = 'WARNING'): CanonicalAudit => ({
   code,
   severity,
@@ -70,11 +89,13 @@ export function buildM1(sources: ParsedSource[]) {
   const listPriceRows = rows(sources, 'Lista_de_Preco (8).xlsx');
   const listByEan = new Map(listPriceRows.map(row => [String(value(row, 'ean') ?? ''), row]));
   const listBySku = new Map(listPriceRows.map(row => [codeKey(value(row, 'sku')), row]));
+  const stock8013 = stock8013ByEan(rows(sources, 'estoque-8013.xls'));
   const records = base.map(row => {
     const winthor = String(value(row, 'winthor_code', 'product_code', 'item_code', 'code') ?? '');
     const ean = String(value(row, 'ean', 'internal_ean', 'ean_internal') ?? '');
     const manufacturer = value(row, 'manufacturer_code');
     const industry = listByEan.get(ean) ?? listBySku.get(codeKey(manufacturer));
+    const source8013 = stock8013.get(ean) ?? (industry ? stock8013.get(String(value(industry, 'ean') ?? '')) : undefined);
     const id = winthor || ean;
     if (!id || seen.has(id)) return null;
     seen.add(id);
@@ -83,11 +104,14 @@ export function buildM1(sources: ParsedSource[]) {
       snapshot_date: new Date().toISOString().slice(0, 10), competence: competence(), item_canonical_id: `ITEM:${id}`,
       winthor_code: winthor || null, manufacturer_code: manufacturer, internal_ean: ean || null,
       industry_sku: industry ? value(industry, 'sku') : null, industry_ean: industry ? value(industry, 'ean') : ean || null,
-      dun14: industry ? value(industry, 'dun_14') : null, description_internal: value(row, 'description', 'product_description', 'description_internal'),
-      description_industry: industry ? value(industry, 'descricao_padrao') : null,
+      dun14: (industry ? value(industry, 'dun_14') : null) ?? (source8013 ? value(source8013, 'dun14') : null), description_internal: value(row, 'description', 'product_description', 'description_internal'),
+      description_industry: (industry ? value(industry, 'descricao_padrao') : null) ?? (source8013 ? value(source8013, 'description_8013') : null),
+      category: source8013 ? value(source8013, 'category_8013') : null, subbrand: source8013 ? value(source8013, 'subbrand_8013') : null,
       units_per_case_industry: industry ? value(industry, 'un_cx') : null, cases_per_pallet: industry ? value(industry, 'cx_pal') : null,
       physical_stock_units: value(row, 'physical_stock', 'stock', 'quantity', 'quantity_stock'),
-      source_system: 'Winthor', source_file: '286/105', source_row: value(row, '__source_row'),
+      unit_weight_kg: source8013 ? value(source8013, 'unit_weight_kg') : null, case_weight_kg: source8013 ? value(source8013, 'case_weight_kg') : null,
+      stock_8013_units: source8013 ? value(source8013, 'stock_units_8013') : null, stock_8013_cases: source8013 ? value(source8013, 'stock_cases_8013') : null, stock_8013_weight_kg: source8013 ? value(source8013, 'stock_weight_kg') : null,
+      source_system: 'Winthor', source_file: source8013 ? '286/105/8013' : '286/105', source_row: value(row, '__source_row'),
     });
     if (!winthor || !ean) audits.push(issue('ITEM_UNRESOLVED', `Item ${id} sem ${!winthor ? 'código Winthor' : 'EAN'}.`));
     return out;
@@ -210,6 +234,7 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   const listPriceRows = rows(parsedSources, 'Lista_de_Preco (8).xlsx');
   const listByEan = new Map(listPriceRows.map(row => [String(value(row, 'ean') ?? ''), row]));
   const listBySku = new Map(listPriceRows.map(row => [codeKey(value(row, 'sku')), row]));
+  const stock8013 = stock8013ByEan(rows(parsedSources, 'estoque-8013.xls'));
   const items = new Map<string, Record<string, unknown>>();
   for (const row of [...rows(parsedSources, 'cadastro-itens-286.xls'), ...rows(parsedSources, 'posicao-estoque-105.xls')]) {
     const code = String(value(row, 'winthor_code') ?? '');
@@ -218,16 +243,20 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
     const ean = String(value(row, 'internal_ean') ?? '');
     const manufacturer = value(row, 'manufacturer_code');
     const industry = listByEan.get(ean) ?? listBySku.get(codeKey(manufacturer));
+    const source8013 = stock8013.get(ean) ?? (industry ? stock8013.get(String(value(industry, 'ean') ?? '')) : undefined);
     items.set(code, fieldOnly('M1_ITEM_ESTOQUE', {
       snapshot_date: snapshot, competence: comp, item_canonical_id: `ITEM:${code}`, winthor_code: code,
       manufacturer_code: manufacturer, industry_sku: industry ? value(industry, 'sku') : null,
-      internal_ean: value(row, 'internal_ean'), industry_ean: industry ? value(industry, 'ean') : null, dun14: industry ? value(industry, 'dun_14') : null,
-      description_internal: value(row, 'description_286', 'description_105'), description_industry: industry ? value(industry, 'descricao_padrao') : null,
+      internal_ean: value(row, 'internal_ean'), industry_ean: industry ? value(industry, 'ean') : null, dun14: (industry ? value(industry, 'dun_14') : null) ?? (source8013 ? value(source8013, 'dun14') : null),
+      description_internal: value(row, 'description_286', 'description_105'), description_industry: (industry ? value(industry, 'descricao_padrao') : null) ?? (source8013 ? value(source8013, 'description_8013') : null),
+      category: source8013 ? value(source8013, 'category_8013') : null, subbrand: source8013 ? value(source8013, 'subbrand_8013') : null,
       pack_internal: value(row, 'pack_286', 'pack_105'), units_per_case_industry: industry ? value(industry, 'un_cx') : null, cases_per_pallet: industry ? value(industry, 'cx_pal') : null,
       physical_stock_units: value(stock ?? row, 'physical_stock_units'), stock_286_physical: value(row, 'physical_286'), stock_286_blocked: value(row, 'blocked_286'), stock_286_reserved: value(row, 'reserved_286'), stock_286_available: value(row, 'available_286'),
+      unit_weight_kg: source8013 ? value(source8013, 'unit_weight_kg') : null, case_weight_kg: source8013 ? value(source8013, 'case_weight_kg') : null,
+      stock_8013_units: source8013 ? value(source8013, 'stock_units_8013') : null, stock_8013_cases: source8013 ? value(source8013, 'stock_cases_8013') : null, stock_8013_weight_kg: source8013 ? value(source8013, 'stock_weight_kg') : null,
       cost_unit_105: value(stock ?? row, 'unit_cost_real'), sale_price_105: value(stock ?? row, 'sale_price_105'), pVenda1_region11: pVenda.get(code) ?? null,
       is_launch: launch ? true : false, launch_status: launch ? value(launch, 'launch_status') : null, has_winthor: true, mapping_status: industry ? 'WINTHOR+LIST_PRICE' : 'WINTHOR',
-      source_lineage: industry ? '286|105|PCTABPR|ListaPreço|Lançamentos' : '286|105|PCTABPR|Lançamentos',
+      source_lineage: `${industry ? '286|105|PCTABPR|ListaPreço' : '286|105|PCTABPR'}${source8013 ? '|8013' : ''}|Lançamentos`,
     }));
   }
   bundle.lists.M1_ITEM_ESTOQUE = list('M1_ITEM_ESTOQUE', [...items.values()], ['cadastro-itens-286.xls', 'posicao-estoque-105.xls', 'estoque-8013.xls', 'pctabpr 13.xlsx', 'Lista_de_Preco (8).xlsx', 'lançamentos.xlsx', "Sortimento Recomendado - Q3'26.xlsx"], []);
