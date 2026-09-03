@@ -3,7 +3,6 @@ import { loadCandidateList } from '../canonical/candidateLists';
 import { buildStockOverviewModel, type StockOverviewModel } from '../canonical/stockOverviewModel';
 import type { CanonicalList } from '../canonical/types';
 import { useData } from '../store/DataContext';
-import { buildHierarchicalTreemap, insetTreemapBounds, type TreemapBounds } from '../ui/charts/hierarchicalTreemapLayout';
 import { MigrationPage } from '../ui/pattern/MigrationEmptyState';
 import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 import './EstoquePage.css';
@@ -30,7 +29,7 @@ function MetricCard({ label, value, progress, progressLabel, info }: { label: st
 }
 
 const LINE_HUES = [351, 207, 148, 272, 38];
-const LINE_TREEMAP_BOUNDS: TreemapBounds = { x: 0, y: 0, width: 1200, height: 560 };
+const LINE_HUE_NAMES = ['rosa', 'azul', 'verde', 'violeta', 'dourado'];
 
 function tileColor(lineIndex: number, tileIndex: number, aggregate: boolean, classified: boolean) {
   if (!classified) return 'linear-gradient(145deg, rgba(86, 96, 112, .94), rgba(43, 50, 61, .96))';
@@ -38,36 +37,6 @@ function tileColor(lineIndex: number, tileIndex: number, aggregate: boolean, cla
   const shift = (tileIndex % 4) * 4;
   if (aggregate) return `linear-gradient(145deg, hsl(${hue} 23% ${29 + shift}% / .96), hsl(${hue} 19% ${20 + shift}% / .98))`;
   return `linear-gradient(145deg, hsl(${hue} ${58 - shift}% ${32 + shift}% / .98), hsl(${hue + 10} ${48 - shift}% ${22 + shift}% / .99))`;
-}
-
-function percentage(value: number, total: number) {
-  return `${Math.max(0, Math.min(100, value / total * 100))}%`;
-}
-
-function boxStyle(rect: TreemapBounds, reference: TreemapBounds) {
-  return {
-    left: percentage(rect.x - reference.x, reference.width),
-    top: percentage(rect.y - reference.y, reference.height),
-    width: percentage(rect.width, reference.width),
-    height: percentage(rect.height, reference.height),
-  };
-}
-
-function tileDensity(rect: TreemapBounds) {
-  if (rect.width >= 170 && rect.height >= 118) return 'full';
-  if (rect.width >= 96 && rect.height >= 62) return 'label';
-  return 'tiny';
-}
-
-function buildLineTreemap(group: StockOverviewModel['treemap'][number]) {
-  const inputs = group.tiles
-    .map((tile, tileIndex) => ({ id: tile.key, value: tile.saleValue, data: { tile, tileIndex } }))
-    .filter(tile => tile.value > 0);
-  const rects = buildHierarchicalTreemap(inputs, insetTreemapBounds(LINE_TREEMAP_BOUNDS, 4));
-  return inputs.flatMap(input => {
-    const rect = rects.get(input.id);
-    return rect ? [{ ...input.data, rect }] : [];
-  });
 }
 
 function StockTreemap({ model }: { model: StockOverviewModel }) {
@@ -78,39 +47,40 @@ function StockTreemap({ model }: { model: StockOverviewModel }) {
   return <PanelCard>
     <PanelSectionHeader
       eyebrow="ESTOQUE POR LINHA"
-      title="Linhas comerciais e sub-brands"
-      description="Cada painel é uma linha comercial. Dentro dele, cada área é uma sub-brand oficial do 8013 e cresce conforme o valor do estoque físico a PVENDA1."
+      title="Composição por sub-brand"
+      description="Uma linha por painel. As sub-brands oficiais do 8013 aparecem nomeadas, com barra proporcional ao valor do estoque físico a PVENDA1."
     />
     {model.treemap.some(group => group.totalValue > 0) ? <>
-      <div className="stock-line-treemap-grid" aria-label="Treemaps de estoque por linha comercial e sub-brand">
+      <div className="stock-line-composition-list" aria-label="Composição de estoque por linha comercial e sub-brand">
         {model.treemap.map((group, lineIndex) => {
-          const tiles = buildLineTreemap(group);
-          return <section className="stock-line-treemap" key={group.line} aria-label={`${group.line}: ${currency.format(group.totalValue)}`}>
-          <div className="stock-treemap-line-head">
+          return <section className="stock-line-composition" key={group.line} data-hue={LINE_HUE_NAMES[lineIndex]} aria-label={`${group.line}: ${currency.format(group.totalValue)}`}>
+          <header className="stock-line-composition-head">
             <strong>{group.line}</strong>
-            <span>{currency.format(group.totalValue)} · {totalValue > 0 ? percent.format(group.totalValue / totalValue) : '0%'}</span>
-            <small>{number.format(group.subbrands)} sub-brands · {number.format(group.items)} SKUs valorizados</small>
-          </div>
-          {tiles.length ? <div className="stock-line-subbrand-map">
-          {tiles.map(({ tile, tileIndex, rect: tileRect }) => {
+            <span>{currency.format(group.totalValue)}</span>
+            <small>{number.format(group.subbrands)} sub-brands · {percent.format(totalValue ? group.totalValue / totalValue : 0)} do estoque</small>
+          </header>
+          {group.tiles.length ? <div className="stock-line-composition-body">
+            <div className="stock-subbrand-strip" aria-label={`Distribuição proporcional das sub-brands de ${group.line}`}>
+              {group.tiles.map((tile, tileIndex) => <span key={tile.key} title={`${tile.label}: ${currency.format(tile.saleValue)}`} style={{ flexGrow: Math.max(tile.saleValue, 1), background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }} />)}
+            </div>
+            <div className="stock-subbrand-ledger">
+          {group.tiles.map((tile, tileIndex) => {
             const share = group.totalValue > 0 ? tile.saleValue / group.totalValue : 0;
-            const density = tileDensity(tileRect);
             const label = `${group.line}, ${tile.label}: ${currency.format(tile.saleValue)}; ${number.format(tile.items)} SKU(s); ${percent.format(share)} da linha.`;
             return <div
               key={tile.key}
-              className="stock-treemap-subbrand"
-              data-density={density}
+              className="stock-subbrand-row"
               data-classified={tile.classified ? 'true' : 'false'}
               tabIndex={0}
               aria-label={label}
-              title={`${tile.label}\n${currency.format(tile.saleValue)}\n${number.format(tile.items)} SKU(s) · ${number.format(tile.availableUnits)} disponíveis\n${percent.format(share)} da linha`}
-              style={{ ...boxStyle(tileRect, LINE_TREEMAP_BOUNDS), background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }}
             >
+              <span className="stock-subbrand-swatch" style={{ background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }} />
               <strong>{tile.label}</strong>
-              <span>{currency.format(tile.saleValue)}</span>
-              <small>{number.format(tile.items)} SKU(s) · {percent.format(share)}</small>
+              <span className="stock-subbrand-value">{currency.format(tile.saleValue)}</span>
+              <span className="stock-subbrand-share">{percent.format(share)}</span>
+              <span className="stock-subbrand-bar"><i style={{ width: `${Math.max(share * 100, .7)}%`, background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }} /></span>
             </div>;
-          })}</div> : <div className="stock-line-treemap-empty">Sem estoque valorizado nesta linha.</div>}
+          })}</div></div> : <div className="stock-line-composition-empty">Sem estoque valorizado nesta linha.</div>}
         </section>;
         })}
       </div>
