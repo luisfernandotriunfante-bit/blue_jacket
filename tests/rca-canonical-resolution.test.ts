@@ -107,3 +107,15 @@ test('M1 preserva a sub-brand do 8013 quando o Winthor traz UPC de 12 dígitos',
   assert.equal(item?.subbrand, 'Colgate Lumos');
   assert.equal(item?.category, 'ORAL CARE');
 });
+
+test('M1 reconstrói o EAN do DUN-14 para materializar a sub-brand oficial do 8013', () => {
+  const sources = baseSources.map(item => {
+    if (item.source === 'cadastro-itens-286.xls') return source(item.source, [row({ winthor_code: '9003', internal_ean: '17891234567897', manufacturer_code: '61000002', description_286: 'CD TESTE DUN' })]);
+    if (item.source === 'posicao-estoque-105.xls') return source(item.source, [row({ winthor_code: '9003', physical_stock_units: 12, unit_cost_real: 5 })]);
+    if (item.source === 'estoque-8013.xls') return source(item.source, [row({ ean13: '7891234567890', dun14: '17891234567897', category_8013: 'ORAL CARE', subbrand_8013: 'Colgate Total', description_8013: 'COLGATE TOTAL 90G' })]);
+    if (item.source === 'pctabpr 13.xlsx') return source(item.source, [row({ codprod: '9003', pvenda1: 10 })]);
+    return item;
+  });
+  const bundle = buildCanonicalBundleFromStaging(sources);
+  assert.equal(bundle.lists.M1_ITEM_ESTOQUE.records.find(record => record.winthor_code === '9003')?.subbrand, 'Colgate Total');
+});
