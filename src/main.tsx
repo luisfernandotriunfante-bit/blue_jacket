@@ -16,6 +16,7 @@ import { ClientesSortimentoPage, type ClientesSortimentoView } from './pages/Cli
 import { DataProvider, useData } from './store/DataContext'
 import { ListasCanonicasPage } from './pages/ListasCanonicasPage'
 import { AuditoriaPage } from './pages/AuditoriaPage'
+import { EntradasNotasPage } from './pages/EntradasNotasPage'
 import { deviceSyncHasNewerRemoteSnapshot, deviceSyncIdentity, incomingDeviceSyncCode, restoreCurrentDeviceSnapshot } from './canonical/cloudSync'
 import './ui/theme/foundation.css'
 
@@ -133,7 +134,7 @@ function App() {
   return (
     <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
       {activeTab === 'estoque' ? (
-        activeEstoqueTopTab === 'launches' ? <LancamentosPage /> : <EstoquePage view={estoqueView} />
+        activeEstoqueTopTab === 'launches' ? <LancamentosPage /> : activeEstoqueTopTab === 'movements' ? <EntradasNotasPage /> : <EstoquePage view={estoqueView} />
       ) : activeTab === 'sellout' ? (
         activeSellOutTopTab === 'redes' ? <TopRetailNetworksPage /> : <SellOutPage view={activeSellOutTopTab as 'resumo' | 'gerencial'} />
       )
