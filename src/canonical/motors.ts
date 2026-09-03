@@ -23,11 +23,19 @@ const codeKey = (input: unknown) => {
   if (!raw) return '';
   return /^\d+$/.test(raw) ? raw.replace(/^0+(?=\d)/, '') : raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
 };
+
+/** UPC-A may appear com 12 dígitos no Winthor e com o zero à esquerda no 8013. */
+const ean13Key = (input: unknown) => {
+  const digits = String(input ?? '').replace(/\D/g, '');
+  if (digits.length === 12) return `0${digits}`;
+  return digits.length === 13 ? digits : null;
+};
+
 function stock8013ByEan(records: Array<Record<string, RawTyped>>) {
   const index = new Map<string, Record<string, RawTyped>>();
   const conflicted = new Set<string>();
   for (const record of records) {
-    const ean = String(value(record, 'ean13') ?? '');
+    const ean = ean13Key(value(record, 'ean13'));
     if (!ean || conflicted.has(ean)) continue;
     const previous = index.get(ean);
     if (!previous) {
@@ -41,6 +49,14 @@ function stock8013ByEan(records: Array<Record<string, RawTyped>>) {
     }
   }
   return index;
+}
+
+function stock8013For(index: Map<string, Record<string, RawTyped>>, ...candidates: unknown[]) {
+  for (const candidate of candidates) {
+    const found = index.get(ean13Key(candidate) ?? '');
+    if (found) return found;
+  }
+  return undefined;
 }
 const issue = (code: string, message: string, source = 'motor', severity: CanonicalAudit['severity'] = 'WARNING'): CanonicalAudit => ({
   code,
@@ -87,16 +103,20 @@ export function buildM1(sources: ParsedSource[]) {
   const base = [...rows(sources, 'cadastro-itens-286.xls'), ...rows(sources, 'posicao-estoque-105.xls')];
   const seen = new Set<string>();
   const listPriceRows = rows(sources, 'Lista_de_Preco (8).xlsx');
-  const listByEan = new Map(listPriceRows.map(row => [String(value(row, 'ean') ?? ''), row]));
+  const listByEan = new Map<string, Record<string, RawTyped>>();
+  for (const row of listPriceRows) {
+    const ean = ean13Key(value(row, 'ean'));
+    if (ean) listByEan.set(ean, row);
+  }
   const listBySku = new Map(listPriceRows.map(row => [codeKey(value(row, 'sku')), row]));
   const stock8013 = stock8013ByEan(rows(sources, 'estoque-8013.xls'));
   const records = base.map(row => {
     const winthor = String(value(row, 'winthor_code', 'product_code', 'item_code', 'code') ?? '');
-    const ean = String(value(row, 'ean', 'internal_ean', 'ean_internal') ?? '');
+    const ean = value(row, 'ean', 'internal_ean', 'ean_internal');
     const manufacturer = value(row, 'manufacturer_code');
-    const industry = listByEan.get(ean) ?? listBySku.get(codeKey(manufacturer));
-    const source8013 = stock8013.get(ean) ?? (industry ? stock8013.get(String(value(industry, 'ean') ?? '')) : undefined);
-    const id = winthor || ean;
+    const industry = listByEan.get(ean13Key(ean) ?? '') ?? listBySku.get(codeKey(manufacturer));
+    const source8013 = stock8013For(stock8013, ean, industry ? value(industry, 'ean') : null);
+    const id = winthor || String(ean ?? '');
     if (!id || seen.has(id)) return null;
     seen.add(id);
     const out = blank('M1_ITEM_ESTOQUE');
@@ -232,7 +252,11 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   const pVenda = new Map(rows(parsedSources, 'pctabpr 13.xlsx').map(row => [String(value(row, 'codprod') ?? ''), value(row, 'pvenda1')]));
   const launches = new Map(rows(parsedSources, 'lançamentos.xlsx').map(row => [String(value(row, 'launch_winthor_code') ?? ''), row]));
   const listPriceRows = rows(parsedSources, 'Lista_de_Preco (8).xlsx');
-  const listByEan = new Map(listPriceRows.map(row => [String(value(row, 'ean') ?? ''), row]));
+  const listByEan = new Map<string, Record<string, RawTyped>>();
+  for (const row of listPriceRows) {
+    const ean = ean13Key(value(row, 'ean'));
+    if (ean) listByEan.set(ean, row);
+  }
   const listBySku = new Map(listPriceRows.map(row => [codeKey(value(row, 'sku')), row]));
   const stock8013 = stock8013ByEan(rows(parsedSources, 'estoque-8013.xls'));
   const items = new Map<string, Record<string, unknown>>();
@@ -240,10 +264,10 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
     const code = String(value(row, 'winthor_code') ?? '');
     if (!code || items.has(code)) continue;
     const stock = stock105.get(code); const launch = launches.get(code);
-    const ean = String(value(row, 'internal_ean') ?? '');
+    const ean = value(row, 'internal_ean');
     const manufacturer = value(row, 'manufacturer_code');
-    const industry = listByEan.get(ean) ?? listBySku.get(codeKey(manufacturer));
-    const source8013 = stock8013.get(ean) ?? (industry ? stock8013.get(String(value(industry, 'ean') ?? '')) : undefined);
+    const industry = listByEan.get(ean13Key(ean) ?? '') ?? listBySku.get(codeKey(manufacturer));
+    const source8013 = stock8013For(stock8013, ean, industry ? value(industry, 'ean') : null);
     items.set(code, fieldOnly('M1_ITEM_ESTOQUE', {
       snapshot_date: snapshot, competence: comp, item_canonical_id: `ITEM:${code}`, winthor_code: code,
       manufacturer_code: manufacturer, industry_sku: industry ? value(industry, 'sku') : null,

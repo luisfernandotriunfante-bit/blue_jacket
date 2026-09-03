@@ -104,7 +104,6 @@ const dateValue = (value: string) => Date.parse(`${value}T12:00:00Z`);
 const isoDate = (value: number) => new Date(value).toISOString().slice(0, 10);
 const LOW_COVERAGE_DAYS = 30;
 const ANALYSIS_DAYS = 90;
-const MAX_SUBBRANDS_PER_LINE = 9;
 
 
 function firstText(record: RecordValue | undefined, fields: string[]) {
@@ -504,27 +503,15 @@ export function buildStockOverviewModel({ m1, m3, m4 }: { m1: CanonicalList; m3:
 
   const treemap: StockLineTreemap[] = SELL_OUT_COMMERCIAL_LINES.map(line => {
     const sorted = [...(lineSubbrandBuckets.get(line)?.values() ?? [])].sort((a, b) => b.saleValue - a.saleValue);
-    const visible = sorted.slice(0, MAX_SUBBRANDS_PER_LINE);
-    const hidden = sorted.slice(MAX_SUBBRANDS_PER_LINE);
-    if (hidden.length) {
-      visible.push({
-        key: `${line}:OUTRAS_SUBBRANDS`,
-        label: `Outras ${hidden.length} sub-brands`,
-        saleValue: round(hidden.reduce((sum, item) => sum + item.saleValue, 0)),
-        physicalUnits: round(hidden.reduce((sum, item) => sum + item.physicalUnits, 0)),
-        availableUnits: round(hidden.reduce((sum, item) => sum + item.availableUnits, 0)),
-        items: hidden.reduce((sum, item) => sum + item.items, 0),
-        aggregate: true,
-        classified: hidden.every(item => item.classified),
-      });
-    }
     return {
       line,
       totalValue: round(sorted.reduce((sum, item) => sum + item.saleValue, 0)),
       items: sorted.reduce((sum, item) => sum + item.items, 0),
       subbrands: sorted.filter(item => item.classified).length,
       itemsWithoutSubbrand: sorted.filter(item => !item.classified).reduce((sum, item) => sum + item.items, 0),
-      tiles: visible,
+      // Cada sub-brand oficial ocupa seu próprio bloco no treemap. Não há
+      // corte arbitrário nem consolidação visual em “Outras”.
+      tiles: sorted,
     };
   });
 
