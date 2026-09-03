@@ -80,7 +80,13 @@ type PortfolioContinuitySnapshot = {
   updatedAt: string;
 };
 
-const PORTFOLIO_CONTINUITY_KEY = 'portfolio-continuity';
+/** Parsed source stages exported through the encrypted device-sync transport. */
+export type SourceStorageSnapshot = {
+  format: 'blue-jacket-source-storage/v1';
+  exportedAt: string;
+  staging: StoredStage[];
+};
+
 function rowTyped(row: ParsedSource['rows'][number], field: string) {
   const cell = row[field];
   return cell?.typed ?? cell?.raw ?? null;
@@ -212,6 +218,48 @@ async function idbGetAll<T>(store: string): Promise<T[]> {
       request.onerror = () => reject(request.error ?? new Error('SOURCE_STORAGE_READ_FAILED'));
     });
   } finally { database.close(); }
+}
+
+function validateSourceStorageSnapshot(snapshot: SourceStorageSnapshot) {
+  if (snapshot?.format !== 'blue-jacket-source-storage/v1' || !Array.isArray(snapshot.staging)) throw new Error('SYNC_SOURCE_SNAPSHOT_INVALID');
+  if (snapshot.staging.some(entry => !entry?.source || !entry.manifest?.fileHash || !entry.parsed?.source)) throw new Error('SYNC_SOURCE_SNAPSHOT_INVALID');
+  if (new Set(snapshot.staging.map(entry => entry.source)).size !== snapshot.staging.length) throw new Error('SYNC_SOURCE_SNAPSHOT_INVALID');
+  if (REQUIRED_SOURCE_IDS.some(source => !snapshot.staging.some(stage => stage.source === source))) throw new Error('SYNC_SOURCES_INCOMPLETE');
+  if (snapshot.staging.some(stage => stage.manifest.status !== 'VALID' || stage.manifest.parserVersion !== parserVersionFor(stage.source) || stage.manifest.schemaVersion !== SCHEMA_VERSION)) throw new Error('SYNC_SOURCE_SNAPSHOT_OUTDATED');
+}
+
+async function replaceSourceStorage(snapshot: SourceStorageSnapshot) {
+  const database = await openDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction([STAGING_STORE, BUILDS_STORE, LISTS_STORE], 'readwrite');
+      const staging = transaction.objectStore(STAGING_STORE);
+      const builds = transaction.objectStore(BUILDS_STORE);
+      const lists = transaction.objectStore(LISTS_STORE);
+      staging.clear(); builds.clear(); lists.clear();
+      for (const entry of snapshot.staging) staging.put(entry);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('SOURCE_STORAGE_RESTORE_FAILED'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('SOURCE_STORAGE_RESTORE_ABORTED'));
+    });
+  } finally { database.close(); }
+}
+
+/**
+ * Exports only parsed source stages. The receiving device generates its own
+ * current build and canonical lists after integrity validation, so a local
+ * history of reprocessed builds is never transferred.
+ */
+export async function exportSourceStorageSnapshot(): Promise<SourceStorageSnapshot> {
+  const staging = await idbGetAll<StoredStage>(STAGING_STORE);
+  const snapshot: SourceStorageSnapshot = { format: 'blue-jacket-source-storage/v1', exportedAt: new Date().toISOString(), staging };
+  validateSourceStorageSnapshot(snapshot);
+  return snapshot;
+}
+
+export async function restoreSourceStorageSnapshot(snapshot: SourceStorageSnapshot) {
+  validateSourceStorageSnapshot(snapshot);
+  await replaceSourceStorage(snapshot);
 }
 
 async function sha256Bytes(bytes: ArrayBuffer | Uint8Array) {
