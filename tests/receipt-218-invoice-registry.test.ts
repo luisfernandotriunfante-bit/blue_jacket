@@ -50,6 +50,7 @@ test('218 materializa a NF mesmo sem depender do bloco de itens', async () => {
   const m3 = buildM3([parsed]);
   const receipt = m3.records.find(row => row.fact_type === 'RECEIPT');
   assert.equal(receipt?.invoice_number, '2953096');
+  assert.equal(receipt?.receipt_invoice_value, 19245.57);
   assert.equal(receipt?.receipt_scope, 'INVOICE');
   assert.equal(receipt?.source_lineage, '218:NF');
 });

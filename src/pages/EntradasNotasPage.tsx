@@ -12,17 +12,26 @@ const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: '
 const number = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
 const date = (value: string | null) => value ? new Date(`${value}T12:00:00`).toLocaleDateString('pt-BR') : '—';
 const normalized = (value: unknown) => String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
+const codeKey = (value: unknown) => digits(value).replace(/^0+(?=\d)/, '');
 
 function receiptMatches(note: StockReceiptNote, query: string) {
   const needle = normalized(query).trim();
   if (!needle) return true;
+  if (/^\d+$/.test(needle)) {
+    return codeKey(note.invoice) === codeKey(needle)
+      || note.items.some(item => codeKey(item.winthorCode) === codeKey(needle) || digits(item.ean) === needle);
+  }
   return normalized([
-    note.invoice,
-    note.receiptDate,
-    note.invoiceIssueDate,
-    ...note.sources,
-    ...note.items.flatMap(item => [item.label, item.winthorCode, item.ean]),
+    ...note.items.map(item => item.label),
   ].join(' ')).includes(needle);
+}
+
+function inboundMatches(note: StockOverviewModel['inboundNotes'][number], query: string) {
+  const needle = normalized(query).trim();
+  if (!needle) return true;
+  if (/^\d+$/.test(needle)) return codeKey(note.invoice) === codeKey(needle) || note.items.some(item => codeKey(item.label.split(' · ')[0]) === codeKey(needle));
+  return normalized(note.items.map(item => item.label).join(' ')).includes(needle);
 }
 
 export function EntradasNotasPage() {
@@ -37,6 +46,10 @@ export function EntradasNotasPage() {
   const [source, setSource] = useState<'ALL' | '218' | '12.322'>('ALL');
   const [receivedFrom, setReceivedFrom] = useState('');
   const [receivedTo, setReceivedTo] = useState('');
+  const [openQuery, setOpenQuery] = useState('');
+  const [forecastFilter, setForecastFilter] = useState<'ALL' | 'WITH_FORECAST' | 'WITHOUT_FORECAST'>('ALL');
+  const [forecastFrom, setForecastFrom] = useState('');
+  const [forecastTo, setForecastTo] = useState('');
   const sync = deviceSyncIdentity();
 
   useEffect(() => {
@@ -64,9 +77,14 @@ export function EntradasNotasPage() {
   }) ?? [], [model, query, source, receivedFrom, receivedTo]);
   const openNotes = useMemo(() => model?.inboundNotes.filter(note => {
     if (note.received || note.outstandingValue <= 0) return false;
-    const needle = normalized(query).trim();
-    return !needle || normalized([note.invoice, note.billingDate, ...note.items.map(item => item.label)].join(' ')).includes(needle);
-  }) ?? [], [model, query]);
+    if (!inboundMatches(note, openQuery)) return false;
+    const forecast = inboundForecasts()[note.invoice] ?? '';
+    if (forecastFilter === 'WITH_FORECAST' && !forecast) return false;
+    if (forecastFilter === 'WITHOUT_FORECAST' && forecast) return false;
+    if (forecastFrom && (!forecast || forecast < forecastFrom)) return false;
+    if (forecastTo && (!forecast || forecast > forecastTo)) return false;
+    return true;
+  }) ?? [], [model, version, openQuery, forecastFilter, forecastFrom, forecastTo]);
 
   const saveDate = async (invoice: string, value: string) => {
     setSaving(invoice); setError(''); setStatus('');
@@ -108,6 +126,13 @@ export function EntradasNotasPage() {
 
       <PanelCard>
         <PanelSectionHeader eyebrow="CARTEIRA COLGATE" title="Notas ainda em aberto" description="Aqui ficam somente as NFs que aguardam chegada. Informe a previsão nesta tabela; notas recebidas permanecem acima, na consulta de chegada efetiva." />
+        <div className="inbound-note-filters">
+          <label className="inbound-filter-search"><span>Buscar na Carteira</span><input className="panel-input panel-input-search" value={openQuery} onChange={event => setOpenQuery(event.target.value)} placeholder="NF, código ou produto" /></label>
+          <label><span>Previsão</span><select className="panel-select" value={forecastFilter} onChange={event => setForecastFilter(event.target.value as 'ALL' | 'WITH_FORECAST' | 'WITHOUT_FORECAST')}><option value="ALL">Todas em aberto</option><option value="WITH_FORECAST">Com previsão</option><option value="WITHOUT_FORECAST">Sem previsão</option></select></label>
+          <label><span>Previsão de</span><input className="panel-input" type="date" value={forecastFrom} onChange={event => setForecastFrom(event.target.value)} /></label>
+          <label><span>até</span><input className="panel-input" type="date" value={forecastTo} onChange={event => setForecastTo(event.target.value)} /></label>
+        </div>
+        <div className="inbound-note-result"><strong>{number.format(openNotes.length)} NF(s) em aberto</strong><span>{openQuery ? `Resultado para “${openQuery}”` : 'Filtre por previsão ou busque uma NF, código ou produto.'}</span></div>
         {status ? <PanelAlert tone="success">{status}</PanelAlert> : null}
         {error ? <PanelAlert tone="error">{error}</PanelAlert> : null}
         {openNotes.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table"><thead><tr><th>NF</th><th>Emitida em</th><th>Previsão de entrada</th><th>Valor da NF</th><th>Em aberto</th><th>Itens</th><th>Situação</th></tr></thead><tbody>{openNotes.map(note => {
