@@ -34,7 +34,7 @@ function inboundMatches(note: StockOverviewModel['inboundNotes'][number], query:
   return normalized(note.items.map(item => item.label).join(' ')).includes(needle);
 }
 
-type SaleDocument = { key:string; kind:'FATURADO'|'A_FATURAR'; invoice:string|null; order:string|null; customer:string|null; cnpj:string|null; movementDate:string|null; invoiceDate:string|null; status:string|null; block:string|null; seller:string|null; value:number; items:Array<{code:string|null;ean:string|null;label:string;cases:number;units:number;value:number}> };
+type SaleDocument = { key:string; kind:'FATURADO'|'A_FATURAR'; isReturn:boolean; invoice:string|null; order:string|null; customer:string|null; cnpj:string|null; movementDate:string|null; invoiceDate:string|null; status:string|null; block:string|null; seller:string|null; value:number; items:Array<{code:string|null;ean:string|null;label:string;cases:number;units:number;value:number}> };
 const amount = (value: unknown) => Number(value ?? 0) || 0;
 const saleKind = (row: Record<string, unknown>) => normalized(row.order_status).includes('A FATURAR') ? 'A_FATURAR' : 'FATURADO';
 function saleDocuments(records: Array<Record<string, unknown>>) {
@@ -42,7 +42,7 @@ function saleDocuments(records: Array<Record<string, unknown>>) {
   for (const row of records.filter(row => row.fact_type === 'SALE' && row.source === '8022')) {
     const kind=saleKind(row), invoice=String(row.invoice_number ?? '').trim() || null, rawOrder=String(row.order_winthor ?? '').trim(), order=/^\d{4,}$/.test(rawOrder) ? rawOrder : null;
     const key=`${kind}:${kind==='FATURADO' ? invoice ?? order ?? row.fact_id : order ?? invoice ?? row.fact_id}`;
-    const doc=grouped.get(key) ?? {key,kind,invoice,order,customer:String(row.customer_name ?? '').trim() || null,cnpj:String(row.cnpj ?? '').trim() || null,movementDate:String(row.event_date ?? '').slice(0,10) || null,invoiceDate:String(row.invoice_issue_date ?? '').slice(0,10) || null,status:String(row.order_status ?? '').trim() || null,block:String(row.block_status ?? '').trim() || null,seller:String(row.seller_name ?? '').trim() || null,value:0,items:[]};
+    const doc=grouped.get(key) ?? {key,kind,isReturn:normalized(row.sale_type).includes('DEVOLU'),invoice,order,customer:String(row.customer_name ?? '').trim() || null,cnpj:String(row.cnpj ?? '').trim() || null,movementDate:String(row.event_date ?? '').slice(0,10) || null,invoiceDate:String(row.invoice_issue_date ?? '').slice(0,10) || null,status:String(row.order_status ?? '').trim() || null,block:String(row.block_status ?? '').trim() || null,seller:String(row.seller_name ?? '').trim() || null,value:0,items:[]};
     doc.value+=amount(row.value); doc.items.push({code:String(row.winthor_product_code ?? '').trim()||null,ean:String(row.ean_product ?? '').trim()||null,label:String(row.product_description ?? row.winthor_product_code ?? 'Item sem descrição'),cases:amount(row.cases),units:amount(row.units),value:amount(row.value)}); grouped.set(key,doc);
   }
   return [...grouped.values()].sort((a,b)=>b.value-a.value);
@@ -119,7 +119,8 @@ export function EntradasNotasPage() {
     return note.receiptDate <= forecast ? 'RECEBIDA NO PRAZO' : 'RECEBIDA APÓS PREVISÃO';
   };
   const sales = useMemo(() => saleDocuments((lists?.m3.records ?? []) as Array<Record<string, unknown>>), [lists]);
-  const invoicedSales = sales.filter(note => note.kind === 'FATURADO' && saleMatches(note, saleQuery));
+  const invoicedSales = sales.filter(note => note.kind === 'FATURADO' && !note.isReturn && saleMatches(note, saleQuery));
+  const customerReturns = sales.filter(note => note.kind === 'FATURADO' && note.isReturn && saleMatches(note, saleQuery));
   const pendingCustomers = [...new Set(sales.filter(note => note.kind === 'A_FATURAR').map(note => note.customer ?? note.cnpj ?? '').filter(Boolean))].sort();
   const pendingSales = sales.filter(note => note.kind === 'A_FATURAR' && saleMatches(note, pendingQuery) && (pendingCustomer === 'ALL' || (note.customer ?? note.cnpj) === pendingCustomer));
 
@@ -163,6 +164,8 @@ export function EntradasNotasPage() {
           </tr>{expanded === expandKey ? <tr className="inbound-note-details"><td colSpan={7}>{note.items.length ? <ul className="inbound-receipt-items">{note.items.map(item => <li key={`${item.winthorCode ?? ''}:${item.ean ?? ''}:${item.label}`}><div><strong>{item.label}</strong><span>{item.winthorCode ? `Cód. ${item.winthorCode}` : 'Código não vinculado'}{item.ean ? ` · EAN ${item.ean}` : ''}</span></div><div><strong>{number.format(item.quantity)} un.</strong><span>{item.unitPrice === null ? 'Preço não informado' : `${currency.format(item.unitPrice)} un. · ${item.totalValue === null ? '—' : currency.format(item.totalValue)}`}</span></div></li>)}</ul> : <div className="inbound-note-no-items">O 12.322 confirma a chegada desta NF, mas é um relatório histórico sem detalhamento por item.</div>}</td></tr> : null}</Fragment>;
         })}</tbody></table></div> : <PanelEmptyState title="Nenhuma chegada encontrada" description="Ajuste os filtros ou busque por outra NF, EAN, código ou produto." />}
       </PanelCard> : null}
+
+      {view === 'ENTRADAS' ? <PanelCard><PanelSectionHeader eyebrow="DEVOLUÇÕES DE CLIENTES — 8022" title="Notas devolvidas à Milênio" description="Entradas por devolução de cliente. São separadas das cargas recebidas da Colgate." /><div className="inbound-note-result"><strong>{number.format(customerReturns.length)} NF(s) devolvida(s)</strong><span>Abra uma NF para consultar cliente e itens devolvidos.</span></div>{customerReturns.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table"><thead><tr><th>NF</th><th>Cliente</th><th>Data movimento</th><th>Valor devolvido</th><th>Itens</th></tr></thead><tbody>{customerReturns.map(note=><Fragment key={`return:${note.key}`}><tr className="inbound-note-row"><td><button type="button" className="inbound-note-toggle" onClick={()=>setSaleExpanded(saleExpanded===`return:${note.key}`?null:`return:${note.key}`)}>{saleExpanded===`return:${note.key}`?'−':'+'} NF {note.invoice ?? '—'}</button></td><td>{note.customer ?? note.cnpj ?? '—'}</td><td>{date(note.movementDate)}</td><td>{currency.format(Math.abs(note.value))}</td><td>{number.format(note.items.length)}</td></tr>{saleExpanded===`return:${note.key}`?<tr className="inbound-note-details"><td colSpan={5}><ul>{note.items.map(item=><li key={`${item.code}:${item.ean}:${item.label}`}><span>{item.label}<br />{item.code?`Cód. ${item.code}`:'Código não informado'}{item.ean?` · EAN ${item.ean}`:''}</span><strong>{number.format(item.cases)} cx · {number.format(item.units)} un. · {currency.format(Math.abs(item.value))}</strong></li>)}</ul></td></tr>:null}</Fragment>)}</tbody></table></div>:<PanelEmptyState title="Nenhuma devolução encontrada" description="O 8022 atual não trouxe devoluções para a busca selecionada." />}</PanelCard> : null}
 
       {view === 'SAIDAS' ? <><PanelCard>
         <PanelSectionHeader eyebrow="SAÍDAS — 8022" title="Notas faturadas para clientes" description="Somente vendas confirmadas no 8022. Abra a NF para consultar pedido Winthor, cliente e itens." />
