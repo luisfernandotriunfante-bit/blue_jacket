@@ -106,6 +106,24 @@ test('218 baixa todo Bill Qty da NF recebida, inclusive linhas cujo item não fo
   assert.equal(model.totals.inboundQty, 0);
 });
 
+test('chegadas efetivas unem 12.322 e 218 e preservam itens pesquisáveis do 218', () => {
+  const localM3 = list('M3_MOVIMENTO_VENDAS', [
+    ...m3.records.filter(row => row.fact_type === 'SALE'),
+    { fact_type: 'RECEIPT', invoice_number: '*00000123-1', receipt_date: '2026-09-02', invoice_issue_date: '2026-08-30', winthor_product_code: '1 CD TESTE 90G', received_units: 12, receipt_unit_price: 4 },
+  ]);
+  const localM4 = list('M4_HISTORICO_TRANSICAO', [
+    { row_type: 'RECEIPT_12322', invoice_number: '123', accounting_date: '2026-09-02', movement_date: '2026-08-30', invoice_value: 50 },
+  ]);
+  const model = buildStockOverviewModel({ m1, m3: localM3, m4: localM4 });
+  assert.equal(model.receivedNotes.length, 1);
+  assert.deepEqual(model.receivedNotes[0]?.sources, ['12.322', '218']);
+  assert.equal(model.receivedNotes[0]?.invoice, '123');
+  assert.equal(model.receivedNotes[0]?.totalValue, 50);
+  assert.equal(model.receivedNotes[0]?.items[0]?.winthorCode, '1');
+  assert.equal(model.receivedNotes[0]?.items[0]?.ean, '7890000000001');
+  assert.equal(model.receivedNotes[0]?.items[0]?.quantity, 12);
+});
+
 test('NF encontrada no 218 zera todo o valor financeiro da linha, mesmo com Order Qty ainda aberto', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),

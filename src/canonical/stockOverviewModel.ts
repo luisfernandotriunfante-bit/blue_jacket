@@ -52,6 +52,26 @@ export type StockInboundNote = {
   items: Array<{ label: string; quantity: number; units: number | null }>;
 };
 
+/** Uma chegada é o recebimento efetivo registrado no 218 ou no 12.322.
+ * O 12.322 é histórico no grão de NF; por isso não se fabricam itens para ele. */
+export type StockReceiptItem = {
+  label: string;
+  winthorCode: string | null;
+  ean: string | null;
+  quantity: number;
+  unitPrice: number | null;
+  totalValue: number | null;
+};
+
+export type StockReceiptNote = {
+  invoice: string;
+  receiptDate: string | null;
+  invoiceIssueDate: string | null;
+  totalValue: number | null;
+  sources: Array<'218' | '12.322'>;
+  items: StockReceiptItem[];
+};
+
 export type StockOverviewModel = {
   analysis: {
     startDate: string | null;
@@ -116,6 +136,7 @@ export type StockOverviewModel = {
   treemap: StockLineTreemap[];
   inboundForecasts: StockInboundForecast[];
   inboundNotes: StockInboundNote[];
+  receivedNotes: StockReceiptNote[];
 };
 
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : value === null || value === undefined ? null : String(value).trim() || null;
@@ -224,6 +245,21 @@ function currentItemForFact(fact: RecordValue, indexes: ReturnType<typeof buildI
     ?? (winthor ? indexes.byWinthorComparable.get(comparableCode(winthor) ?? '') : undefined)
     ?? (sku ? indexes.bySku.get(sku) : undefined)
     ?? (sku ? indexes.bySkuComparable.get(comparableCode(sku) ?? '') : undefined);
+}
+
+/** O 218 traz o campo físico "Código + Produto". O primeiro número é o
+ * código Winthor; preservamos o texto original quando não existe vínculo. */
+function receiptItemForFact(fact: RecordValue, indexes: ReturnType<typeof buildItemIndexes>) {
+  const direct = currentItemForFact(fact, indexes);
+  if (direct) return direct;
+  const raw = firstText(fact, ['winthor_product_code']);
+  const code = raw?.match(/\d+/)?.[0] ?? null;
+  return code ? itemByWinthor(code, indexes) : undefined;
+}
+
+function receiptItemLabel(fact: RecordValue, item: RecordValue | undefined) {
+  if (item) return itemLabel(item);
+  return firstText(fact, ['winthor_product_code']) ?? 'Item sem vínculo interno';
 }
 
 function historicalItemForFact(fact: RecordValue, indexes: ReturnType<typeof buildItemIndexes>) {
@@ -462,6 +498,67 @@ export function buildStockOverviewModel({ m1, m3, m4, forecasts = {} }: { m1: Ca
     mappedInboundRows += 1;
   }
 
+  // Chegadas efetivas são uma visão operacional separada da Carteira. A NF
+  // aparece uma única vez mesmo quando 12.322 e 218 a registram: o 12.322
+  // contribui com o valor histórico da NF e o 218, quando houver, traz seus
+  // itens reais para consulta.
+  type MutableReceiptNote = {
+    receiptDate: string | null;
+    invoiceIssueDate: string | null;
+    totalValue: number | null;
+    sources: Set<'218' | '12.322'>;
+    items: Map<string, StockReceiptItem>;
+  };
+  const receivedNotesByInvoice = new Map<string, MutableReceiptNote>();
+  const ensureReceiptNote = (invoice: string) => {
+    const existing = receivedNotesByInvoice.get(invoice);
+    if (existing) return existing;
+    const created: MutableReceiptNote = { receiptDate: null, invoiceIssueDate: null, totalValue: null, sources: new Set(), items: new Map() };
+    receivedNotesByInvoice.set(invoice, created);
+    return created;
+  };
+
+  for (const fact of receipts12322) {
+    const invoice = invoiceKey(fact.invoice_number);
+    if (!invoice) continue;
+    const note = ensureReceiptNote(invoice);
+    note.sources.add('12.322');
+    note.receiptDate ??= firstText(fact, ['accounting_date', 'movement_date']);
+    note.invoiceIssueDate ??= firstText(fact, ['movement_date']);
+    const value = amount(fact.invoice_value);
+    if (value > 0) note.totalValue = value;
+  }
+
+  for (const fact of receipts218) {
+    const invoice = invoiceKey(fact.invoice_number);
+    if (!invoice) continue;
+    const note = ensureReceiptNote(invoice);
+    note.sources.add('218');
+    note.receiptDate ??= firstText(fact, ['receipt_date']);
+    note.invoiceIssueDate ??= firstText(fact, ['invoice_issue_date']);
+
+    const rawItem = firstText(fact, ['winthor_product_code']);
+    const quantity = Math.max(0, amount(fact.received_units));
+    // Linhas de cabeçalho do 218 são usadas para a identidade da NF, mas não
+    // são apresentadas como um produto recebido.
+    if (!rawItem && quantity <= 0) continue;
+    const item = receiptItemForFact(fact, indexes);
+    const winthorCode = firstText(item, ['winthor_code']) ?? rawItem?.match(/\d+/)?.[0] ?? null;
+    const ean = firstText(item, ['internal_ean', 'industry_ean']);
+    const label = receiptItemLabel(fact, item);
+    const unitPriceRaw = amount(fact.receipt_unit_price);
+    const unitPrice = unitPriceRaw > 0 ? unitPriceRaw : null;
+    const totalValue = unitPrice === null ? null : round(quantity * unitPrice);
+    const key = `${winthorCode ?? ''}|${ean ?? ''}|${label}`;
+    const existing = note.items.get(key);
+    if (existing) {
+      existing.quantity = round(existing.quantity + quantity);
+      existing.totalValue = existing.totalValue === null || totalValue === null ? null : round(existing.totalValue + totalValue);
+    } else {
+      note.items.set(key, { label, winthorCode, ean, quantity: round(quantity), unitPrice, totalValue });
+    }
+  }
+
   let physicalUnits = 0;
   let reservedUnits = 0;
   let availableUnits = 0;
@@ -594,6 +691,20 @@ export function buildStockOverviewModel({ m1, m3, m4, forecasts = {} }: { m1: Ca
   const inboundNotes: StockInboundNote[] = [...notesByInvoice.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([invoice, note]) => ({ invoice, orderDate: note.orderDate, billingDate: note.billingDate, totalValue: round(note.totalValue), outstandingValue: round(note.outstandingValue), orderQty: round(note.orderQty), billQty: round(note.billQty), outstandingQty: round(note.outstandingQty), received: note.received, items: [...note.items.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([label, item]) => ({ label, quantity: round(item.quantity), units: item.units === null ? null : round(item.units) })) }));
+  const receivedNotes: StockReceiptNote[] = [...receivedNotesByInvoice.entries()]
+    .sort(([, a], [, b]) => (b.receiptDate ?? '').localeCompare(a.receiptDate ?? '') || 0)
+    .map(([invoice, note]) => {
+      const items = [...note.items.values()].sort((a, b) => a.label.localeCompare(b.label));
+      const itemValue = items.reduce<number | null>((sum, item) => sum === null || item.totalValue === null ? null : round(sum + item.totalValue), 0);
+      return {
+        invoice,
+        receiptDate: note.receiptDate,
+        invoiceIssueDate: note.invoiceIssueDate,
+        totalValue: note.totalValue ?? itemValue,
+        sources: [...note.sources].sort(),
+        items,
+      };
+    });
 
   return {
     analysis: {
@@ -659,5 +770,6 @@ export function buildStockOverviewModel({ m1, m3, m4, forecasts = {} }: { m1: Ca
     treemap,
     inboundForecasts,
     inboundNotes,
+    receivedNotes,
   };
 }
