@@ -128,11 +128,16 @@ export function buildM1(sources: ParsedSource[]) {
   }
   const listBySku = new Map(listPriceRows.map(row => [codeKey(value(row, 'sku')), row]));
   const stock8013 = stock8013ByEan(rows(sources, 'estoque-8013.xls'));
+  const launchRows = rows(sources, 'lançamentos.xlsx');
+  const launchesByCode = new Map<string, Record<string, RawTyped>>();
+  const launchesByEan = new Map<string, Record<string, RawTyped>>();
+  for (const launchRow of launchRows) { const launchCode = codeKey(value(launchRow, 'launch_winthor_code')); const launchEan = ean13Key(value(launchRow, 'launch_ean')); if (launchCode) launchesByCode.set(launchCode, launchRow); if (launchEan) launchesByEan.set(launchEan, launchRow); }
   const records = base.map(row => {
     const winthor = String(value(row, 'winthor_code', 'product_code', 'item_code', 'code') ?? '');
     const ean = value(row, 'ean', 'internal_ean', 'ean_internal');
     const manufacturer = value(row, 'manufacturer_code');
     const industry = listByEan.get(ean13Key(ean) ?? '') ?? listBySku.get(codeKey(manufacturer));
+    const launch = launchesByEan.get(ean13Key(ean) ?? '') ?? launchesByEan.get(ean13Key(industry ? value(industry, 'ean') : null) ?? '') ?? launchesByCode.get(codeKey(winthor));
     const source8013 = stock8013For(stock8013, ean, industry ? value(industry, 'ean') : null, industry ? value(industry, 'dun_14') : null);
     const id = winthor || String(ean ?? '');
     if (!id || seen.has(id)) return null;
@@ -149,6 +154,7 @@ export function buildM1(sources: ParsedSource[]) {
       physical_stock_units: value(row, 'physical_stock', 'stock', 'quantity', 'quantity_stock'),
       unit_weight_kg: source8013 ? value(source8013, 'unit_weight_kg') : null, case_weight_kg: source8013 ? value(source8013, 'case_weight_kg') : null,
       stock_8013_units: source8013 ? value(source8013, 'stock_units_8013') : null, stock_8013_cases: source8013 ? value(source8013, 'stock_cases_8013') : null, stock_8013_weight_kg: source8013 ? value(source8013, 'stock_weight_kg') : null,
+      is_launch: Boolean(launch), launch_status: launch ? value(launch, 'launch_status') : null,
       source_system: 'Winthor', source_file: source8013 ? '286/105/8013' : '286/105', source_row: value(row, '__source_row'),
     });
     if (!winthor || !ean) audits.push(issue('ITEM_UNRESOLVED', `Item ${id} sem ${!winthor ? 'código Winthor' : 'EAN'}.`));
@@ -268,7 +274,10 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   // M1
   const stock105 = new Map(rows(parsedSources, 'posicao-estoque-105.xls').map(row => [String(value(row, 'winthor_code') ?? ''), row]));
   const pVenda = new Map(rows(parsedSources, 'pctabpr 13.xlsx').map(row => [String(value(row, 'codprod') ?? ''), value(row, 'pvenda1')]));
-  const launches = new Map(rows(parsedSources, 'lançamentos.xlsx').map(row => [String(value(row, 'launch_winthor_code') ?? ''), row]));
+  const launchRows = rows(parsedSources, 'lançamentos.xlsx');
+  const launchesByCode = new Map<string, Record<string, RawTyped>>();
+  const launchesByEan = new Map<string, Record<string, RawTyped>>();
+  for (const launchRow of launchRows) { const launchCode = codeKey(value(launchRow, 'launch_winthor_code')); const launchEan = ean13Key(value(launchRow, 'launch_ean')); if (launchCode) launchesByCode.set(launchCode, launchRow); if (launchEan) launchesByEan.set(launchEan, launchRow); }
   const listPriceRows = rows(parsedSources, 'Lista_de_Preco (8).xlsx');
   const listByEan = new Map<string, Record<string, RawTyped>>();
   for (const row of listPriceRows) {
@@ -281,10 +290,11 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   for (const row of [...rows(parsedSources, 'cadastro-itens-286.xls'), ...rows(parsedSources, 'posicao-estoque-105.xls')]) {
     const code = String(value(row, 'winthor_code') ?? '');
     if (!code || items.has(code)) continue;
-    const stock = stock105.get(code); const launch = launches.get(code);
+    const stock = stock105.get(code);
     const ean = value(row, 'internal_ean');
     const manufacturer = value(row, 'manufacturer_code');
     const industry = listByEan.get(ean13Key(ean) ?? '') ?? listBySku.get(codeKey(manufacturer));
+    const launch = launchesByEan.get(ean13Key(ean) ?? '') ?? launchesByEan.get(ean13Key(industry ? value(industry, 'ean') : null) ?? '') ?? launchesByCode.get(codeKey(code));
     const source8013 = stock8013For(stock8013, ean, industry ? value(industry, 'ean') : null, industry ? value(industry, 'dun_14') : null);
     items.set(code, fieldOnly('M1_ITEM_ESTOQUE', {
       snapshot_date: snapshot, competence: comp, item_canonical_id: `ITEM:${code}`, winthor_code: code,
@@ -299,6 +309,24 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
       cost_unit_105: value(stock ?? row, 'unit_cost_real'), sale_price_105: value(stock ?? row, 'sale_price_105'), pVenda1_region11: pVenda.get(code) ?? null,
       is_launch: launch ? true : false, launch_status: launch ? value(launch, 'launch_status') : null, has_winthor: true, mapping_status: industry ? 'WINTHOR+LIST_PRICE' : 'WINTHOR',
       source_lineage: `${industry ? '286|105|PCTABPR|ListaPreço' : '286|105|PCTABPR'}${source8013 ? '|8013' : ''}|Lançamentos`,
+    }));
+  }
+  // A lista oficial também pode antecipar itens que ainda não receberam código
+  // Winthor/estoque. Eles devem aparecer em Lançamentos, com estado explícito,
+  // e não desaparecer por ainda não existir no 286.
+  for (const launch of launchRows) {
+    const launchCode = String(value(launch, 'launch_winthor_code') ?? '').trim();
+    const launchEan = value(launch, 'launch_ean');
+    const existing = [...items.values()].some(item => ean13Key(item.internal_ean) === ean13Key(launchEan) || codeKey(item.winthor_code) === codeKey(launchCode));
+    if (existing) continue;
+    const id = launchCode || String(launchEan ?? '').trim();
+    if (!id) continue;
+    items.set(`LAUNCH:${id}`, fieldOnly('M1_ITEM_ESTOQUE', {
+      snapshot_date: snapshot, competence: comp, item_canonical_id: `LAUNCH:${id}`,
+      winthor_code: launchCode || null, internal_ean: launchEan ?? null,
+      description_internal: value(launch, 'launch_description'), is_launch: true,
+      launch_status: value(launch, 'launch_status'), has_winthor: Boolean(launchCode),
+      mapping_status: 'LAUNCH_PENDING_CATALOG', source_lineage: 'Lançamentos',
     }));
   }
   bundle.lists.M1_ITEM_ESTOQUE = list('M1_ITEM_ESTOQUE', [...items.values()], ['cadastro-itens-286.xls', 'posicao-estoque-105.xls', 'estoque-8013.xls', 'pctabpr 13.xlsx', 'Lista_de_Preco (8).xlsx', 'lançamentos.xlsx', "Sortimento Recomendado - Q3'26.xlsx"], []);
