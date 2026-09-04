@@ -8520,6 +8520,24 @@
         "excel_format": "@"
       },
       {
+        "field": "customer_winthor_code",
+        "type": "CODE_TEXT",
+        "source_or_rule": "8022",
+        "excel_format": "@"
+      },
+      {
+        "field": "customer_name",
+        "type": "TEXT",
+        "source_or_rule": "8022",
+        "excel_format": "@"
+      },
+      {
+        "field": "seller_name",
+        "type": "TEXT",
+        "source_or_rule": "8022",
+        "excel_format": "@"
+      },
+      {
         "field": "rca_canonical_id",
         "type": "CODE_TEXT",
         "source_or_rule": "Venda/Meta",
@@ -8553,6 +8571,18 @@
         "field": "industry_sku",
         "type": "CODE_TEXT",
         "source_or_rule": "8022/Carteira",
+        "excel_format": "@"
+      },
+      {
+        "field": "ean_product",
+        "type": "CODE_TEXT",
+        "source_or_rule": "8022",
+        "excel_format": "@"
+      },
+      {
+        "field": "product_description",
+        "type": "TEXT",
+        "source_or_rule": "8022",
         "excel_format": "@"
       },
       {
