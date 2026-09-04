@@ -5,6 +5,7 @@ import type { CanonicalList } from '../canonical/types';
 import { inboundForecasts } from '../canonical/reportSettings';
 import { useData } from '../store/DataContext';
 import { MigrationPage } from '../ui/pattern/MigrationEmptyState';
+import { ProductCatalogPage } from './ProductCatalogPage';
 import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 import { buildHierarchicalTreemap } from '../ui/charts/hierarchicalTreemapLayout';
 import './EstoquePage.css';
@@ -209,7 +210,7 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (view !== 'overview' || !activeCanonical) { setLists(null); return; }
+    if ((view !== 'overview' && view !== 'products') || !activeCanonical) { setLists(null); return; }
     let live = true;
     setLists(null);
     setError('');
@@ -219,16 +220,14 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
     return () => { live = false; };
   }, [activeCanonical, view]);
 
-  if (view === 'overview') {
-    if (!activeCanonical) return <PanelPage title="Estoque"><PanelEmptyState variant="page" title="Sem bundle canônico ativo" description="A Visão Geral não usa fallback legado. Atualize as bases para ativar M1, M3 e M4." /></PanelPage>;
-    if (error) return <PanelPage title="Estoque"><PanelAlert tone="error">Erro ao carregar as listas de Estoque: {error}</PanelAlert></PanelPage>;
-    if (!lists) return <PanelPage title="Estoque"><PanelEmptyState variant="page" title="Carregando Estoque" description="Leitura passiva de M1, M3 e M4. Nenhum parser, motor ou arquivo original é acionado pela tela." /></PanelPage>;
-    return <StockOverview {...lists} />;
+  if (view === 'overview' || view === 'products') {
+    if (!activeCanonical) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelEmptyState variant="page" title="Sem bundle canônico ativo" description="Esta tela usa exclusivamente o bundle canônico ativo. Atualize as bases para materializar a lista." /></PanelPage>;
+    if (error) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelAlert tone="error">Erro ao carregar as listas canônicas: {error}</PanelAlert></PanelPage>;
+    if (!lists) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelEmptyState variant="page" title="Carregando dados" description="Leitura passiva das listas canônicas ativas." /></PanelPage>;
+    return view === 'products' ? <ProductCatalogPage m1={lists.m1} m3={lists.m3} /> : <StockOverview {...lists} />;
   }
 
-  const configuration = view === 'products'
-    ? { heading: 'Produtos', columns: ['Código Winthor', 'Produto', 'EAN', 'Físico', 'Reservado', 'Disponível', 'Carteira', 'Projetado', 'Valor', 'Cobertura', 'Alertas'] }
-    : view === 'movements'
+  const configuration = view === 'movements'
       ? { heading: 'Entradas e Saídas', columns: ['Data', 'Tipo', 'Situação', 'Documento', 'Produto', 'Quantidade', 'Origem'] }
       : { heading: 'Auxiliar de Pedidos', columns: ['Produto', 'Giro', 'Cobertura', 'Disponível', 'Carteira', 'Projetado', 'Sugestão', 'Motivo'] };
   return <MigrationPage title="Estoque" heading={configuration.heading} columns={configuration.columns} kpis={['Estrutura preservada']} description="Esta aba será fechada na próxima etapa. Nenhuma regra provisória de compra ou movimento foi ativada." />;
