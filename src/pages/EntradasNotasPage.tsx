@@ -50,6 +50,7 @@ export function EntradasNotasPage() {
   const [forecastFilter, setForecastFilter] = useState<'ALL' | 'WITH_FORECAST' | 'WITHOUT_FORECAST'>('ALL');
   const [forecastFrom, setForecastFrom] = useState('');
   const [forecastTo, setForecastTo] = useState('');
+  const [openSort, setOpenSort] = useState<'VALUE_DESC' | 'FORECAST_ASC' | 'ISSUE_ASC'>('VALUE_DESC');
   const sync = deviceSyncIdentity();
 
   useEffect(() => {
@@ -75,7 +76,7 @@ export function EntradasNotasPage() {
     if (receivedTo && (!note.receiptDate || note.receiptDate > receivedTo)) return false;
     return true;
   }) ?? [], [model, query, source, receivedFrom, receivedTo]);
-  const openNotes = useMemo(() => model?.inboundNotes.filter(note => {
+  const openNotes = useMemo(() => (model?.inboundNotes.filter(note => {
     if (note.received || note.outstandingValue <= 0) return false;
     if (!inboundMatches(note, openQuery)) return false;
     const forecast = inboundForecasts()[note.invoice] ?? '';
@@ -84,7 +85,19 @@ export function EntradasNotasPage() {
     if (forecastFrom && (!forecast || forecast < forecastFrom)) return false;
     if (forecastTo && (!forecast || forecast > forecastTo)) return false;
     return true;
-  }) ?? [], [model, version, openQuery, forecastFilter, forecastFrom, forecastTo]);
+  }) ?? []).sort((left, right) => {
+    if (openSort === 'VALUE_DESC') return right.outstandingValue - left.outstandingValue || left.invoice.localeCompare(right.invoice);
+    if (openSort === 'ISSUE_ASC') return (left.billingDate ?? '9999-12-31').localeCompare(right.billingDate ?? '9999-12-31') || right.outstandingValue - left.outstandingValue;
+    const leftForecast = inboundForecasts()[left.invoice] ?? '9999-12-31';
+    const rightForecast = inboundForecasts()[right.invoice] ?? '9999-12-31';
+    return leftForecast.localeCompare(rightForecast) || right.outstandingValue - left.outstandingValue;
+  }), [model, version, openQuery, forecastFilter, forecastFrom, forecastTo, openSort]);
+
+  const receiptForecastStatus = (note: StockReceiptNote) => {
+    const forecast = inboundForecasts()[note.invoice] ?? '';
+    if (!forecast || !note.receiptDate) return null;
+    return note.receiptDate <= forecast ? 'RECEBIDA NO PRAZO' : 'RECEBIDA APÓS PREVISÃO';
+  };
 
   const saveDate = async (invoice: string, value: string) => {
     setSaving(invoice); setError(''); setStatus('');
@@ -111,8 +124,9 @@ export function EntradasNotasPage() {
           <label><span>até</span><input className="panel-input" type="date" value={receivedTo} onChange={event => setReceivedTo(event.target.value)} /></label>
         </div>
         <div className="inbound-note-result"><strong>{number.format(receivedNotes.length)} NF(s) recebida(s)</strong><span>{query ? `Resultado para “${query}”` : 'Busque por NF, EAN, código Winthor ou nome do produto.'}</span></div>
-        {receivedNotes.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table inbound-receipts-table"><thead><tr><th>NF</th><th>Recebida em</th><th>Emitida em</th><th>Fonte</th><th>Valor da NF</th><th>Itens</th></tr></thead><tbody>{receivedNotes.map(note => {
+        {receivedNotes.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table inbound-receipts-table"><thead><tr><th>NF</th><th>Recebida em</th><th>Emitida em</th><th>Fonte</th><th>Valor da NF</th><th>Itens</th><th>Previsão</th></tr></thead><tbody>{receivedNotes.map(note => {
           const expandKey = `receipt:${note.invoice}`;
+          const forecastStatus = receiptForecastStatus(note);
           return <Fragment key={expandKey}><tr className="inbound-note-row">
             <td><button type="button" className="inbound-note-toggle" onClick={() => setExpanded(expanded === expandKey ? null : expandKey)} aria-expanded={expanded === expandKey}>{expanded === expandKey ? '−' : '+'} NF {note.invoice}</button></td>
             <td>{date(note.receiptDate)}</td>
@@ -120,7 +134,8 @@ export function EntradasNotasPage() {
             <td><span className="inbound-note-source">{note.sources.join(' + ')}</span></td>
             <td>{note.totalValue === null ? '—' : currency.format(note.totalValue)}</td>
             <td>{note.items.length ? number.format(note.items.length) : '—'}</td>
-          </tr>{expanded === expandKey ? <tr className="inbound-note-details"><td colSpan={6}>{note.items.length ? <ul className="inbound-receipt-items">{note.items.map(item => <li key={`${item.winthorCode ?? ''}:${item.ean ?? ''}:${item.label}`}><div><strong>{item.label}</strong><span>{item.winthorCode ? `Cód. ${item.winthorCode}` : 'Código não vinculado'}{item.ean ? ` · EAN ${item.ean}` : ''}</span></div><div><strong>{number.format(item.quantity)} un.</strong><span>{item.unitPrice === null ? 'Preço não informado' : `${currency.format(item.unitPrice)} un. · ${item.totalValue === null ? '—' : currency.format(item.totalValue)}`}</span></div></li>)}</ul> : <div className="inbound-note-no-items">O 12.322 confirma a chegada desta NF, mas é um relatório histórico sem detalhamento por item.</div>}</td></tr> : null}</Fragment>;
+            <td>{forecastStatus ? <span className={`inbound-note-status ${forecastStatus === 'RECEBIDA NO PRAZO' ? 'is-on-time' : 'is-late'}`}>{forecastStatus}</span> : '—'}</td>
+          </tr>{expanded === expandKey ? <tr className="inbound-note-details"><td colSpan={7}>{note.items.length ? <ul className="inbound-receipt-items">{note.items.map(item => <li key={`${item.winthorCode ?? ''}:${item.ean ?? ''}:${item.label}`}><div><strong>{item.label}</strong><span>{item.winthorCode ? `Cód. ${item.winthorCode}` : 'Código não vinculado'}{item.ean ? ` · EAN ${item.ean}` : ''}</span></div><div><strong>{number.format(item.quantity)} un.</strong><span>{item.unitPrice === null ? 'Preço não informado' : `${currency.format(item.unitPrice)} un. · ${item.totalValue === null ? '—' : currency.format(item.totalValue)}`}</span></div></li>)}</ul> : <div className="inbound-note-no-items">O 12.322 confirma a chegada desta NF, mas é um relatório histórico sem detalhamento por item.</div>}</td></tr> : null}</Fragment>;
         })}</tbody></table></div> : <PanelEmptyState title="Nenhuma chegada encontrada" description="Ajuste os filtros ou busque por outra NF, EAN, código ou produto." />}
       </PanelCard>
 
@@ -131,6 +146,7 @@ export function EntradasNotasPage() {
           <label><span>Previsão</span><select className="panel-select" value={forecastFilter} onChange={event => setForecastFilter(event.target.value as 'ALL' | 'WITH_FORECAST' | 'WITHOUT_FORECAST')}><option value="ALL">Todas em aberto</option><option value="WITH_FORECAST">Com previsão</option><option value="WITHOUT_FORECAST">Sem previsão</option></select></label>
           <label><span>Previsão de</span><input className="panel-input" type="date" value={forecastFrom} onChange={event => setForecastFrom(event.target.value)} /></label>
           <label><span>até</span><input className="panel-input" type="date" value={forecastTo} onChange={event => setForecastTo(event.target.value)} /></label>
+          <label><span>Ordenar</span><select className="panel-select" value={openSort} onChange={event => setOpenSort(event.target.value as typeof openSort)}><option value="VALUE_DESC">Maior valor em aberto</option><option value="FORECAST_ASC">Previsão mais próxima</option><option value="ISSUE_ASC">Emissão mais antiga</option></select></label>
         </div>
         <div className="inbound-note-result"><strong>{number.format(openNotes.length)} NF(s) em aberto</strong><span>{openQuery ? `Resultado para “${openQuery}”` : 'Filtre por previsão ou busque uma NF, código ou produto.'}</span></div>
         {status ? <PanelAlert tone="success">{status}</PanelAlert> : null}
