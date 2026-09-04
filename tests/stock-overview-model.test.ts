@@ -124,6 +124,14 @@ test('chegadas efetivas unem 12.322 e 218 e preservam itens pesquisáveis do 218
   assert.equal(model.receivedNotes[0]?.items[0]?.quantity, 12);
 });
 
+test('218 usa o valor fiscal do cabeçalho da NF, sem somar preço de item', () => {
+  const localM3 = list('M3_MOVIMENTO_VENDAS', [
+    { fact_type: 'RECEIPT', invoice_number: '456', receipt_date: '2026-09-03', receipt_invoice_value: 1240.75, winthor_product_code: '1 CD TESTE 90G', received_units: 999, receipt_unit_price: 1 },
+  ]);
+  const model = buildStockOverviewModel({ m1, m3: localM3, m4 });
+  assert.equal(model.receivedNotes[0]?.totalValue, 1240.75);
+});
+
 test('NF encontrada no 218 zera todo o valor financeiro da linha, mesmo com Order Qty ainda aberto', () => {
   const localM3 = list('M3_MOVIMENTO_VENDAS', [
     ...m3.records.filter(row => row.fact_type === 'SALE'),

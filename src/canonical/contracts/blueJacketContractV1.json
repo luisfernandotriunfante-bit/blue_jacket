@@ -8676,6 +8676,12 @@
         "excel_format": "R$ #,##0.00"
       },
       {
+        "field": "receipt_invoice_value",
+        "type": "CURRENCY_BRL",
+        "source_or_rule": "218 · cabeçalho da NF · Vl. Total",
+        "excel_format": "R$ #,##0.00"
+      },
+      {
         "field": "current_financial_cost",
         "type": "CURRENCY_BRL",
         "source_or_rule": "218",

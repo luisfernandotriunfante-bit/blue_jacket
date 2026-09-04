@@ -536,6 +536,11 @@ export function buildStockOverviewModel({ m1, m3, m4, forecasts = {} }: { m1: Ca
     note.sources.add('218');
     note.receiptDate ??= firstText(fact, ['receipt_date']);
     note.invoiceIssueDate ??= firstText(fact, ['invoice_issue_date']);
+    // Vl. Total é o valor oficial do cabeçalho da NF no 218. Não somamos
+    // preço de item: ele pode estar vazio, representar custo unitário ou se
+    // repetir por linha e não substitui o valor fiscal da nota.
+    const invoiceValue = amount(fact.receipt_invoice_value);
+    if (invoiceValue > 0 && note.totalValue === null) note.totalValue = invoiceValue;
 
     const rawItem = firstText(fact, ['winthor_product_code']);
     const quantity = Math.max(0, amount(fact.received_units));

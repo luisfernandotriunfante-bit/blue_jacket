@@ -21,7 +21,7 @@ const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   'CARTEIRA 24.08.xlsx': 'browser-v5-portfolio-current-snapshot',
 };
 const SCHEMA_VERSION = 'v1';
-const ENGINE_VERSION = 'browser-stage4-subbrand-composition-v8';
+const ENGINE_VERSION = 'browser-stage4-receipt-invoice-value-v9';
 const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
 
 export const REQUIRED_SOURCE_IDS = [...new Set(SOURCE_IDS)];
