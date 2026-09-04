@@ -40,7 +40,7 @@ const saleKind = (row: Record<string, unknown>) => normalized(row.order_status).
 function saleDocuments(records: Array<Record<string, unknown>>) {
   const grouped = new Map<string, SaleDocument>();
   for (const row of records.filter(row => row.fact_type === 'SALE' && row.source === '8022')) {
-    const kind=saleKind(row), invoice=String(row.invoice_number ?? '').trim() || null, order=String(row.order_winthor ?? '').trim() || null;
+    const kind=saleKind(row), invoice=String(row.invoice_number ?? '').trim() || null, rawOrder=String(row.order_winthor ?? '').trim(), order=/^\d{4,}$/.test(rawOrder) ? rawOrder : null;
     const key=`${kind}:${kind==='FATURADO' ? invoice ?? order ?? row.fact_id : order ?? invoice ?? row.fact_id}`;
     const doc=grouped.get(key) ?? {key,kind,invoice,order,customer:String(row.customer_name ?? '').trim() || null,cnpj:String(row.cnpj ?? '').trim() || null,movementDate:String(row.event_date ?? '').slice(0,10) || null,invoiceDate:String(row.invoice_issue_date ?? '').slice(0,10) || null,status:String(row.order_status ?? '').trim() || null,block:String(row.block_status ?? '').trim() || null,seller:String(row.seller_name ?? '').trim() || null,value:0,items:[]};
     doc.value+=amount(row.value); doc.items.push({code:String(row.winthor_product_code ?? '').trim()||null,ean:String(row.ean_product ?? '').trim()||null,label:String(row.product_description ?? row.winthor_product_code ?? 'Item sem descrição'),cases:amount(row.cases),units:amount(row.units),value:amount(row.value)}); grouped.set(key,doc);
@@ -69,6 +69,8 @@ export function EntradasNotasPage() {
   const [saleQuery, setSaleQuery] = useState('');
   const [saleExpanded, setSaleExpanded] = useState<string | null>(null);
   const [view, setView] = useState<'ENTRADAS' | 'SAIDAS'>('ENTRADAS');
+  const [pendingQuery, setPendingQuery] = useState('');
+  const [pendingCustomer, setPendingCustomer] = useState('ALL');
   const sync = deviceSyncIdentity();
 
   useEffect(() => {
@@ -118,7 +120,8 @@ export function EntradasNotasPage() {
   };
   const sales = useMemo(() => saleDocuments((lists?.m3.records ?? []) as Array<Record<string, unknown>>), [lists]);
   const invoicedSales = sales.filter(note => note.kind === 'FATURADO' && saleMatches(note, saleQuery));
-  const pendingSales = sales.filter(note => note.kind === 'A_FATURAR' && saleMatches(note, saleQuery));
+  const pendingCustomers = [...new Set(sales.filter(note => note.kind === 'A_FATURAR').map(note => note.customer ?? note.cnpj ?? '').filter(Boolean))].sort();
+  const pendingSales = sales.filter(note => note.kind === 'A_FATURAR' && saleMatches(note, pendingQuery) && (pendingCustomer === 'ALL' || (note.customer ?? note.cnpj) === pendingCustomer));
 
   const saveDate = async (invoice: string, value: string) => {
     setSaving(invoice); setError(''); setStatus('');
@@ -170,6 +173,7 @@ export function EntradasNotasPage() {
 
       <PanelCard>
         <PanelSectionHeader eyebrow="SAÍDAS — 8022" title="Pedidos a faturar" description="Carteira de saída da Milênio para clientes. Não há previsão manual nesta etapa; o status vem exclusivamente do 8022." />
+        <div className="inbound-note-filters"><label className="inbound-filter-search"><span>Buscar na carteira</span><input className="panel-input panel-input-search" value={pendingQuery} onChange={event => setPendingQuery(event.target.value)} placeholder="Pedido, cliente, CNPJ, EAN ou código" /></label><label><span>Cliente</span><select className="panel-select" value={pendingCustomer} onChange={event => setPendingCustomer(event.target.value)}><option value="ALL">Todos os clientes</option>{pendingCustomers.map(customer => <option key={customer} value={customer}>{customer}</option>)}</select></label></div>
         <div className="inbound-note-result"><strong>{number.format(pendingSales.length)} pedido(s) a faturar</strong><span>Separados das NFs já emitidas.</span></div>
         {pendingSales.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table outbound-notes-table"><thead><tr><th>Pedido Winthor</th><th>Cliente</th><th>Data movimento</th><th>Status</th><th>Valor pendente</th><th>Itens</th></tr></thead><tbody>{pendingSales.map(note => <Fragment key={note.key}><tr className="inbound-note-row"><td><button type="button" className="inbound-note-toggle" onClick={()=>setSaleExpanded(saleExpanded===note.key?null:note.key)}>{saleExpanded===note.key?'−':'+'} {note.order ?? '—'}</button></td><td>{note.customer ?? note.cnpj ?? '—'}</td><td>{date(note.movementDate)}</td><td><span className="inbound-note-status is-open">{note.status ?? 'A FATURAR'}</span></td><td>{currency.format(note.value)}</td><td>{number.format(note.items.length)}</td></tr>{saleExpanded===note.key?<tr className="inbound-note-details"><td colSpan={6}><div className="inbound-note-details-grid"><span>Cliente: <strong>{note.customer ?? '—'}</strong></span><span>CNPJ: <strong>{note.cnpj ?? '—'}</strong></span><span>Bloqueio: <strong>{note.block ?? '—'}</strong></span><span>Vendedor: <strong>{note.seller ?? '—'}</strong></span></div><ul>{note.items.map(item=><li key={`${item.code}:${item.ean}:${item.label}`}><span>{item.label}<br />{item.code?`Cód. ${item.code}`:'Código não informado'}{item.ean?` · EAN ${item.ean}`:''}</span><strong>{number.format(item.cases)} cx · {number.format(item.units)} un. · {currency.format(item.value)}</strong></li>)}</ul></td></tr>:null}</Fragment>)}</tbody></table></div>:<PanelEmptyState title="Nenhum pedido a faturar" description="O 8022 atual não trouxe pedidos com esse status para a busca selecionada." />}
       </PanelCard></> : null}
