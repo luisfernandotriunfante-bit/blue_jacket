@@ -124,8 +124,6 @@ function InboundForecastPanel({ model }: { model: StockOverviewModel }) {
   const buckets = [
     { key: '0-7', label: 'Até 7 dias', match: (days: number | null) => days !== null && days >= 0 && days <= 7 },
     { key: '8-15', label: '8 a 15 dias', match: (days: number | null) => days !== null && days >= 8 && days <= 15 },
-    { key: '16-30', label: '16 a 30 dias', match: (days: number | null) => days !== null && days >= 16 && days <= 30 },
-    { key: 'later', label: 'Após 30 dias', match: (days: number | null) => days !== null && days > 30 },
     { key: 'none', label: 'Sem previsão', match: (days: number | null) => days === null },
   ];
   const grouped = buckets.map(bucket => {
@@ -133,19 +131,12 @@ function InboundForecastPanel({ model }: { model: StockOverviewModel }) {
     return { ...bucket, invoices: entries.flatMap(forecast => forecast.invoices), totalValue: entries.reduce((sum, forecast) => sum + forecast.totalValue, 0) };
   });
   return <PanelCard>
-    <PanelSectionHeader eyebrow="ENTRADAS PREVISTAS" title="Próximas entradas previstas" description="Previsões informadas manualmente em Atualizar Bases. O valor vem da Carteira em aberto; notas já recebidas não aparecem aqui." />
+    <PanelSectionHeader eyebrow="ENTRADAS PREVISTAS" title="Próximas entradas previstas" description="Resumo da Carteira em aberto. A previsão é preenchida e o detalhamento de cada NF ficam em Entradas e Saídas." />
     <div className="stock-forecast-grid">
       {grouped.map(group => <article className="stock-forecast-card" data-empty={!group.invoices.length} key={group.key}>
           <header><strong>{group.label}</strong><span>{number.format(group.invoices.length)} NF(s)</span></header>
           <div className="stock-forecast-total">{group.invoices.length ? currency.format(group.totalValue) : '—'}</div>
-          {!group.invoices.length ? <small>Nenhuma entrada cadastrada</small> : null}
-          <div className="stock-forecast-invoices">
-            {group.invoices.map(invoice => <div className="stock-forecast-invoice" key={invoice.invoice}>
-              <strong>NF: {invoice.invoice}</strong>
-              <span>{currency.format(invoice.value)}</span>
-              {group.key === 'none' ? null : invoice.items.length ? <ul>{invoice.items.map(item => <li key={item}>{item}</li>)}</ul> : <em>Item não vinculado</em>}
-            </div>)}
-          </div>
+          <small>{group.invoices.length ? 'Notas aguardando entrada' : 'Nenhuma nota neste período'}</small>
         </article>)}
     </div>
   </PanelCard>;
