@@ -6,6 +6,7 @@
 .inbound-note-filters .panel-input, .inbound-note-filters .panel-select { width: 100%; min-width: 0; }
 .inbound-note-result { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin: 12px 0 0; color: var(--panel-muted-light); font-size: .72rem; }
 .inbound-note-result strong { color: var(--panel-text); }
+.outbound-search { display: grid; gap: 5px; max-width: 36rem; margin-top: 16px; color: var(--panel-muted-light); font-size: .68rem; font-weight: var(--panel-weight-bold); }
 .inbound-note-toggle { border: 0; padding: 0; background: transparent; color: var(--panel-text); font: inherit; font-weight: var(--panel-weight-heavy); cursor: pointer; }
 .inbound-note-toggle:hover, .inbound-note-toggle:focus-visible { color: #fff; text-decoration: underline; }
 .inbound-note-date { min-width: 142px; }
