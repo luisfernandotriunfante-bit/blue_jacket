@@ -68,6 +68,7 @@ export function EntradasNotasPage() {
   const [openSort, setOpenSort] = useState<'VALUE_DESC' | 'FORECAST_ASC' | 'ISSUE_ASC'>('VALUE_DESC');
   const [saleQuery, setSaleQuery] = useState('');
   const [saleExpanded, setSaleExpanded] = useState<string | null>(null);
+  const [view, setView] = useState<'ENTRADAS' | 'SAIDAS'>('ENTRADAS');
   const sync = deviceSyncIdentity();
 
   useEffect(() => {
@@ -135,7 +136,8 @@ export function EntradasNotasPage() {
 
   return <PanelPage title="Entradas e Saídas">
     <div className="panel-stack inbound-notes-page">
-      <PanelCard>
+      <nav className="inbound-view-tabs" aria-label="Visualização operacional"><button type="button" className={view === 'ENTRADAS' ? 'is-active' : ''} onClick={() => setView('ENTRADAS')}>Entradas <span>Carteira · 218 · 12.322</span></button><button type="button" className={view === 'SAIDAS' ? 'is-active' : ''} onClick={() => setView('SAIDAS')}>Saídas <span>8022 · Faturado · A faturar</span></button></nav>
+      {view === 'ENTRADAS' ? <PanelCard>
         <PanelSectionHeader eyebrow="RECEBIMENTOS CONFIRMADOS" title="Chegada efetiva de notas" description="Notas encontradas no 218 e no 12.322. Abra uma NF para consultar os itens realmente registrados no recebimento." />
         <div className="inbound-note-filters">
           <label className="inbound-filter-search"><span>Buscar</span><input className="panel-input panel-input-search" value={query} onChange={event => setQuery(event.target.value)} placeholder="NF, EAN, código ou produto" /></label>
@@ -157,9 +159,9 @@ export function EntradasNotasPage() {
             <td>{forecastStatus ? <span className={`inbound-note-status ${forecastStatus === 'RECEBIDA NO PRAZO' ? 'is-on-time' : 'is-late'}`}>{forecastStatus}</span> : '—'}</td>
           </tr>{expanded === expandKey ? <tr className="inbound-note-details"><td colSpan={7}>{note.items.length ? <ul className="inbound-receipt-items">{note.items.map(item => <li key={`${item.winthorCode ?? ''}:${item.ean ?? ''}:${item.label}`}><div><strong>{item.label}</strong><span>{item.winthorCode ? `Cód. ${item.winthorCode}` : 'Código não vinculado'}{item.ean ? ` · EAN ${item.ean}` : ''}</span></div><div><strong>{number.format(item.quantity)} un.</strong><span>{item.unitPrice === null ? 'Preço não informado' : `${currency.format(item.unitPrice)} un. · ${item.totalValue === null ? '—' : currency.format(item.totalValue)}`}</span></div></li>)}</ul> : <div className="inbound-note-no-items">O 12.322 confirma a chegada desta NF, mas é um relatório histórico sem detalhamento por item.</div>}</td></tr> : null}</Fragment>;
         })}</tbody></table></div> : <PanelEmptyState title="Nenhuma chegada encontrada" description="Ajuste os filtros ou busque por outra NF, EAN, código ou produto." />}
-      </PanelCard>
+      </PanelCard> : null}
 
-      <PanelCard>
+      {view === 'SAIDAS' ? <><PanelCard>
         <PanelSectionHeader eyebrow="SAÍDAS — 8022" title="Notas faturadas para clientes" description="Somente vendas confirmadas no 8022. Abra a NF para consultar pedido Winthor, cliente e itens." />
         <label className="inbound-filter-search outbound-search"><span>Buscar nas saídas</span><input className="panel-input panel-input-search" value={saleQuery} onChange={event => setSaleQuery(event.target.value)} placeholder="NF, pedido, cliente, CNPJ, EAN ou código" /></label>
         <div className="inbound-note-result"><strong>{number.format(invoicedSales.length)} NF(s) faturada(s)</strong><span>Venda confirmada no 8022.</span></div>
@@ -170,9 +172,9 @@ export function EntradasNotasPage() {
         <PanelSectionHeader eyebrow="SAÍDAS — 8022" title="Pedidos a faturar" description="Carteira de saída da Milênio para clientes. Não há previsão manual nesta etapa; o status vem exclusivamente do 8022." />
         <div className="inbound-note-result"><strong>{number.format(pendingSales.length)} pedido(s) a faturar</strong><span>Separados das NFs já emitidas.</span></div>
         {pendingSales.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table outbound-notes-table"><thead><tr><th>Pedido Winthor</th><th>Cliente</th><th>Data movimento</th><th>Status</th><th>Valor pendente</th><th>Itens</th></tr></thead><tbody>{pendingSales.map(note => <Fragment key={note.key}><tr className="inbound-note-row"><td><button type="button" className="inbound-note-toggle" onClick={()=>setSaleExpanded(saleExpanded===note.key?null:note.key)}>{saleExpanded===note.key?'−':'+'} {note.order ?? '—'}</button></td><td>{note.customer ?? note.cnpj ?? '—'}</td><td>{date(note.movementDate)}</td><td><span className="inbound-note-status is-open">{note.status ?? 'A FATURAR'}</span></td><td>{currency.format(note.value)}</td><td>{number.format(note.items.length)}</td></tr>{saleExpanded===note.key?<tr className="inbound-note-details"><td colSpan={6}><div className="inbound-note-details-grid"><span>Cliente: <strong>{note.customer ?? '—'}</strong></span><span>CNPJ: <strong>{note.cnpj ?? '—'}</strong></span><span>Bloqueio: <strong>{note.block ?? '—'}</strong></span><span>Vendedor: <strong>{note.seller ?? '—'}</strong></span></div><ul>{note.items.map(item=><li key={`${item.code}:${item.ean}:${item.label}`}><span>{item.label}<br />{item.code?`Cód. ${item.code}`:'Código não informado'}{item.ean?` · EAN ${item.ean}`:''}</span><strong>{number.format(item.cases)} cx · {number.format(item.units)} un. · {currency.format(item.value)}</strong></li>)}</ul></td></tr>:null}</Fragment>)}</tbody></table></div>:<PanelEmptyState title="Nenhum pedido a faturar" description="O 8022 atual não trouxe pedidos com esse status para a busca selecionada." />}
-      </PanelCard>
+      </PanelCard></> : null}
 
-      <PanelCard>
+      {view === 'ENTRADAS' ? <PanelCard>
         <PanelSectionHeader eyebrow="CARTEIRA COLGATE" title="Notas ainda em aberto" description="Aqui ficam somente as NFs que aguardam chegada. Informe a previsão nesta tabela; notas recebidas permanecem acima, na consulta de chegada efetiva." />
         <div className="inbound-note-filters">
           <label className="inbound-filter-search"><span>Buscar na Carteira</span><input className="panel-input panel-input-search" value={openQuery} onChange={event => setOpenQuery(event.target.value)} placeholder="NF, código ou produto" /></label>
@@ -197,7 +199,7 @@ export function EntradasNotasPage() {
             <td><span className="inbound-note-status is-open">EM ABERTO</span></td>
           </tr>{expanded === expandKey ? <tr className="inbound-note-details"><td colSpan={7}><div className="inbound-note-details-grid"><span>Pedido: <strong>{note.orderQty ? number.format(note.orderQty) : '—'} cx.</strong></span><span>Faturado: <strong>{note.billQty ? number.format(note.billQty) : '—'} cx.</strong></span><span>Saldo: <strong>{note.outstandingQty ? number.format(note.outstandingQty) : '—'} cx.</strong></span></div><ul>{note.items.length ? note.items.map(item => <li key={item.label}><span>{item.label}</span><strong>{number.format(item.quantity)} cx{item.units === null ? '' : ` · ${number.format(item.units)} un.`}</strong></li>) : <li>Não foi possível vincular itens internos a esta NF.</li>}</ul></td></tr> : null}</Fragment>;
         })}</tbody></table></div> : <PanelEmptyState title="Nenhuma NF em aberto" description={query ? 'Nenhuma NF em aberto corresponde à busca atual.' : 'Todas as NFs identificadas na Carteira já constam como recebidas.'} />}
-      </PanelCard>
+      </PanelCard> : null}
     </div>
   </PanelPage>;
 }
