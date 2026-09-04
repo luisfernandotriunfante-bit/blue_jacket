@@ -21,7 +21,12 @@ const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   'CARTEIRA 24.08.xlsx': 'browser-v5-portfolio-current-snapshot',
 };
 const SCHEMA_VERSION = 'v1';
-const ENGINE_VERSION = 'browser-stage4-receipt-invoice-value-v9';
+/**
+ * A versão do motor é também o contrato de migração do build salvo no
+ * navegador. Quando ela muda, os dados originais já presentes no staging são
+ * remontados antes de qualquer tela os consumir.
+ */
+export const CANONICAL_ENGINE_VERSION = 'browser-stage4-receipt-invoice-autorebuild-v10';
 const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
 
 export const REQUIRED_SOURCE_IDS = [...new Set(SOURCE_IDS)];
@@ -389,7 +394,7 @@ function activeFromLists(lists: Record<CanonicalList['id'], CanonicalList>, stag
   const motorBuildId = `motor-browser-${Date.now()}-${stagingManifestHash.slice(0, 10)}`;
   const rowCounts = Object.fromEntries(Object.entries(lists).map(([id, list]) => [id, list.records.length])) as ActiveCanonicalBundle['rowCounts'];
   return {
-    status: 'ACTIVE', motorBuildId, stagingManifestHash, schemaVersion: SCHEMA_VERSION, engineVersion: ENGINE_VERSION,
+    status: 'ACTIVE', motorBuildId, stagingManifestHash, schemaVersion: SCHEMA_VERSION, engineVersion: CANONICAL_ENGINE_VERSION,
     approvedAt: new Date().toISOString(), rowCounts, factTypeCounts: factTypeCounts(lists.M3_MOVIMENTO_VENDAS),
   } satisfies ActiveCanonicalBundle;
 }
@@ -457,7 +462,7 @@ export async function buildCanonicalFromStoredSources(onProgress?: (progress: So
     motorBuildId,
     stagingManifestHash: manifestHash,
     schemaVersion: SCHEMA_VERSION,
-    engineVersion: ENGINE_VERSION,
+    engineVersion: CANONICAL_ENGINE_VERSION,
     approvedAt: new Date().toISOString(),
     rowCounts,
     factTypeCounts: factTypeCounts(lists.M3_MOVIMENTO_VENDAS),

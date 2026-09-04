@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as XLSX from 'xlsx';
 import { parse218 } from '../src/canonical/parsers.ts';
-import { buildM3 } from '../src/canonical/motors.ts';
+import { buildCanonicalBundleFromStaging, buildM3 } from '../src/canonical/motors.ts';
 import { sourceImportTestHelpers } from '../src/canonical/sourceImport.ts';
 
 const SOURCE = 'entrada-notas-218.xls';
@@ -53,6 +53,12 @@ test('218 materializa a NF mesmo sem depender do bloco de itens', async () => {
   assert.equal(receipt?.receipt_invoice_value, 19245.57);
   assert.equal(receipt?.receipt_scope, 'INVOICE');
   assert.equal(receipt?.source_lineage, '218:NF');
+
+  // Este é o caminho usado pelo navegador ao remontar o build salvo. Garante
+  // que o valor fiscal não fique apenas no motor de compatibilidade antigo.
+  const browserBundle = buildCanonicalBundleFromStaging([parsed]);
+  const browserReceipt = browserBundle.lists.M3_MOVIMENTO_VENDAS.records.find(row => row.fact_type === 'RECEIPT');
+  assert.equal(browserReceipt?.receipt_invoice_value, 19245.57);
 });
 
 test('mudança do parser invalida o staging antigo do 218', () => {
