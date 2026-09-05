@@ -15,6 +15,7 @@ const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   '310 total 2026.txt': 'browser-v2-rca310',
   "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v3-route-monthly-meta',
   'entrada-notas-218.xls': 'browser-v2-invoice-registry',
+  "Sortimento Recomendado - Q3'26.xlsx": 'browser-v2-named-assortment-channels',
   // A Carteira é sempre uma fotografia completa enviada pelo usuário. A versão
   // também força o reprocessamento de um staging que poderia ter sido filtrado
   // pela antiga regra de continuidade.
@@ -26,8 +27,9 @@ const SCHEMA_VERSION = 'v1';
  * navegador. Quando ela muda, os dados originais já presentes no staging são
  * remontados antes de qualquer tela os consumir.
  */
-export const CANONICAL_ENGINE_VERSION = 'browser-stage4-product-assortment-v14';
+export const CANONICAL_ENGINE_VERSION = 'browser-stage4-product-assortment-v15';
 const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
+export const isSourceStageCurrent = (manifest: SourceStageManifest | undefined) => Boolean(manifest && manifest.parserVersion === parserVersionFor(manifest.source) && manifest.schemaVersion === SCHEMA_VERSION);
 
 export const REQUIRED_SOURCE_IDS = [...new Set(SOURCE_IDS)];
 
