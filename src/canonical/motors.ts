@@ -1,6 +1,7 @@
 import contract from './contracts/blueJacketContractV1.json' with { type: 'json' };
 import { createRcaResolver, type RcaResolution } from './rcaResolver';
 import type { CanonicalAudit, CanonicalBundle, CanonicalList, ParsedSource, RawTyped } from './types';
+import { ASSORTMENT_CHANNELS } from './assortment';
 
 type Id = CanonicalList['id'];
 type Schema = { field: string; type: string }[];
@@ -76,6 +77,30 @@ function stock8013For(index: Map<string, Record<string, RawTyped>>, ...candidate
   }
   return undefined;
 }
+
+type SortimentIndex = { byEan: Map<string, Record<string, RawTyped>>; byWinthor: Map<string, Record<string, RawTyped>>; byIndustry: Map<string, Record<string, RawTyped>> };
+const sortimentRank = (row: Record<string, RawTyped>) => ({ HAIR_OVERRIDE: 4, AUG_SEP_BASE: 3, JUL_BASE: 2, DISCONTINUED_Q3: 1 }[String(value(row, 'sortimentDataset'))] ?? 0);
+function sortimentIndex(records: Array<Record<string, RawTyped>>): SortimentIndex {
+  const byEan = new Map<string, Record<string, RawTyped>>(), byWinthor = new Map<string, Record<string, RawTyped>>(), byIndustry = new Map<string, Record<string, RawTyped>>();
+  const setBest = (index: Map<string, Record<string, RawTyped>>, key: string, row: Record<string, RawTyped>) => { if (key && sortimentRank(row) >= sortimentRank(index.get(key) ?? {})) index.set(key, row); };
+  for (const row of records) {
+    for (const candidate of [value(row, 'ean'), value(row, 'ean_novo'), value(row, 'ean_antigo')]) for (const key of gtinKeys(candidate)) setBest(byEan, key, row);
+    setBest(byWinthor, codeKey(value(row, 'winthor_code_sortiment')), row);
+    for (const candidate of [value(row, 'industry_code_sortiment'), value(row, 'cod_novo'), value(row, 'cod_antigo')]) setBest(byIndustry, codeKey(candidate), row);
+  }
+  return { byEan, byWinthor, byIndustry };
+}
+function sortimentFor(index: SortimentIndex, eans: unknown[], winthorCodes: unknown[], industryCodes: unknown[]) {
+  for (const candidate of eans) for (const key of gtinKeys(candidate)) { const found=index.byEan.get(key); if(found)return found; }
+  for (const candidate of winthorCodes) { const found=index.byWinthor.get(codeKey(candidate)); if(found)return found; }
+  for (const candidate of industryCodes) { const found=index.byIndustry.get(codeKey(candidate)); if(found)return found; }
+  return undefined;
+}
+function recommendationJson(row?: Record<string, RawTyped>) {
+  if (!row) return null;
+  const recommendations = Object.fromEntries(ASSORTMENT_CHANNELS.map(channel => [channel.field, value(row, channel.field)]).filter(([, channelValue]) => channelValue !== null));
+  return Object.keys(recommendations).length ? JSON.stringify(recommendations) : null;
+}
 const issue = (code: string, message: string, source = 'motor', severity: CanonicalAudit['severity'] = 'WARNING'): CanonicalAudit => ({
   code,
   severity,
@@ -128,6 +153,7 @@ export function buildM1(sources: ParsedSource[]) {
   }
   const listBySku = new Map(listPriceRows.map(row => [codeKey(value(row, 'sku')), row]));
   const stock8013 = stock8013ByEan(rows(sources, 'estoque-8013.xls'));
+  const assortment = sortimentIndex(rows(sources, "Sortimento Recomendado - Q3'26.xlsx"));
   const launchRows = rows(sources, 'lançamentos.xlsx');
   const launchesByCode = new Map<string, Record<string, RawTyped>>();
   const launchesByEan = new Map<string, Record<string, RawTyped>>();
@@ -139,6 +165,7 @@ export function buildM1(sources: ParsedSource[]) {
     const industry = listByEan.get(ean13Key(ean) ?? '') ?? listBySku.get(codeKey(manufacturer));
     const launch = launchesByEan.get(ean13Key(ean) ?? '') ?? launchesByEan.get(ean13Key(industry ? value(industry, 'ean') : null) ?? '') ?? launchesByCode.get(codeKey(winthor));
     const source8013 = stock8013For(stock8013, ean, industry ? value(industry, 'ean') : null, industry ? value(industry, 'dun_14') : null);
+    const sortiment = sortimentFor(assortment, [ean, industry ? value(industry, 'ean') : null], [winthor], [manufacturer, industry ? value(industry, 'sku') : null]);
     const id = winthor || String(ean ?? '');
     if (!id || seen.has(id)) return null;
     seen.add(id);
@@ -149,7 +176,13 @@ export function buildM1(sources: ParsedSource[]) {
       industry_sku: industry ? value(industry, 'sku') : null, industry_ean: industry ? value(industry, 'ean') : ean || null,
       dun14: (industry ? value(industry, 'dun_14') : null) ?? (source8013 ? value(source8013, 'dun14') : null), description_internal: value(row, 'description', 'product_description', 'description_internal'),
       description_industry: (industry ? value(industry, 'descricao_padrao') : null) ?? (source8013 ? value(source8013, 'description_8013') : null),
-      category: source8013 ? value(source8013, 'category_8013') : null, subbrand: source8013 ? value(source8013, 'subbrand_8013') : null,
+      lifecycle_status: sortiment ? value(sortiment, 'lifecycle_status', 'status') : null,
+      category: (source8013 ? value(source8013, 'category_8013') : null) ?? (sortiment ? value(sortiment, 'category', 'categoria') : null),
+      brand: sortiment ? value(sortiment, 'brand', 'marca') : null,
+      subbrand: (source8013 ? value(source8013, 'subbrand_8013') : null) ?? (sortiment ? value(sortiment, 'subbrand', 'submarca') : null),
+      segment: sortiment ? value(sortiment, 'segment', 'segmento') : null, subsegment: sortiment ? value(sortiment, 'subsegment', 'subsegmento') : null,
+      contents: sortiment ? value(sortiment, 'contents') : null, amount: sortiment ? value(sortiment, 'amount') : null,
+      recommendation_json: recommendationJson(sortiment),
       units_per_case_industry: industry ? value(industry, 'un_cx') : null, cases_per_pallet: industry ? value(industry, 'cx_pal') : null,
       physical_stock_units: value(row, 'physical_stock', 'stock', 'quantity', 'quantity_stock'),
       unit_weight_kg: source8013 ? value(source8013, 'unit_weight_kg') : null, case_weight_kg: source8013 ? value(source8013, 'case_weight_kg') : null,
@@ -292,6 +325,7 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   }
   const listBySku = new Map(listPriceRows.map(row => [codeKey(value(row, 'sku')), row]));
   const stock8013 = stock8013ByEan(rows(parsedSources, 'estoque-8013.xls'));
+  const assortment = sortimentIndex(rows(parsedSources, "Sortimento Recomendado - Q3'26.xlsx"));
   const items = new Map<string, Record<string, unknown>>();
   for (const row of [...rows(parsedSources, 'cadastro-itens-286.xls'), ...rows(parsedSources, 'posicao-estoque-105.xls')]) {
     const code = String(value(row, 'winthor_code') ?? '');
@@ -302,12 +336,19 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
     const industry = listByEan.get(ean13Key(ean) ?? '') ?? listBySku.get(codeKey(manufacturer));
     const launch = launchesByEan.get(ean13Key(ean) ?? '') ?? launchesByEan.get(ean13Key(industry ? value(industry, 'ean') : null) ?? '') ?? launchesByCode.get(codeKey(code));
     const source8013 = stock8013For(stock8013, ean, industry ? value(industry, 'ean') : null, industry ? value(industry, 'dun_14') : null);
+    const sortiment = sortimentFor(assortment, [ean, industry ? value(industry, 'ean') : null], [code], [manufacturer, industry ? value(industry, 'sku') : null]);
     items.set(code, fieldOnly('M1_ITEM_ESTOQUE', {
       snapshot_date: snapshot, competence: comp, item_canonical_id: `ITEM:${code}`, winthor_code: code,
       manufacturer_code: manufacturer, industry_sku: industry ? value(industry, 'sku') : null,
       internal_ean: value(row, 'internal_ean'), industry_ean: industry ? value(industry, 'ean') : null, dun14: (industry ? value(industry, 'dun_14') : null) ?? (source8013 ? value(source8013, 'dun14') : null),
       description_internal: value(row, 'description_286', 'description_105'), description_industry: (industry ? value(industry, 'descricao_padrao') : null) ?? (source8013 ? value(source8013, 'description_8013') : null),
-      category: source8013 ? value(source8013, 'category_8013') : null, subbrand: source8013 ? value(source8013, 'subbrand_8013') : null,
+      lifecycle_status: sortiment ? value(sortiment, 'lifecycle_status', 'status') : null,
+      category: (source8013 ? value(source8013, 'category_8013') : null) ?? (sortiment ? value(sortiment, 'category', 'categoria') : null),
+      brand: sortiment ? value(sortiment, 'brand', 'marca') : null,
+      subbrand: (source8013 ? value(source8013, 'subbrand_8013') : null) ?? (sortiment ? value(sortiment, 'subbrand', 'submarca') : null),
+      segment: sortiment ? value(sortiment, 'segment', 'segmento') : null, subsegment: sortiment ? value(sortiment, 'subsegment', 'subsegmento') : null,
+      contents: sortiment ? value(sortiment, 'contents') : null, amount: sortiment ? value(sortiment, 'amount') : null,
+      recommendation_json: recommendationJson(sortiment),
       pack_internal: value(row, 'pack_286', 'pack_105'), units_per_case_industry: industry ? value(industry, 'un_cx') : null, cases_per_pallet: industry ? value(industry, 'cx_pal') : null,
       physical_stock_units: value(stock ?? row, 'physical_stock_units'), stock_286_physical: value(row, 'physical_286'), stock_286_blocked: value(row, 'blocked_286'), stock_286_reserved: value(row, 'reserved_286'), stock_286_available: value(row, 'available_286'),
       unit_weight_kg: source8013 ? value(source8013, 'unit_weight_kg') : null, case_weight_kg: source8013 ? value(source8013, 'case_weight_kg') : null,
