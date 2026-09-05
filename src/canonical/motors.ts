@@ -160,8 +160,14 @@ export function buildM1(sources: ParsedSource[]) {
     if (!winthor || !ean) audits.push(issue('ITEM_UNRESOLVED', `Item ${id} sem ${!winthor ? 'código Winthor' : 'EAN'}.`));
     return out;
   }).filter(Boolean) as Array<Record<string, unknown>>;
-  const price = new Map(rows(sources, 'pctabpr 13.xlsx').map(row => [String(value(row, 'product_code', 'winthor_code', 'codprod') ?? ''), value(row, 'official_price', 'p_venda_1', 'pvenda1')]));
-  for (const record of records) record.official_price = price.get(String(record.winthor_code)) ?? null;
+  const price = new Map(rows(sources, 'pctabpr 13.xlsx').map(row => [String(value(row, 'product_code', 'winthor_code', 'codprod') ?? ''), row]));
+  for (const record of records) {
+    const priceRow = price.get(String(record.winthor_code));
+    record.official_price = priceRow ? value(priceRow, 'official_price', 'p_venda_1', 'pvenda1') : null;
+    record.pVenda1_region11 = priceRow ? value(priceRow, 'pvenda1') : null;
+    record.pVenda = priceRow ? value(priceRow, 'pvenda') : null;
+    record.vlSt = priceRow ? value(priceRow, 'vlst') : null;
+  }
   return list('M1_ITEM_ESTOQUE', records, ['cadastro-itens-286.xls', 'posicao-estoque-105.xls', 'estoque-8013.xls', 'pctabpr 13.xlsx', 'Lista_de_Preco (8).xlsx', 'lançamentos.xlsx', "Sortimento Recomendado - Q3'26.xlsx"], audits);
 }
 
@@ -273,7 +279,7 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
 
   // M1
   const stock105 = new Map(rows(parsedSources, 'posicao-estoque-105.xls').map(row => [String(value(row, 'winthor_code') ?? ''), row]));
-  const pVenda = new Map(rows(parsedSources, 'pctabpr 13.xlsx').map(row => [String(value(row, 'codprod') ?? ''), value(row, 'pvenda1')]));
+  const priceByCode = new Map(rows(parsedSources, 'pctabpr 13.xlsx').map(row => [String(value(row, 'codprod') ?? ''), row]));
   const launchRows = rows(parsedSources, 'lançamentos.xlsx');
   const launchesByCode = new Map<string, Record<string, RawTyped>>();
   const launchesByEan = new Map<string, Record<string, RawTyped>>();
@@ -290,7 +296,7 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   for (const row of [...rows(parsedSources, 'cadastro-itens-286.xls'), ...rows(parsedSources, 'posicao-estoque-105.xls')]) {
     const code = String(value(row, 'winthor_code') ?? '');
     if (!code || items.has(code)) continue;
-    const stock = stock105.get(code);
+    const stock = stock105.get(code); const price = priceByCode.get(code);
     const ean = value(row, 'internal_ean');
     const manufacturer = value(row, 'manufacturer_code');
     const industry = listByEan.get(ean13Key(ean) ?? '') ?? listBySku.get(codeKey(manufacturer));
@@ -306,7 +312,9 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
       physical_stock_units: value(stock ?? row, 'physical_stock_units'), stock_286_physical: value(row, 'physical_286'), stock_286_blocked: value(row, 'blocked_286'), stock_286_reserved: value(row, 'reserved_286'), stock_286_available: value(row, 'available_286'),
       unit_weight_kg: source8013 ? value(source8013, 'unit_weight_kg') : null, case_weight_kg: source8013 ? value(source8013, 'case_weight_kg') : null,
       stock_8013_units: source8013 ? value(source8013, 'stock_units_8013') : null, stock_8013_cases: source8013 ? value(source8013, 'stock_cases_8013') : null, stock_8013_weight_kg: source8013 ? value(source8013, 'stock_weight_kg') : null,
-      cost_unit_105: value(stock ?? row, 'unit_cost_real'), sale_price_105: value(stock ?? row, 'sale_price_105'), pVenda1_region11: pVenda.get(code) ?? null,
+      cost_unit_105: value(stock ?? row, 'unit_cost_real'), sale_price_105: value(stock ?? row, 'sale_price_105'),
+      pVenda1_region11: price ? value(price, 'pvenda1') : null, pVenda: price ? value(price, 'pvenda') : null, vlSt: price ? value(price, 'vlst') : null,
+      industry_base_price: industry ? value(industry, 'preco_base') : null,
       is_launch: launch ? true : false, launch_status: launch ? value(launch, 'launch_status') : null, has_winthor: true, mapping_status: industry ? 'WINTHOR+LIST_PRICE' : 'WINTHOR',
       source_lineage: `${industry ? '286|105|PCTABPR|ListaPreço' : '286|105|PCTABPR'}${source8013 ? '|8013' : ''}|Lançamentos`,
     }));

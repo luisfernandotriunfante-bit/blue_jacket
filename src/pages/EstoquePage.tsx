@@ -224,7 +224,7 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
     if (!activeCanonical) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelEmptyState variant="page" title="Sem bundle canônico ativo" description="Esta tela usa exclusivamente o bundle canônico ativo. Atualize as bases para materializar a lista." /></PanelPage>;
     if (error) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelAlert tone="error">Erro ao carregar as listas canônicas: {error}</PanelAlert></PanelPage>;
     if (!lists) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelEmptyState variant="page" title="Carregando dados" description="Leitura passiva das listas canônicas ativas." /></PanelPage>;
-    return view === 'products' ? <ProductCatalogPage m1={lists.m1} m3={lists.m3} /> : <StockOverview {...lists} />;
+    return view === 'products' ? <ProductCatalogPage m1={lists.m1} m3={lists.m3} m4={lists.m4} /> : <StockOverview {...lists} />;
   }
 
   const configuration = view === 'movements'
