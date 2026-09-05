@@ -1,0 +1,33 @@
+export const ASSORTMENT_CHANNELS = [
+  { field: 'hiper', headers: ['Hiper'], label: 'Hiper', range: 'Faixa 1' },
+  { field: 'super_g', headers: ['Super G'], label: 'Super G', range: 'Faixa 2' },
+  { field: 'super_p', headers: ['Super P'], label: 'Super P', range: 'Faixa 3' },
+  { field: 'clubs', headers: ['Clubs'], label: 'Clubs', range: '' },
+  { field: 'c_c', headers: ['C&C'], label: 'C&C', range: '' },
+  { field: 'drogaria', headers: ['Drogaria'], label: 'Drogaria', range: '' },
+  { field: 'farma_bairro_1_a_4', headers: ['Farma Bairro 1 a 4'], label: 'Farma Bairro 1 a 4', range: '' },
+  { field: 'farma_bairro_5_a_8', headers: ['Farma Bairro 5 a 8'], label: 'Farma Bairro 5 a 8', range: '' },
+  { field: 'e_commerce_pure_players_1p_3p', headers: ['E-commerce Pure Players 1P + 3P'], label: 'E-commerce 1P + 3P', range: '' },
+  { field: 'e_commerce_pure_players_indireto', headers: ['E-commerce Pure Players Indireto'], label: 'E-commerce indireto', range: '' },
+  { field: 'vizinhan_a_gde', headers: ['Vizinhança GDE'], label: 'Vizinhança GDE', range: 'Faixa 4' },
+  { field: 'vizinhan_a_peq', headers: ['Vizinhança PEQ'], label: 'Vizinhança PEQ', range: 'Faixa 5' },
+  { field: 'tradicional_independente', headers: ['Tradicional Independente'], label: 'Tradicional', range: 'Faixa 6' },
+  { field: 'sortimento_atacados', headers: ['Sortimento Atacados'], label: 'Atacados', range: '' },
+  { field: 'sortimento_distribuidores', headers: ['Sortimento Distribuidores'], label: 'Distribuidores', range: '' },
+] as const;
+
+export type AssortmentPresence = { field: string; label: string; range: string; classification: 'Mandatório' | 'Importante' };
+
+export function parseAssortmentPresence(raw: unknown): AssortmentPresence[] {
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    const values = JSON.parse(raw) as Record<string, unknown>;
+    return ASSORTMENT_CHANNELS.flatMap(channel => {
+      const classification = Number(values[channel.field]);
+      if (classification !== 1 && classification !== 2) return [];
+      return [{ field: channel.field, label: channel.label, range: channel.range, classification: classification === 1 ? 'Mandatório' : 'Importante' }];
+    });
+  } catch {
+    return [];
+  }
+}
