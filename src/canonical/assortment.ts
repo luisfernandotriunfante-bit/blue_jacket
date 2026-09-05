@@ -18,6 +18,10 @@ export const ASSORTMENT_CHANNELS = [
 
 export type AssortmentPresence = { field: string; label: string; range: string; classification: 'Mandatório' | 'Importante' | 'Recomendado' };
 
+export const ASSORTMENT_RANGES = ASSORTMENT_CHANNELS
+  .filter(channel => Boolean(channel.range))
+  .map(channel => channel.range) as Array<`Faixa ${number}`>;
+
 export function parseAssortmentPresence(raw: unknown): AssortmentPresence[] {
   if (typeof raw !== 'string' || !raw.trim()) return [];
   try {
@@ -35,4 +39,8 @@ export function parseAssortmentPresence(raw: unknown): AssortmentPresence[] {
 /** Recorte operacional usado quando o cliente é atendido exclusivamente por faixa. */
 export function parseRangeAssortmentPresence(raw: unknown): AssortmentPresence[] {
   return parseAssortmentPresence(raw).filter(channel => Boolean(channel.range));
+}
+
+export function matchesAssortmentRanges(assortment: AssortmentPresence[], selectedRanges: string[]) {
+  return selectedRanges.length === 0 || assortment.some(channel => selectedRanges.includes(channel.range));
 }
