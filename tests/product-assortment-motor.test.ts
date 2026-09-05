@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCanonicalBundleFromStaging } from '../src/canonical/motors.ts';
-import { parseAssortmentPresence, parseRangeAssortmentPresence } from '../src/canonical/assortment.ts';
+import { matchesAssortmentRanges, parseAssortmentPresence, parseRangeAssortmentPresence } from '../src/canonical/assortment.ts';
 import type { ParsedSource, RawTyped } from '../src/canonical/types.ts';
 
 const typed = (value: unknown): RawTyped => ({ raw: value, typed: value });
@@ -14,6 +14,13 @@ test('recorte de Produtos mostra somente os canais que representam faixas de cli
   const channels = parseRangeAssortmentPresence(JSON.stringify({ hiper: 1, super_g: 2, c_c: 1, drogaria: 1, farma_bairro_1_a_4: 2, e_commerce_pure_players_1p_3p: 1, vizinhan_a_gde: 1, vizinhan_a_peq: 2, tradicional_independente: 1, sortimento_distribuidores: 1 }));
   assert.deepEqual(channels.map(channel => channel.label), ['Hiper', 'Super G', 'Vizinhança GDE', 'Vizinhança PEQ', 'Tradicional']);
   assert.ok(channels.every(channel => channel.range.startsWith('Faixa ')));
+});
+
+test('filtro múltiplo aceita item presente em qualquer faixa selecionada', () => {
+  const item = { assortment: parseRangeAssortmentPresence(JSON.stringify({ hiper: 1, super_g: 0, super_p: 0, vizinhan_a_gde: 2, vizinhan_a_peq: 0 })) };
+  assert.equal(matchesAssortmentRanges(item.assortment, []), true);
+  assert.equal(matchesAssortmentRanges(item.assortment, ['Faixa 2', 'Faixa 4']), true);
+  assert.equal(matchesAssortmentRanges(item.assortment, ['Faixa 2', 'Faixa 5']), false);
 });
 
 test('M1 materializa canais oficiais do sortimento mais atual por EAN', () => {
