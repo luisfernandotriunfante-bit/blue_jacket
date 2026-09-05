@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
-import { buildStockOverviewModel, type StockOverviewModel } from '../canonical/stockOverviewModel';
+import { buildStockForecastBuckets, buildStockOverviewModel, stockTreemapLineValue, stockTreemapTileValue, type StockOverviewModel, type StockTreemapMode } from '../canonical/stockOverviewModel';
 import type { CanonicalList } from '../canonical/types';
 import { inboundForecasts } from '../canonical/reportSettings';
 import { useData } from '../store/DataContext';
-import { MigrationPage } from '../ui/pattern/MigrationEmptyState';
 import { ProductCatalogPage } from './ProductCatalogPage';
 import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 import { buildHierarchicalTreemap } from '../ui/charts/hierarchicalTreemapLayout';
 import './EstoquePage.css';
 
-export type EstoqueView = 'overview' | 'products' | 'movements' | 'purchase-helper';
+export type EstoqueView = 'overview' | 'products';
 
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const number = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
@@ -42,33 +41,39 @@ function tileColor(lineIndex: number, tileIndex: number, aggregate: boolean, cla
 }
 
 function StockTreemap({ model }: { model: StockOverviewModel }) {
-  const totalValue = model.treemap.reduce((sum, group) => sum + group.totalValue, 0);
-  const emptyLines = model.treemap.filter(group => group.totalValue <= 0).map(group => group.line);
+  const [mode, setMode] = useState<StockTreemapMode>('PHYSICAL');
+  const modeLabel = mode === 'PHYSICAL' ? 'físico' : mode === 'AVAILABLE' ? 'disponível' : 'projetado';
+  const totalValue = model.treemap.reduce((sum, group) => sum + stockTreemapLineValue(group, mode), 0);
+  const emptyLines = model.treemap.filter(group => stockTreemapLineValue(group, mode) <= 0).map(group => group.line);
   const missingSubbrandItems = model.treemap.reduce((sum, group) => sum + group.itemsWithoutSubbrand, 0);
 
   return <PanelCard>
     <PanelSectionHeader
       eyebrow="ESTOQUE POR LINHA"
       title="Composição por sub-brand"
-      description="Cada painel é um treemap: a área de cada bloco é proporcional ao valor da sub-brand no estoque físico a PVENDA1."
+      description={`Cada painel é um treemap: a área de cada bloco é proporcional ao valor da sub-brand no estoque ${modeLabel} a PVENDA1.`}
     />
-    {model.treemap.some(group => group.totalValue > 0) ? <>
+    <div className="stock-treemap-mode" role="group" aria-label="Selecionar visão do estoque">{([['PHYSICAL', 'Físico'], ['AVAILABLE', 'Disponível'], ['PROJECTED', 'Projetado']] as Array<[StockTreemapMode, string]>).map(([value, label]) => <button type="button" key={value} className={mode === value ? 'is-active' : ''} aria-pressed={mode === value} onClick={() => setMode(value)}>{label}</button>)}</div>
+    {model.treemap.some(group => stockTreemapLineValue(group, mode) > 0) ? <>
       <div className="stock-line-composition-list" aria-label="Composição de estoque por linha comercial e sub-brand">
         {model.treemap.map((group, lineIndex) => {
-          const rectangles = buildHierarchicalTreemap(group.tiles.map(tile => ({ id: tile.key, value: tile.saleValue, data: tile })), { x: 0, y: 0, width: 100, height: 100 });
-          return <section className="stock-line-composition" key={group.line} data-hue={LINE_HUE_NAMES[lineIndex]} aria-label={`${group.line}: ${currency.format(group.totalValue)}`}>
+          const groupValue = stockTreemapLineValue(group, mode);
+          const visibleTiles = group.tiles.filter(tile => stockTreemapTileValue(tile, mode) > 0);
+          const rectangles = buildHierarchicalTreemap(visibleTiles.map(tile => ({ id: tile.key, value: stockTreemapTileValue(tile, mode), data: tile })), { x: 0, y: 0, width: 100, height: 100 });
+          return <section className="stock-line-composition" key={group.line} data-hue={LINE_HUE_NAMES[lineIndex]} aria-label={`${group.line}: ${currency.format(groupValue)}`}>
           <header className="stock-line-composition-head">
             <strong>{group.line}</strong>
-            <span>{currency.format(group.totalValue)}</span>
-            <small>{number.format(group.subbrands)} sub-brands · {percent.format(totalValue ? group.totalValue / totalValue : 0)} do estoque</small>
+            <span>{currency.format(groupValue)}</span>
+            <small>{number.format(group.subbrands)} sub-brands · {percent.format(totalValue ? groupValue / totalValue : 0)} do estoque</small>
           </header>
-          {group.tiles.length ? <div className="stock-line-composition-body">
+          {groupValue > 0 ? <div className="stock-line-composition-body">
             <div className="stock-subbrand-treemap" aria-label={`Treemap proporcional das sub-brands de ${group.line}`}>
-          {group.tiles.map((tile, tileIndex) => {
+          {visibleTiles.map((tile, tileIndex) => {
             const rect = rectangles.get(tile.key);
             if (!rect) return null;
-            const share = group.totalValue > 0 ? tile.saleValue / group.totalValue : 0;
-            const label = `${group.line}, ${tile.label}: ${currency.format(tile.saleValue)}; ${number.format(tile.items)} SKU(s); ${percent.format(share)} da linha.`;
+            const tileValue = stockTreemapTileValue(tile, mode);
+            const share = groupValue > 0 ? tileValue / groupValue : 0;
+            const label = `${group.line}, ${tile.label}: ${currency.format(tileValue)}; ${number.format(tile.items)} SKU(s); ${percent.format(share)} da linha.`;
             return <div
               key={tile.key}
               className="stock-subbrand-tile"
@@ -79,7 +84,7 @@ function StockTreemap({ model }: { model: StockOverviewModel }) {
               style={{ left: `${rect.x}%`, top: `${rect.y}%`, width: `${rect.width}%`, height: `${rect.height}%`, background: tileColor(lineIndex, tileIndex, tile.aggregate, tile.classified) }}
             >
               <strong>{tile.label}</strong>
-              <span>{currency.format(tile.saleValue)}</span>
+              <span>{currency.format(tileValue)}</span>
               <small>{percent.format(share)}</small>
             </div>;
           })}</div></div> : <div className="stock-line-composition-empty">Sem estoque valorizado nesta linha.</div>}
@@ -101,7 +106,7 @@ export function HealthPanel({ model }: { model: StockOverviewModel }) {
     <PanelSectionHeader
       eyebrow="SAÚDE DO ESTOQUE"
       title="Avisos operacionais"
-      description={`A leitura usa ${model.analysis.days} dias de histórico. Cobertura só gera risco quando existe giro mapeado; item sem venda no período não vira ruptura artificial.`}
+      description={`A leitura usa ${model.analysis.days} dia(s) efetivamente disponíveis, limitada aos últimos 90. Cobertura só gera risco quando existe giro mapeado; item sem venda no período não vira ruptura artificial.`}
     />
     {model.alerts.length ? <div className="stock-alert-list">{model.alerts.map(item => <div key={item.code} className="stock-alert" data-tone={item.tone}>
       <div className="stock-alert-head"><span className="stock-alert-title">{item.title}</span><span className="stock-alert-count">{number.format(item.count)}</span></div>
@@ -115,24 +120,16 @@ export function HealthPanel({ model }: { model: StockOverviewModel }) {
       <span>{number.format(model.dataQuality.unclassifiedItems)} sem linha comercial</span>
       <span>{number.format(model.dataQuality.inboundUnmappedRows)} linha(s) da Carteira sem item + Un/CX</span>
       <span>{number.format(model.dataQuality.historicalUnmappedRows)} movimento(s) históricos sem vínculo</span>
+      <span>{number.format(model.dataQuality.currentUnmappedRows)} movimento(s) do 8022 sem vínculo</span>
+      <span>{number.format(model.dataQuality.ambiguousProductIdentifiers)} identificador(es) ambíguo(s) bloqueado(s)</span>
     </div>
   </PanelCard>;
 }
 
 function InboundForecastPanel({ model }: { model: StockOverviewModel }) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const buckets = [
-    { key: '0-7', label: 'Até 7 dias', match: (days: number | null) => days !== null && days >= 0 && days <= 7 },
-    { key: '8-15', label: '8 a 15 dias', match: (days: number | null) => days !== null && days >= 8 && days <= 15 },
-    { key: 'none', label: 'Sem previsão', match: (days: number | null) => days === null },
-  ];
-  const grouped = buckets.map(bucket => {
-    const entries = model.inboundForecasts.filter(forecast => bucket.match(forecast.date ? Math.ceil((new Date(`${forecast.date}T12:00:00`).getTime() - today.getTime()) / 86400000) : null));
-    return { ...bucket, invoices: entries.flatMap(forecast => forecast.invoices), totalValue: entries.reduce((sum, forecast) => sum + forecast.totalValue, 0) };
-  });
+  const grouped = buildStockForecastBuckets(model.inboundForecasts, new Date().toISOString().slice(0, 10));
   return <PanelCard>
-    <PanelSectionHeader eyebrow="ENTRADAS PREVISTAS" title="Próximas entradas previstas" description="Resumo da Carteira em aberto. A previsão é preenchida e o detalhamento de cada NF ficam em Entradas e Saídas." />
+    <PanelSectionHeader eyebrow="ENTRADAS PREVISTAS" title="Próximas entradas previstas" description="Resumo completo da Carteira em aberto. As previsões e o detalhamento de cada NF ficam em Entradas e Saídas." />
     <div className="stock-forecast-grid">
       {grouped.map(group => <article className="stock-forecast-card" data-empty={!group.invoices.length} key={group.key}>
           <header><strong>{group.label}</strong><span>{number.format(group.invoices.length)} NF(s)</span></header>
@@ -201,6 +198,8 @@ function StockOverview({ m1, m3, m4 }: { m1: CanonicalList; m3: CanonicalList; m
     <StockTreemap model={model} />
 
     <InboundForecastPanel model={model} />
+
+    <HealthPanel model={model} />
   </div></PanelPage>;
 }
 
@@ -210,7 +209,7 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if ((view !== 'overview' && view !== 'products') || !activeCanonical) { setLists(null); return; }
+    if (!activeCanonical) { setLists(null); return; }
     let live = true;
     setLists(null);
     setError('');
@@ -220,15 +219,8 @@ export function EstoquePage({ view = 'overview' }: { view?: EstoqueView }) {
     return () => { live = false; };
   }, [activeCanonical, view]);
 
-  if (view === 'overview' || view === 'products') {
-    if (!activeCanonical) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelEmptyState variant="page" title="Sem bundle canônico ativo" description="Esta tela usa exclusivamente o bundle canônico ativo. Atualize as bases para materializar a lista." /></PanelPage>;
-    if (error) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelAlert tone="error">Erro ao carregar as listas canônicas: {error}</PanelAlert></PanelPage>;
-    if (!lists) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelEmptyState variant="page" title="Carregando dados" description="Leitura passiva das listas canônicas ativas." /></PanelPage>;
-    return view === 'products' ? <ProductCatalogPage m1={lists.m1} m3={lists.m3} m4={lists.m4} /> : <StockOverview {...lists} />;
-  }
-
-  const configuration = view === 'movements'
-      ? { heading: 'Entradas e Saídas', columns: ['Data', 'Tipo', 'Situação', 'Documento', 'Produto', 'Quantidade', 'Origem'] }
-      : { heading: 'Auxiliar de Pedidos', columns: ['Produto', 'Giro', 'Cobertura', 'Disponível', 'Carteira', 'Projetado', 'Sugestão', 'Motivo'] };
-  return <MigrationPage title="Estoque" heading={configuration.heading} columns={configuration.columns} kpis={['Estrutura preservada']} description="Esta aba será fechada na próxima etapa. Nenhuma regra provisória de compra ou movimento foi ativada." />;
+  if (!activeCanonical) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelEmptyState variant="page" title="Sem bundle canônico ativo" description="Esta tela usa exclusivamente o bundle canônico ativo. Atualize as bases para materializar a lista." /></PanelPage>;
+  if (error) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelAlert tone="error">Erro ao carregar as listas canônicas: {error}</PanelAlert></PanelPage>;
+  if (!lists) return <PanelPage title={view === 'products' ? 'Produtos' : 'Estoque'}><PanelEmptyState variant="page" title="Carregando dados" description="Leitura passiva das listas canônicas ativas." /></PanelPage>;
+  return view === 'products' ? <ProductCatalogPage m1={lists.m1} m3={lists.m3} m4={lists.m4} /> : <StockOverview {...lists} />;
 }

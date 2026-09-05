@@ -279,6 +279,10 @@
 .stock-subbrand-bar i { display: block; height: 100%; min-width: 2px; border-radius: inherit; }
 .stock-line-composition-empty { display: grid; place-items: center; min-height: 8rem; color: var(--panel-muted); font-size: .76rem; }
 
+.stock-treemap-mode { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 12px; }
+.stock-treemap-mode button { min-height: 34px; padding: 0 14px; border: 1px solid var(--panel-card-border); border-radius: 999px; background: rgba(8, 11, 16, .62); color: var(--panel-muted-light); font: inherit; font-size: .7rem; font-weight: var(--panel-weight-heavy); cursor: pointer; }
+.stock-treemap-mode button.is-active { border-color: #e73d5d; background: linear-gradient(135deg, rgba(231, 61, 93, .3), rgba(185, 28, 63, .18)); color: #fff; }
+
 .stock-treemap-legend {
   margin-top: .75rem;
   display: flex;
@@ -302,7 +306,7 @@
 
 .stock-forecast-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -325,6 +329,7 @@
 
 @media (max-width: 1350px) {
   .stock-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stock-forecast-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .stock-overview-main-grid { grid-template-columns: 1fr; }
 }
 

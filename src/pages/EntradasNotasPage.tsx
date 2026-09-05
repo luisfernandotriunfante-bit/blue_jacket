@@ -6,6 +6,7 @@ import { uploadCurrentDeviceSnapshot, deviceSyncIdentity } from '../canonical/cl
 import { useData } from '../store/DataContext';
 import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 import type { CanonicalList } from '../canonical/types';
+import { buildStockSaleDocuments, stockSaleMatches, stockSaleSummary } from '../canonical/stockMovementModel';
 import './EntradasNotasPage.css';
 
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -34,26 +35,12 @@ function inboundMatches(note: StockOverviewModel['inboundNotes'][number], query:
   return normalized(note.items.map(item => item.label).join(' ')).includes(needle);
 }
 
-type SaleDocument = { key:string; kind:'FATURADO'|'A_FATURAR'; isReturn:boolean; invoice:string|null; order:string|null; customer:string|null; cnpj:string|null; movementDate:string|null; invoiceDate:string|null; status:string|null; block:string|null; seller:string|null; value:number; items:Array<{code:string|null;ean:string|null;label:string;cases:number;units:number;value:number}> };
-const amount = (value: unknown) => Number(value ?? 0) || 0;
-const saleKind = (row: Record<string, unknown>) => normalized(row.order_status).includes('A FATURAR') ? 'A_FATURAR' : 'FATURADO';
-function saleDocuments(records: Array<Record<string, unknown>>) {
-  const grouped = new Map<string, SaleDocument>();
-  for (const row of records.filter(row => row.fact_type === 'SALE' && row.source === '8022')) {
-    const kind=saleKind(row), invoice=String(row.invoice_number ?? '').trim() || null, rawOrder=String(row.order_winthor ?? '').trim(), order=/^\d{4,}$/.test(rawOrder) ? rawOrder : null;
-    const key=`${kind}:${kind==='FATURADO' ? invoice ?? order ?? row.fact_id : order ?? invoice ?? row.fact_id}`;
-    const doc=grouped.get(key) ?? {key,kind,isReturn:normalized(row.sale_type).includes('DEVOLU'),invoice,order,customer:String(row.customer_name ?? '').trim() || null,cnpj:String(row.cnpj ?? '').trim() || null,movementDate:String(row.event_date ?? '').slice(0,10) || null,invoiceDate:String(row.invoice_issue_date ?? '').slice(0,10) || null,status:String(row.order_status ?? '').trim() || null,block:String(row.block_status ?? '').trim() || null,seller:String(row.seller_name ?? '').trim() || null,value:0,items:[]};
-    doc.value+=amount(row.value); doc.items.push({code:String(row.winthor_product_code ?? '').trim()||null,ean:String(row.ean_product ?? '').trim()||null,label:String(row.product_description ?? row.winthor_product_code ?? 'Item sem descrição'),cases:amount(row.cases),units:amount(row.units),value:amount(row.value)}); grouped.set(key,doc);
-  }
-  return [...grouped.values()].sort((a,b)=>b.value-a.value);
-}
-function saleMatches(note: SaleDocument, query:string) { const needle=normalized(query).trim(); if(!needle)return true; const all=[note.invoice,note.order,note.customer,note.cnpj,...note.items.flatMap(i=>[i.code,i.ean,i.label])].join(' '); return /^\d+$/.test(needle) ? all.split(/\D+/).some(value=>codeKey(value)===codeKey(needle)||digits(value)===needle) : normalized(all).includes(needle); }
-
 export function EntradasNotasPage() {
   const { activeCanonical } = useData();
   const [lists, setLists] = useState<{ m1: CanonicalList; m3: CanonicalList; m4: CanonicalList } | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
+  const [loadError, setLoadError] = useState('');
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState<string | null>(null);
@@ -76,11 +63,13 @@ export function EntradasNotasPage() {
   const sync = deviceSyncIdentity();
 
   useEffect(() => {
-    if (!activeCanonical) { setLists(null); return; }
+    if (!activeCanonical) { setLists(null); setLoadError(''); return; }
     let live = true;
+    setLists(null);
+    setLoadError('');
     Promise.all([loadCandidateList('M1_ITEM_ESTOQUE'), loadCandidateList('M3_MOVIMENTO_VENDAS'), loadCandidateList('M4_HISTORICO_TRANSICAO')])
       .then(([m1, m3, m4]) => { if (live) setLists({ m1, m3, m4 }); })
-      .catch(reason => { if (live) setError(String(reason)); });
+      .catch(reason => { if (live) setLoadError(String(reason)); });
     return () => { live = false; };
   }, [activeCanonical]);
 
@@ -99,7 +88,7 @@ export function EntradasNotasPage() {
     return true;
   }) ?? [], [model, query, source, receivedFrom, receivedTo]);
   const openNotes = useMemo(() => (model?.inboundNotes.filter(note => {
-    if (note.received || note.outstandingValue <= 0) return false;
+    if (note.received || (note.outstandingValue <= 0 && note.outstandingQty <= 0)) return false;
     if (!inboundMatches(note, openQuery)) return false;
     const forecast = inboundForecasts()[note.invoice] ?? '';
     if (forecastFilter === 'WITH_FORECAST' && !forecast) return false;
@@ -120,12 +109,17 @@ export function EntradasNotasPage() {
     if (!forecast || !note.receiptDate) return null;
     return note.receiptDate <= forecast ? 'RECEBIDA NO PRAZO' : 'RECEBIDA APÓS PREVISÃO';
   };
-  const sales = useMemo(() => saleDocuments((lists?.m3.records ?? []) as Array<Record<string, unknown>>), [lists]);
-  const invoicedSales = sales.filter(note => note.kind === 'FATURADO' && !note.isReturn && saleMatches(note, saleQuery));
+  const sales = useMemo(() => lists ? buildStockSaleDocuments(lists.m3) : [], [lists]);
+  const invoicedSales = sales.filter(note => note.kind === 'FATURADO' && !note.isReturn && stockSaleMatches(note, saleQuery));
   const returnCustomers = [...new Set(sales.filter(note => note.kind === 'FATURADO' && note.isReturn).map(note => note.customer ?? note.cnpj ?? '').filter(Boolean))].sort();
-  const customerReturns = sales.filter(note => note.kind === 'FATURADO' && note.isReturn && saleMatches(note, returnQuery) && (returnCustomer === 'ALL' || (note.customer ?? note.cnpj) === returnCustomer));
+  const customerReturns = sales.filter(note => note.kind === 'FATURADO' && note.isReturn && stockSaleMatches(note, returnQuery) && (returnCustomer === 'ALL' || (note.customer ?? note.cnpj) === returnCustomer));
   const pendingCustomers = [...new Set(sales.filter(note => note.kind === 'A_FATURAR').map(note => note.customer ?? note.cnpj ?? '').filter(Boolean))].sort();
-  const pendingSales = sales.filter(note => note.kind === 'A_FATURAR' && saleMatches(note, pendingQuery) && (pendingCustomer === 'ALL' || (note.customer ?? note.cnpj) === pendingCustomer));
+  const pendingSales = sales.filter(note => note.kind === 'A_FATURAR' && stockSaleMatches(note, pendingQuery) && (pendingCustomer === 'ALL' || (note.customer ?? note.cnpj) === pendingCustomer));
+  const receivedValue = receivedNotes.reduce((sum, note) => sum + (note.totalValue ?? 0), 0);
+  const returnValue = stockSaleSummary(customerReturns).value;
+  const invoicedValue = stockSaleSummary(invoicedSales).value;
+  const pendingValue = stockSaleSummary(pendingSales).value;
+  const openValue = openNotes.reduce((sum, note) => sum + note.outstandingValue, 0);
 
   const saveDate = async (invoice: string, value: string) => {
     setSaving(invoice); setError(''); setStatus('');
@@ -139,6 +133,7 @@ export function EntradasNotasPage() {
   };
 
   if (!activeCanonical) return <PanelPage title="Entradas e Saídas"><PanelEmptyState variant="page" title="Sem bases carregadas" description="Atualize Carteira, 218 e 12.322 para consultar as entradas de notas." /></PanelPage>;
+  if (loadError) return <PanelPage title="Entradas e Saídas"><PanelAlert tone="error">Erro ao carregar as listas canônicas: {loadError}</PanelAlert></PanelPage>;
   if (!model) return <PanelPage title="Entradas e Saídas"><PanelEmptyState variant="page" title="Carregando notas" description="Leitura das notas recebidas e dos vínculos internos." /></PanelPage>;
 
   return <PanelPage title="Entradas e Saídas">
@@ -152,7 +147,7 @@ export function EntradasNotasPage() {
           <label><span>Recebida de</span><input className="panel-input" type="date" value={receivedFrom} onChange={event => setReceivedFrom(event.target.value)} /></label>
           <label><span>até</span><input className="panel-input" type="date" value={receivedTo} onChange={event => setReceivedTo(event.target.value)} /></label>
         </div>
-        <div className="inbound-note-result"><strong>{number.format(receivedNotes.length)} NF(s) recebida(s)</strong><span>{query ? `Resultado para “${query}”` : 'Busque por NF, EAN, código Winthor ou nome do produto.'}</span></div>
+        <div className="inbound-note-result"><strong>{number.format(receivedNotes.length)} NF(s) · {currency.format(receivedValue)}</strong><span>{query ? `Resultado para “${query}”` : 'Busque por NF, EAN, código Winthor ou nome do produto.'}</span></div>
         {receivedNotes.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table inbound-receipts-table"><thead><tr><th>NF</th><th>Recebida em</th><th>Emitida em</th><th>Fonte</th><th>Valor da NF</th><th>Itens</th><th>Previsão</th></tr></thead><tbody>{receivedNotes.map(note => {
           const expandKey = `receipt:${note.invoice}`;
           const forecastStatus = receiptForecastStatus(note);
@@ -168,19 +163,19 @@ export function EntradasNotasPage() {
         })}</tbody></table></div> : <PanelEmptyState title="Nenhuma chegada encontrada" description="Ajuste os filtros ou busque por outra NF, EAN, código ou produto." />}
       </PanelCard> : null}
 
-      {view === 'ENTRADAS' ? <PanelCard><PanelSectionHeader eyebrow="DEVOLUÇÕES DE CLIENTES — 8022" title="Notas devolvidas à Milênio" description="Entradas por devolução de cliente. São separadas das cargas recebidas da Colgate." /><div className="inbound-note-filters"><label className="inbound-filter-search"><span>Buscar devolução</span><input className="panel-input panel-input-search" value={returnQuery} onChange={event=>setReturnQuery(event.target.value)} placeholder="NF, cliente, CNPJ, EAN ou código" /></label><label><span>Cliente</span><select className="panel-select" value={returnCustomer} onChange={event=>setReturnCustomer(event.target.value)}><option value="ALL">Todos os clientes</option>{returnCustomers.map(customer=><option key={customer} value={customer}>{customer}</option>)}</select></label></div><div className="inbound-note-result"><strong>{number.format(customerReturns.length)} NF(s) devolvida(s)</strong><span>Abra uma NF para consultar cliente e itens devolvidos.</span></div>{customerReturns.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table"><thead><tr><th>NF</th><th>Cliente</th><th>Data movimento</th><th>Valor devolvido</th><th>Itens</th></tr></thead><tbody>{customerReturns.map(note=><Fragment key={`return:${note.key}`}><tr className="inbound-note-row"><td><button type="button" className="inbound-note-toggle" onClick={()=>setSaleExpanded(saleExpanded===`return:${note.key}`?null:`return:${note.key}`)}>{saleExpanded===`return:${note.key}`?'−':'+'} NF {note.invoice ?? '—'}</button></td><td>{note.customer ?? note.cnpj ?? '—'}</td><td>{date(note.movementDate)}</td><td>{currency.format(Math.abs(note.value))}</td><td>{number.format(note.items.length)}</td></tr>{saleExpanded===`return:${note.key}`?<tr className="inbound-note-details"><td colSpan={5}><ul>{note.items.map(item=><li key={`${item.code}:${item.ean}:${item.label}`}><span>{item.label}<br />{item.code?`Cód. ${item.code}`:'Código não informado'}{item.ean?` · EAN ${item.ean}`:''}</span><strong>{number.format(item.cases)} cx · {number.format(item.units)} un. · {currency.format(Math.abs(item.value))}</strong></li>)}</ul></td></tr>:null}</Fragment>)}</tbody></table></div>:<PanelEmptyState title="Nenhuma devolução encontrada" description="O 8022 atual não trouxe devoluções para a busca selecionada." />}</PanelCard> : null}
+      {view === 'ENTRADAS' ? <PanelCard><PanelSectionHeader eyebrow="DEVOLUÇÕES DE CLIENTES — 8022" title="Notas devolvidas à Milênio" description="Entradas por devolução de cliente. São separadas das cargas recebidas da Colgate." /><div className="inbound-note-filters"><label className="inbound-filter-search"><span>Buscar devolução</span><input className="panel-input panel-input-search" value={returnQuery} onChange={event=>setReturnQuery(event.target.value)} placeholder="NF, cliente, CNPJ, EAN ou código" /></label><label><span>Cliente</span><select className="panel-select" value={returnCustomer} onChange={event=>setReturnCustomer(event.target.value)}><option value="ALL">Todos os clientes</option>{returnCustomers.map(customer=><option key={customer} value={customer}>{customer}</option>)}</select></label></div><div className="inbound-note-result"><strong>{number.format(customerReturns.length)} NF(s) · {currency.format(returnValue)}</strong><span>Abra uma NF para consultar cliente e itens devolvidos.</span></div>{customerReturns.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table"><thead><tr><th>NF</th><th>Cliente</th><th>Data movimento</th><th>Valor devolvido</th><th>Itens</th></tr></thead><tbody>{customerReturns.map(note=><Fragment key={`return:${note.key}`}><tr className="inbound-note-row"><td><button type="button" className="inbound-note-toggle" onClick={()=>setSaleExpanded(saleExpanded===`return:${note.key}`?null:`return:${note.key}`)}>{saleExpanded===`return:${note.key}`?'−':'+'} NF {note.invoice ?? '—'}</button></td><td>{note.customer ?? note.cnpj ?? '—'}</td><td>{date(note.movementDate)}</td><td>{currency.format(Math.abs(note.value))}</td><td>{number.format(note.items.length)}</td></tr>{saleExpanded===`return:${note.key}`?<tr className="inbound-note-details"><td colSpan={5}><ul>{note.items.map(item=><li key={`${item.code}:${item.ean}:${item.label}`}><span>{item.label}<br />{item.code?`Cód. ${item.code}`:'Código não informado'}{item.ean?` · EAN ${item.ean}`:''}</span><strong>{number.format(item.cases)} cx · {number.format(item.units)} un. · {currency.format(Math.abs(item.value))}</strong></li>)}</ul></td></tr>:null}</Fragment>)}</tbody></table></div>:<PanelEmptyState title="Nenhuma devolução encontrada" description="O 8022 atual não trouxe devoluções para a busca selecionada." />}</PanelCard> : null}
 
       {view === 'SAIDAS' ? <><PanelCard>
         <PanelSectionHeader eyebrow="SAÍDAS — 8022" title="Notas faturadas para clientes" description="Somente vendas confirmadas no 8022. Abra a NF para consultar pedido Winthor, cliente e itens." />
         <label className="inbound-filter-search outbound-search"><span>Buscar nas saídas</span><input className="panel-input panel-input-search" value={saleQuery} onChange={event => setSaleQuery(event.target.value)} placeholder="NF, pedido, cliente, CNPJ, EAN ou código" /></label>
-        <div className="inbound-note-result"><strong>{number.format(invoicedSales.length)} NF(s) faturada(s)</strong><span>Venda confirmada no 8022.</span></div>
+        <div className="inbound-note-result"><strong>{number.format(invoicedSales.length)} NF(s) · {currency.format(invoicedValue)}</strong><span>Venda confirmada no 8022.</span></div>
         {invoicedSales.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table outbound-notes-table"><thead><tr><th>NF</th><th>Pedido Winthor</th><th>Cliente</th><th>Emitida em</th><th>Valor</th><th>Itens</th></tr></thead><tbody>{invoicedSales.map(note => <Fragment key={note.key}><tr className="inbound-note-row"><td><button type="button" className="inbound-note-toggle" onClick={()=>setSaleExpanded(saleExpanded===note.key?null:note.key)}>{saleExpanded===note.key?'−':'+'} NF {note.invoice ?? '—'}</button></td><td>{note.order ?? '—'}</td><td>{note.customer ?? note.cnpj ?? '—'}</td><td>{date(note.invoiceDate)}</td><td>{currency.format(note.value)}</td><td>{number.format(note.items.length)}</td></tr>{saleExpanded===note.key?<tr className="inbound-note-details"><td colSpan={6}><div className="inbound-note-details-grid"><span>Cliente: <strong>{note.customer ?? '—'}</strong></span><span>CNPJ: <strong>{note.cnpj ?? '—'}</strong></span><span>Pedido Winthor: <strong>{note.order ?? '—'}</strong></span><span>Vendedor: <strong>{note.seller ?? '—'}</strong></span></div><ul>{note.items.map(item=><li key={`${item.code}:${item.ean}:${item.label}`}><span>{item.label}<br />{item.code?`Cód. ${item.code}`:'Código não informado'}{item.ean?` · EAN ${item.ean}`:''}</span><strong>{number.format(item.cases)} cx · {number.format(item.units)} un. · {currency.format(item.value)}</strong></li>)}</ul></td></tr>:null}</Fragment>)}</tbody></table></div>:<PanelEmptyState title="Nenhuma NF faturada" description="Ajuste a busca para consultar outra saída." />}
       </PanelCard>
 
       <PanelCard>
         <PanelSectionHeader eyebrow="SAÍDAS — 8022" title="Pedidos a faturar" description="Carteira de saída da Milênio para clientes. Não há previsão manual nesta etapa; o status vem exclusivamente do 8022." />
         <div className="inbound-note-filters"><label className="inbound-filter-search"><span>Buscar na carteira</span><input className="panel-input panel-input-search" value={pendingQuery} onChange={event => setPendingQuery(event.target.value)} placeholder="Pedido, cliente, CNPJ, EAN ou código" /></label><label><span>Cliente</span><select className="panel-select" value={pendingCustomer} onChange={event => setPendingCustomer(event.target.value)}><option value="ALL">Todos os clientes</option>{pendingCustomers.map(customer => <option key={customer} value={customer}>{customer}</option>)}</select></label></div>
-        <div className="inbound-note-result"><strong>{number.format(pendingSales.length)} pedido(s) a faturar</strong><span>Separados das NFs já emitidas.</span></div>
+        <div className="inbound-note-result"><strong>{number.format(pendingSales.length)} pedido(s) · {currency.format(pendingValue)}</strong><span>Separados das NFs já emitidas.</span></div>
         {pendingSales.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table outbound-notes-table"><thead><tr><th>Pedido Winthor</th><th>Cliente</th><th>Data movimento</th><th>Status</th><th>Valor pendente</th><th>Itens</th></tr></thead><tbody>{pendingSales.map(note => <Fragment key={note.key}><tr className="inbound-note-row"><td><button type="button" className="inbound-note-toggle" onClick={()=>setSaleExpanded(saleExpanded===note.key?null:note.key)}>{saleExpanded===note.key?'−':'+'} {note.order ?? '—'}</button></td><td>{note.customer ?? note.cnpj ?? '—'}</td><td>{date(note.movementDate)}</td><td><span className="inbound-note-status is-open">{note.status ?? 'A FATURAR'}</span></td><td>{currency.format(note.value)}</td><td>{number.format(note.items.length)}</td></tr>{saleExpanded===note.key?<tr className="inbound-note-details"><td colSpan={6}><div className="inbound-note-details-grid"><span>Cliente: <strong>{note.customer ?? '—'}</strong></span><span>CNPJ: <strong>{note.cnpj ?? '—'}</strong></span><span>Bloqueio: <strong>{note.block ?? '—'}</strong></span><span>Vendedor: <strong>{note.seller ?? '—'}</strong></span></div><ul>{note.items.map(item=><li key={`${item.code}:${item.ean}:${item.label}`}><span>{item.label}<br />{item.code?`Cód. ${item.code}`:'Código não informado'}{item.ean?` · EAN ${item.ean}`:''}</span><strong>{number.format(item.cases)} cx · {number.format(item.units)} un. · {currency.format(item.value)}</strong></li>)}</ul></td></tr>:null}</Fragment>)}</tbody></table></div>:<PanelEmptyState title="Nenhum pedido a faturar" description="O 8022 atual não trouxe pedidos com esse status para a busca selecionada." />}
       </PanelCard></> : null}
 
@@ -193,7 +188,7 @@ export function EntradasNotasPage() {
           <label><span>até</span><input className="panel-input" type="date" value={forecastTo} onChange={event => setForecastTo(event.target.value)} /></label>
           <label><span>Ordenar</span><select className="panel-select" value={openSort} onChange={event => setOpenSort(event.target.value as typeof openSort)}><option value="VALUE_DESC">Maior valor em aberto</option><option value="FORECAST_ASC">Previsão mais próxima</option><option value="ISSUE_ASC">Emissão mais antiga</option></select></label>
         </div>
-        <div className="inbound-note-result"><strong>{number.format(openNotes.length)} NF(s) em aberto</strong><span>{openQuery ? `Resultado para “${openQuery}”` : 'Filtre por previsão ou busque uma NF, código ou produto.'}</span></div>
+        <div className="inbound-note-result"><strong>{number.format(openNotes.length)} NF(s) · {currency.format(openValue)}</strong><span>{openQuery ? `Resultado para “${openQuery}”` : 'Filtre por previsão ou busque uma NF, código ou produto.'}</span></div>
         {status ? <PanelAlert tone="success">{status}</PanelAlert> : null}
         {error ? <PanelAlert tone="error">{error}</PanelAlert> : null}
         {openNotes.length ? <div className="panel-table-wrap inbound-notes-table-wrap"><table className="panel-table inbound-notes-table"><thead><tr><th>NF</th><th>Emitida em</th><th>Previsão de entrada</th><th>Valor da NF</th><th>Em aberto</th><th>Itens</th><th>Situação</th></tr></thead><tbody>{openNotes.map(note => {
@@ -208,7 +203,7 @@ export function EntradasNotasPage() {
             <td>{number.format(note.items.length)}</td>
             <td><span className="inbound-note-status is-open">EM ABERTO</span></td>
           </tr>{expanded === expandKey ? <tr className="inbound-note-details"><td colSpan={7}><div className="inbound-note-details-grid"><span>Pedido: <strong>{note.orderQty ? number.format(note.orderQty) : '—'} cx.</strong></span><span>Faturado: <strong>{note.billQty ? number.format(note.billQty) : '—'} cx.</strong></span><span>Saldo: <strong>{note.outstandingQty ? number.format(note.outstandingQty) : '—'} cx.</strong></span></div><ul>{note.items.length ? note.items.map(item => <li key={item.label}><span>{item.label}</span><strong>{number.format(item.quantity)} cx{item.units === null ? '' : ` · ${number.format(item.units)} un.`}</strong></li>) : <li>Não foi possível vincular itens internos a esta NF.</li>}</ul></td></tr> : null}</Fragment>;
-        })}</tbody></table></div> : <PanelEmptyState title="Nenhuma NF em aberto" description={query ? 'Nenhuma NF em aberto corresponde à busca atual.' : 'Todas as NFs identificadas na Carteira já constam como recebidas.'} />}
+        })}</tbody></table></div> : <PanelEmptyState title="Nenhuma NF em aberto" description={openQuery || forecastFilter !== 'ALL' || forecastFrom || forecastTo ? 'Nenhuma NF em aberto corresponde aos filtros da própria Carteira.' : 'Todas as NFs identificadas na Carteira já constam como recebidas.'} />}
       </PanelCard> : null}
     </div>
   </PanelPage>;
