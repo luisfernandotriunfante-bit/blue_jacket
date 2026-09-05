@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import type { CanonicalList } from '../canonical/types';
 import { inboundForecasts } from '../canonical/reportSettings';
 import { matchesProductSearch } from '../canonical/productSearch';
-import { parseRangeAssortmentPresence, type AssortmentPresence } from '../canonical/assortment';
+import { ASSORTMENT_RANGES, matchesAssortmentRanges, parseRangeAssortmentPresence, type AssortmentPresence } from '../canonical/assortment';
 import { PanelCard, PanelEmptyState, PanelInfoRow, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 import './ProductCatalogPage.css';
 
@@ -61,13 +61,15 @@ function Cell({ label, children, className = '' }: { label: string; children: Re
 function PriceCell({ item }: { item: ProductCatalogItem }) { return <div className="product-cell product-price-cell"><span>Preços de tabela</span><div><small>Sem ST<strong>{item.priceWithoutSt === null ? '—' : money.format(item.priceWithoutSt)}</strong></small><small>ST<strong>{item.stValue === null ? '—' : money.format(item.stValue)}</strong></small><small>Com ST<strong>{item.priceWithSt === null ? '—' : money.format(item.priceWithSt)}</strong></small></div></div>; }
 function ProductAssortment({ item }: { item: ProductCatalogItem }) { return <section className="product-assortment"><div><span>SORTIMENTO POR FAIXA</span><strong>Em quais clientes este item deve aparecer</strong><small>A faixa cadastrada no cliente define a disponibilidade para o vendedor.</small></div>{item.assortment.length ? <div className="product-assortment-chips">{item.assortment.map(channel=><span key={channel.field}><strong>{channel.label}</strong><small>{channel.range}</small><em>{channel.classification}</em></span>)}</div> : <p>{item.assortmentMaterialized ? 'Item não recomendado nas faixas 1 a 6.' : 'Sortimento ainda não materializado para este item.'}</p>}</section>; }
 export function ProductCatalogPage({ m1, m3, m4, launchesOnly = false }: { m1: CanonicalList; m3: CanonicalList; m4?: CanonicalList; launchesOnly?: boolean }) {
-  const [query, setQuery] = useState(''); const [stock, setStock] = useState('all'); const [open, setOpen] = useState<string | null>(null);
+  const [query, setQuery] = useState(''); const [stock, setStock] = useState('all'); const [selectedRanges, setSelectedRanges] = useState<string[]>([]); const [open, setOpen] = useState<string | null>(null);
   const catalog = useMemo(() => buildProductCatalog(m1, m3, m4), [m1, m3, m4]);
-  const rows = catalog.filter(item => (!launchesOnly || item.isLaunch) && (stock === 'all' || stock === 'available' && item.available > 0 || stock === 'portfolio' && item.inboundQty > 0 || stock === 'pending' && item.unregistered) && matchesProductSearch(item, query));
+  const rows = catalog.filter(item => (!launchesOnly || item.isLaunch) && (stock === 'all' || stock === 'available' && item.available > 0 || stock === 'portfolio' && item.inboundQty > 0 || stock === 'pending' && item.unregistered) && matchesProductSearch(item, query) && matchesAssortmentRanges(item.assortment, selectedRanges));
+  const toggleRange = (range: string) => setSelectedRanges(current => current.includes(range) ? current.filter(value => value !== range) : [...current, range]);
   const title = launchesOnly ? 'Lançamentos' : 'Produtos';
   return <PanelPage title={title} metricLabel="ITENS ENCONTRADOS" metricValue={qty.format(rows.length)}><div className="panel-stack product-catalog-stack">
     <PanelCard compact><PanelSectionHeader eyebrow="CATÁLOGO OPERACIONAL" title={launchesOnly ? 'Itens da lista oficial de lançamentos' : 'Todos os itens disponíveis e em Carteira'} description="Volumes em caixas e Un/CX. Códigos e EAN exigem correspondência exata; descrição, marca e sub-brand aceitam busca parcial. Preços vêm da PCTABPR região 11." />
       <div className="product-filters"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar produto, EAN ou código" aria-label="Buscar produto" /><select value={stock} onChange={e=>setStock(e.target.value)} aria-label="Filtrar situação"><option value="all">Todas as situações</option><option value="available">Com estoque disponível</option><option value="portfolio">Na Carteira</option><option value="pending">Aguarda cadastro</option></select></div>
+      <fieldset className="product-range-filter"><legend>Filtrar por sortimento</legend><div><button type="button" className={selectedRanges.length === 0 ? 'is-active' : ''} aria-pressed={selectedRanges.length === 0} onClick={()=>setSelectedRanges([])}>Todas</button>{ASSORTMENT_RANGES.map(range=><button type="button" key={range} className={selectedRanges.includes(range) ? 'is-active' : ''} aria-pressed={selectedRanges.includes(range)} onClick={()=>toggleRange(range)}>{range}</button>)}</div><small>{selectedRanges.length ? `${selectedRanges.length} faixa(s) selecionada(s) · exibindo itens liberados em qualquer uma delas` : 'Exibindo itens de todas as faixas'}</small></fieldset>
     </PanelCard>
     {rows.length ? <div className="product-list">{rows.map(item => <article className="product-row" key={item.id}>
       <button className="product-row-main" type="button" onClick={()=>setOpen(open === item.id ? null : item.id)} aria-expanded={open === item.id}>
