@@ -101,7 +101,6 @@ function App() {
     { id: 'products', label: 'Produtos' },
     { id: 'launches', label: 'Lançamentos' },
     { id: 'movements', label: 'Entradas e Saídas' },
-    { id: 'purchase-helper', label: 'Auxiliar de Pedidos' },
   ]
 
   const atividadesTopTabs = [{ id: 'combo', label: 'Criação de Combo' }]
@@ -125,11 +124,7 @@ function App() {
   const currentLabel = sidebarItems.find(item => item.id === activeTab)?.label ?? activeTab
   const estoqueView: EstoqueView = activeEstoqueTopTab === 'products'
     ? 'products'
-    : activeEstoqueTopTab === 'movements'
-      ? 'movements'
-      : activeEstoqueTopTab === 'purchase-helper'
-        ? 'purchase-helper'
-        : 'overview'
+    : 'overview'
 
   return (
     <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>

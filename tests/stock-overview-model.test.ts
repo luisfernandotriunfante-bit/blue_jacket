@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { buildStockOverviewModel } from '../src/canonical/stockOverviewModel.ts';
+import { buildStockForecastBuckets, buildStockOverviewModel, stockTreemapLineValue } from '../src/canonical/stockOverviewModel.ts';
 import { sourceImportTestHelpers } from '../src/canonical/sourceImport.ts';
 import type { CanonicalList } from '../src/canonical/types.ts';
 
@@ -59,10 +59,11 @@ const m3 = list('M3_MOVIMENTO_VENDAS', [
 
 const m4 = list('M4_HISTORICO_TRANSICAO', []);
 
-test('cobertura geral é a média dos dias de cobertura dos SKUs com giro', () => {
+test('cobertura geral usa os dias realmente disponíveis, sem fingir uma janela de 90 dias', () => {
   const model = buildStockOverviewModel({ m1, m3, m4 });
   assert.equal(model.totals.mappedDemandItems, 2);
-  assert.equal(model.totals.coverageDays, 135);
+  assert.equal(model.analysis.days, 1);
+  assert.equal(model.totals.coverageDays, 1.5);
 });
 
 test('Carteira converte caixas em unidades por Un/CX e não usa descrição', () => {
@@ -88,6 +89,48 @@ test('previsão manual de entrada agrupa NF, valor e itens da Carteira', () => {
   assert.equal(model.inboundForecasts[0]?.totalValue, 120);
   assert.equal(model.inboundForecasts[0]?.invoices[0]?.invoice, '123');
   assert.equal(model.inboundForecasts[0]?.invoices[0]?.items.length, 1);
+});
+
+test('toda entrada aberta pertence exatamente a um dos cinco buckets de previsão', () => {
+  const entries = [
+    { date: '2026-09-04', totalValue: 10, invoices: [{ invoice: '1', value: 10, items: [] }] },
+    { date: '2026-09-05', totalValue: 20, invoices: [{ invoice: '2', value: 20, items: [] }] },
+    { date: '2026-09-15', totalValue: 30, invoices: [{ invoice: '3', value: 30, items: [] }] },
+    { date: '2026-09-25', totalValue: 40, invoices: [{ invoice: '4', value: 40, items: [] }] },
+    { date: null, totalValue: 50, invoices: [{ invoice: '5', value: 50, items: [] }] },
+  ];
+  const buckets = buildStockForecastBuckets(entries, '2026-09-05');
+  assert.deepEqual(buckets.map(bucket => [bucket.key, bucket.invoices.map(invoice => invoice.invoice)]), [
+    ['OVERDUE', ['1']], ['0-7', ['2']], ['8-15', ['3']], ['16+', ['4']], ['NONE', ['5']],
+  ]);
+  assert.equal(buckets.flatMap(bucket => bucket.invoices).length, 5);
+  assert.equal(buckets.reduce((sum, bucket) => sum + bucket.totalValue, 0), 150);
+});
+
+test('buckets do modelo reconciliam integralmente com a Carteira em trânsito', () => {
+  const localM3 = list('M3_MOVIMENTO_VENDAS', [
+    { fact_type: 'INBOUND_ORDER', fact_id: 'C:1', industry_material: '61052478', invoice_number: '101', order_qty: 2, inbound_net_value: 40 },
+    { fact_type: 'INBOUND_ORDER', fact_id: 'C:2', industry_material: '61052479', invoice_number: '102', order_qty: 3, inbound_net_value: 60 },
+    { fact_type: 'INBOUND_ORDER', fact_id: 'C:3', industry_material: '61052479', order_qty: 1, inbound_net_value: 20 },
+  ]);
+  const model = buildStockOverviewModel({ m1, m3: localM3, m4, forecasts: { '101': '2026-09-04', '102': '2026-09-12' } });
+  const buckets = buildStockForecastBuckets(model.inboundForecasts, '2026-09-05');
+  assert.equal(buckets.reduce((sum, bucket) => sum + bucket.totalValue, 0), model.totals.inboundValue);
+  assert.equal(buckets.flatMap(bucket => bucket.invoices).length, 3);
+});
+
+test('treemap reconcilia físico, disponível e projetado por linha e mantém entrada sem físico no projetado', () => {
+  const localM1 = list('M1_ITEM_ESTOQUE', [
+    { ...m1.records[0], physical_stock_units: 0, stock_286_available: 0, commercial_line: 'CREME DENTAL', subbrand: 'TOTAL' },
+  ]);
+  const localM3 = list('M3_MOVIMENTO_VENDAS', [
+    { fact_type: 'INBOUND_ORDER', industry_material: '61052478', invoice_number: '333', order_qty: 2, inbound_net_value: 120 },
+  ]);
+  const model = buildStockOverviewModel({ m1: localM1, m3: localM3, m4 });
+  assert.equal(model.treemap.reduce((sum, line) => sum + stockTreemapLineValue(line, 'PHYSICAL'), 0), model.totals.saleValue);
+  assert.equal(model.treemap.reduce((sum, line) => sum + stockTreemapLineValue(line, 'AVAILABLE'), 0), model.totals.availableSaleValue);
+  assert.equal(model.treemap.reduce((sum, line) => sum + stockTreemapLineValue(line, 'PROJECTED'), 0), model.totals.projectedSaleValue);
+  assert.ok(model.treemap.some(line => line.tiles.some(tile => tile.label === 'TOTAL' && tile.projectedSaleValue > 0)));
 });
 
 test('218 baixa todo Bill Qty da NF recebida, inclusive linhas cujo item não foi mapeado', () => {
