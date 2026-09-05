@@ -16,7 +16,7 @@ export const ASSORTMENT_CHANNELS = [
   { field: 'sortimento_distribuidores', headers: ['Sortimento Distribuidores'], label: 'Distribuidores', range: '' },
 ] as const;
 
-export type AssortmentPresence = { field: string; label: string; range: string; classification: 'Mandatório' | 'Importante' };
+export type AssortmentPresence = { field: string; label: string; range: string; classification: 'Mandatório' | 'Importante' | 'Recomendado' };
 
 export function parseAssortmentPresence(raw: unknown): AssortmentPresence[] {
   if (typeof raw !== 'string' || !raw.trim()) return [];
@@ -24,8 +24,8 @@ export function parseAssortmentPresence(raw: unknown): AssortmentPresence[] {
     const values = JSON.parse(raw) as Record<string, unknown>;
     return ASSORTMENT_CHANNELS.flatMap(channel => {
       const classification = Number(values[channel.field]);
-      if (classification !== 1 && classification !== 2) return [];
-      return [{ field: channel.field, label: channel.label, range: channel.range, classification: classification === 1 ? 'Mandatório' : 'Importante' }];
+      if (!Number.isFinite(classification) || classification === 0) return [];
+      return [{ field: channel.field, label: channel.label, range: channel.range, classification: classification === 1 ? 'Mandatório' : classification === 2 ? 'Importante' : 'Recomendado' }];
     });
   } catch {
     return [];
