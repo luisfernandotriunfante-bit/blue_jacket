@@ -31,3 +31,8 @@ export function parseAssortmentPresence(raw: unknown): AssortmentPresence[] {
     return [];
   }
 }
+
+/** Recorte operacional usado quando o cliente é atendido exclusivamente por faixa. */
+export function parseRangeAssortmentPresence(raw: unknown): AssortmentPresence[] {
+  return parseAssortmentPresence(raw).filter(channel => Boolean(channel.range));
+}
