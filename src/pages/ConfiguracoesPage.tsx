@@ -16,6 +16,7 @@ import { APPROVED_CANONICAL_BUILD } from '../canonical/runtime';
 import { networkTargetFor, setNetworkTargetFor } from '../canonical/reportSettings';
 import {
   detectSourceForFileName,
+  isSourceStageCurrent,
   loadSourceStagingManifests,
   processSourceUpdates,
   requestPersistentSourceStorage,
@@ -27,7 +28,7 @@ import {
 import { useData } from '../store/DataContext';
 import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
-const statusLabel = (manifest: SourceStageManifest | undefined, file: File | undefined) => file ? 'SELECIONADA' : manifest ? 'VÁLIDA' : 'NÃO CARREGADA';
+const statusLabel = (manifest: SourceStageManifest | undefined, file: File | undefined) => file ? 'SELECIONADA' : manifest ? isSourceStageCurrent(manifest) ? 'VÁLIDA' : 'ATUALIZAÇÃO NECESSÁRIA' : 'NÃO CARREGADA';
 const shortHash = (hash: string) => hash ? `${hash.slice(0, 10)}…` : '';
 
 function syncError(reason: unknown) {
@@ -36,6 +37,10 @@ function syncError(reason: unknown) {
   if (code.includes('SYNC_SOURCE_SNAPSHOT_OUTDATED')) return 'A cópia remota foi gerada com uma regra antiga. Atualize essa base no aparelho de origem e sincronize novamente.';
   if (code.includes('SYNC_SNAPSHOT_MISSING')) return 'Ainda não existe uma cópia sincronizada para restaurar.';
   if (code.includes('SYNC_PAYLOAD_INVALID')) return 'A cópia recebida não passou na validação de integridade e não foi aplicada.';
+  if (code.includes('SOURCES_OUTDATED:')) {
+    const sources = code.split('SOURCES_OUTDATED:')[1]?.split('|').map(source => SOURCE_LABELS[source] ?? source).join(', ');
+    return `A regra de leitura mudou. Selecione novamente somente: ${sources || 'a fonte marcada como atualização necessária'}.`;
+  }
   return code;
 }
 
@@ -78,7 +83,7 @@ export function ConfiguracoesPage() {
   }, []);
 
   const manifestBySource = useMemo(() => new Map(manifests.map(manifest => [manifest.source, manifest])), [manifests]);
-  const validCount = REQUIRED_SOURCE_IDS.filter(source => manifestBySource.has(source)).length;
+  const validCount = REQUIRED_SOURCE_IDS.filter(source => isSourceStageCurrent(manifestBySource.get(source))).length;
   const selectedCount = Object.keys(selected).length;
   const canReprocess = Boolean(activeCanonical) && validCount === REQUIRED_SOURCE_IDS.length;
 
@@ -124,7 +129,7 @@ export function ConfiguracoesPage() {
           setError(syncError(syncFailure));
         }
       } else setStatus(localMessage);
-    } catch (reason) { setError(String(reason)); }
+    } catch (reason) { setError(syncError(reason)); }
     finally { setProcessing(false); setProgress(null); }
   };
 
@@ -196,7 +201,7 @@ export function ConfiguracoesPage() {
 
   return <PanelPage title="Atualizar Bases" metricLabel="Fontes válidas" metricValue={`${validCount}/19`}>
     {activeCanonical
-      ? <PanelAlert tone="success">Build ativo: {activeCanonical.motorBuildId}<br />Atualize somente os relatórios que mudaram; os demais stagings válidos serão reutilizados. Quando uma regra do motor for atualizada, use Reprocessar motor atual sem reenviar arquivos.</PanelAlert>
+      ? <PanelAlert tone="success">Build ativo: {activeCanonical.motorBuildId}<br />Atualize somente os relatórios que mudaram; os demais stagings válidos serão reutilizados. Uma fonte marcada como “Atualização necessária” precisa ser selecionada novamente para aplicar sua nova regra de leitura.</PanelAlert>
       : <PanelAlert tone="info">Primeira carga: selecione as 19 fontes originais. Depois disso, cada atualização pode substituir apenas as fontes que mudaram.</PanelAlert>}
 
     <PanelCard>
