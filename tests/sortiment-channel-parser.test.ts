@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as XLSX from 'xlsx';
 import { parseSortimento } from '../src/canonical/parsers.ts';
 import { ASSORTMENT_CHANNELS } from '../src/canonical/assortment.ts';
+import { sourceImportTestHelpers } from '../src/canonical/sourceImport.ts';
 
 const channels = ASSORTMENT_CHANNELS.map(channel => channel.headers[0]);
 const sheet = (headers: string[], values: unknown[]) => XLSX.utils.aoa_to_sheet([headers, values]);
@@ -24,4 +25,8 @@ test('parser preserva cada canal nomeado das quatro abas do Sortimento Q3', asyn
   assert.equal(current?.super_g?.typed, 2);
   assert.equal(current?.vizinhan_a_gde?.typed, 1);
   assert.equal(current?.vizinhan_a_peq?.typed, 2);
+});
+
+test('mudança de canais invalida o staging antigo do Sortimento Q3', () => {
+  assert.equal(sourceImportTestHelpers.parserVersionFor("Sortimento Recomendado - Q3'26.xlsx"), 'browser-v2-named-assortment-channels');
 });

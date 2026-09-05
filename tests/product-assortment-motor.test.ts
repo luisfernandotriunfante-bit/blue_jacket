@@ -25,10 +25,11 @@ test('M1 materializa canais oficiais do sortimento mais atual por EAN', () => {
 });
 
 test('leitura visual mostra somente faixas recomendadas e preserva a classificação', () => {
-  const channels = parseAssortmentPresence(JSON.stringify({ hiper: 1, super_g: 2, vizinhan_a_gde: 1, vizinhan_a_peq: 0 }));
+  const channels = parseAssortmentPresence(JSON.stringify({ hiper: 1, super_g: 2, farma_bairro_1_a_4: 5, vizinhan_a_gde: 1, vizinhan_a_peq: 0 }));
   assert.deepEqual(channels.map(channel => [channel.label, channel.range, channel.classification]), [
     ['Hiper', 'Faixa 1', 'Mandatório'],
     ['Super G', 'Faixa 2', 'Importante'],
+    ['Farma Bairro 1 a 4', '', 'Recomendado'],
     ['Vizinhança GDE', 'Faixa 4', 'Mandatório'],
   ]);
 });
