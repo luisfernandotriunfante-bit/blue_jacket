@@ -7,7 +7,7 @@ import { sourceImportTestHelpers } from '../src/canonical/sourceImport.ts';
 
 const channels = ASSORTMENT_CHANNELS.map(channel => channel.headers[0]);
 const sheet = (headers: string[], values: unknown[]) => XLSX.utils.aoa_to_sheet([headers, values]);
-const workbook = (julyDescription: 'DESCRIÇÃO' | 'DESC') => {
+const workbook = (julyDescription: 'DESCRIÇÃO' | 'DESC', julyBlankBeforeEan = false) => {
   const book = XLSX.utils.book_new();
   const variants = [
     { name: 'Jul26 - Base_Sortimento_Naciona', headers: ['STATUS','COD CMD','COD','EAN','CATEGORIA MASTER','CATEGORIA','SUBCATEGORIA','MARCA','SUBMARCA','SEGMENTO','SUBSEGMENTO','CONTENTS','AMOUNT','PROMO','LANÇAMENTO',julyDescription], values: ['ATIVO','565','COL565','7891234567895','','ORAL','','COLGATE','TOTAL','','','90G',90,'','','TOTAL 90G'] },
@@ -15,6 +15,7 @@ const workbook = (julyDescription: 'DESCRIÇÃO' | 'DESC') => {
     { name: 'SORTIMENTO HAIR CARE AGO26 &SET', headers: ['STATUS','COD ANTIGO','EAN ANTIGO','COD NOVO','EAN NOVO','CATEGORIA MASTER','CATEGORIA','SUBCATEGORIA','MARCA','SUBMARCA','SEGMENTO','SUBSEGMENTO','CONTENTS','AMOUNT','PROMO','LANÇAMENTO','DESCRIÇÃO'], values: ['ATIVO','','','565','7891234567895','','HAIR','','PALMOLIVE','','','','',0,'','','HAIR'] },
     { name: 'Descontinuados Q326', headers: ['STATUS','COD','EAN','CATEGORIA MASTER','CATEGORIA','SUBCATEGORIA','MARCA','SUBMARCA','SEGMENTO','SUBSEGMENTO','CONTENTS','AMOUNT','PROMO','LANÇAMENTO','DESCRIÇÃO'], values: ['INATIVO','565','7891234567895','','ORAL','','COLGATE','TOTAL','','','90G',90,'','','TOTAL 90G'] },
   ];
+  if (julyBlankBeforeEan) { variants[0].headers.splice(3, 0, ''); variants[0].values.splice(3, 0, ''); }
   for (const variant of variants) XLSX.utils.book_append_sheet(book, sheet([...variant.headers, ...channels], [...variant.values, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0]), variant.name);
   return book;
 };
@@ -37,6 +38,16 @@ test('parser aceita a variante contratada DESC na base de Julho', async () => {
   assert.equal(parsed.rows.filter(row => row.sortimentDataset?.typed === 'JUL_BASE').length, 1);
 });
 
+test('parser aceita a variante de Julho com coluna D vazia antes do EAN', async () => {
+  const bytes = XLSX.write(workbook('DESCRIÇÃO', true), { bookType: 'xlsx', type: 'array' });
+  const parsed = await parseSortimento(new File([bytes], "Sortimento Recomendado - Q3'26.xlsx"));
+  assert.equal(parsed.audits.length, 0);
+  const july = parsed.rows.find(row => row.sortimentDataset?.typed === 'JUL_BASE');
+  assert.equal(july?.ean?.typed, '7891234567895');
+  assert.equal(july?.category?.typed, 'ORAL');
+  assert.equal(july?.hiper?.typed, 1);
+});
+
 test('mudança de canais invalida o staging antigo do Sortimento Q3', () => {
-  assert.equal(sourceImportTestHelpers.parserVersionFor("Sortimento Recomendado - Q3'26.xlsx"), 'browser-v3-jul-description-variants');
+  assert.equal(sourceImportTestHelpers.parserVersionFor("Sortimento Recomendado - Q3'26.xlsx"), 'browser-v4-jul-optional-blank-before-ean');
 });
