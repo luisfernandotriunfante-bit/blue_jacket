@@ -1,13 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildCanonicalBundleFromStaging } from '../src/canonical/motors.ts';
-import { parseAssortmentPresence } from '../src/canonical/assortment.ts';
+import { parseAssortmentPresence, parseRangeAssortmentPresence } from '../src/canonical/assortment.ts';
 import type { ParsedSource, RawTyped } from '../src/canonical/types.ts';
 
 const typed = (value: unknown): RawTyped => ({ raw: value, typed: value });
 const source = (name: string, records: Array<Record<string, unknown>>): ParsedSource => ({
   source: name, fileName: name, sheet: 'Planilha1', audits: [],
   rows: records.map(record => Object.fromEntries(Object.entries(record).map(([field, value]) => [field, typed(value)]))),
+});
+
+test('recorte de Produtos mostra somente os canais que representam faixas de clientes', () => {
+  const channels = parseRangeAssortmentPresence(JSON.stringify({ hiper: 1, super_g: 2, c_c: 1, drogaria: 1, farma_bairro_1_a_4: 2, e_commerce_pure_players_1p_3p: 1, vizinhan_a_gde: 1, vizinhan_a_peq: 2, tradicional_independente: 1, sortimento_distribuidores: 1 }));
+  assert.deepEqual(channels.map(channel => channel.label), ['Hiper', 'Super G', 'Vizinhança GDE', 'Vizinhança PEQ', 'Tradicional']);
+  assert.ok(channels.every(channel => channel.range.startsWith('Faixa ')));
 });
 
 test('M1 materializa canais oficiais do sortimento mais atual por EAN', () => {
