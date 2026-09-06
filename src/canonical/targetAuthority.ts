@@ -2,7 +2,7 @@ import type { AdminRegistryState } from './adminRegistry';
 import { competenceFromParsedSource } from './competence';
 import { createRcaResolver, type RcaResolution } from './rcaResolver';
 import type { TargetState, RcaTargetRecord } from './targetStore';
-import type { CanonicalAudit, ParsedSource, RawTyped } from './types';
+import type { CanonicalAudit, CanonicalList, ParsedSource, RawTyped } from './types';
 
 export const BUSSOLA_SOURCE_ID = 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx';
 
@@ -97,17 +97,13 @@ function bussolaFact(row: Record<string, RawTyped>, code: unknown, competence: s
   };
 }
 
-/**
- * Single TARGET materializer shared by both canonical motor entry points.
- * It is deterministic and reads no storage or CompetenceState.
- */
+/** Single deterministic TARGET materializer. It never reads storage or CompetenceState. */
 export function materializeEffectiveTargetFacts(sources: ParsedSource[], targetState: TargetState | null = null, registry: AdminRegistryState | null = null) {
   const physical = physicalTargetRows(sources, registry);
   const facts: TargetFact[] = [];
   const audits: CanonicalAudit[] = [];
   const handled = new Set<string>();
 
-  // Every registry target is considered even when the Bússola does not contain that RCA.
   for (const competenceRecord of targetState?.records ?? []) {
     const identities = [...new Set(competenceRecord.rcaTargets.map(record => record.rcaCanonicalId))];
     for (const rcaCanonicalId of identities) {
@@ -126,7 +122,6 @@ export function materializeEffectiveTargetFacts(sources: ParsedSource[], targetS
     }
   }
 
-  // Physical Bússola remains the exact lower-authority fallback for the same explicit competence.
   for (const item of physical.rows) {
     const competence = item.competence;
     const canonicalId = item.resolution.canonicalId;
@@ -150,6 +145,21 @@ export function materializeEffectiveTargetFacts(sources: ParsedSource[], targetS
   }
 
   return { facts, audits, bussolaCompetence: physical.competence };
+}
+
+/** Replaces every provisional physical TARGET in M3 with the single effective authority result. SALE/INBOUND/RECEIPT remain byte-for-byte records. */
+export function applyTargetAuthorityToM3(m3: CanonicalList, sources: ParsedSource[], targetState: TargetState | null, registry: AdminRegistryState | null): CanonicalList {
+  const effective = materializeEffectiveTargetFacts(sources, targetState, registry);
+  const nonTargets = m3.records.filter(record => record.fact_type !== 'TARGET');
+  const previousNonTargetWarnings = m3.warnings.filter(audit => audit.source !== 'Bússola' && audit.source !== 'AdminTargetRegistry');
+  const previousNonTargetErrors = m3.errors.filter(audit => audit.source !== 'Bússola' && audit.source !== 'AdminTargetRegistry');
+  return {
+    ...m3,
+    records: [...nonTargets, ...effective.facts],
+    sources: m3.sources.includes(BUSSOLA_SOURCE_ID) ? m3.sources : [...m3.sources, BUSSOLA_SOURCE_ID],
+    warnings: [...previousNonTargetWarnings, ...effective.audits.filter(audit => audit.severity === 'WARNING' || audit.severity === 'INFO')],
+    errors: [...previousNonTargetErrors, ...effective.audits.filter(audit => audit.severity === 'BLOCKED' || audit.severity === 'BLOCKED_DEPENDENT_CALC')],
+  };
 }
 
 export const targetAuthorityTestHelpers = { semantic, physicalTargetRows, registryFact, bussolaFact };
