@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
-import { setRegistryRecordActive, upsertManualRca, type RcaRegistryRecord, type RcaRole } from '../../../canonical/adminRegistry';
-import { adminRegistryRepository } from '../../../canonical/adminRegistryIndexedDb';
+import { type RcaRegistryRecord, type RcaRole } from '../../../canonical/adminRegistry';
 import { PanelAlert, PanelCard, PanelSectionHeader } from '../../../ui/pattern/PanelVisual';
 import { RegistryMessages, RegistryStatus, SeedPreviewCard, useRegistryPanel } from './RegistryPanelShared';
 
@@ -58,7 +57,7 @@ export function RcasRegistryPanel() {
   const save = async () => {
     setMutationError('');
     try {
-      await upsertManualRca(adminRegistryRepository, {
+      const ok = await panel.execute(() => panel.actions.upsertRca({
         currentCode: form.currentCode,
         legacyCode: form.legacyCode || null,
         name: form.name || null,
@@ -68,27 +67,24 @@ export function RcasRegistryPanel() {
         validFromCompetence: form.validFromCompetence || null,
         validToCompetence: form.validToCompetence || null,
         note: form.note || null,
-      }, editingId ?? undefined);
-      setEditingId(null); setForm(EMPTY_FORM);
-      await panel.mutationSaved();
+      }, editingId ?? undefined));
+      if (ok) { setEditingId(null); setForm(EMPTY_FORM); }
     } catch (reason) { setMutationError(String(reason)); }
   };
 
   const toggleActive = async (record: RcaRegistryRecord) => {
     setMutationError('');
-    try {
-      await setRegistryRecordActive(adminRegistryRepository, 'rcas', record.id, !record.active);
-      await panel.mutationSaved();
-    } catch (reason) { setMutationError(String(reason)); }
+    try { await panel.execute(() => panel.actions.setActive('rcas', record.id, !record.active)); }
+    catch (reason) { setMutationError(String(reason)); }
   };
 
   return <>
     <RegistryStatus kind="rcas" records={records} lastSeed={panel.lastSeed} conflicts={panel.diagnostics.length} />
     <RegistryMessages notice={panel.notice} error={panel.error || mutationError} />
-    <SeedPreviewCard preview={panel.preview} busy={panel.busy} onPreview={() => void panel.previewSeed()} onApply={() => void panel.applySeed()} />
+    <SeedPreviewCard preview={panel.preview} previewBusy={panel.previewBusy} mutationBusy={panel.mutationBusy} onPreview={() => void panel.previewSeed()} onApply={() => void panel.applySeed()} />
 
     <PanelCard>
-      <PanelSectionHeader eyebrow="CADASTRO" title={editingId ? 'Editar RCA' : 'Criar RCA'} description="Códigos permanecem texto. Editar um registro proveniente do seed transforma sua origem em MANUAL e o protege de reseeds automáticos." />
+      <PanelSectionHeader eyebrow="CADASTRO CANÔNICO" title={editingId ? 'Editar RCA' : 'Criar RCA'} description="Salvar executa Registry → full rebuild v19 → ativação → sincronização. Códigos permanecem texto; editar um seed transforma a origem em MANUAL." />
       <div className="panel-form-grid">
         <input className="panel-input" placeholder="Código atual" value={form.currentCode} onChange={event => setForm({ ...form, currentCode: event.target.value })} />
         <input className="panel-input" placeholder="Código legado" value={form.legacyCode} onChange={event => setForm({ ...form, legacyCode: event.target.value })} />
@@ -100,8 +96,8 @@ export function RcasRegistryPanel() {
         <input className="panel-input" type="month" value={form.validToCompetence} onChange={event => setForm({ ...form, validToCompetence: event.target.value })} aria-label="Válido até" />
         <input className="panel-input" placeholder="Observação" value={form.note} onChange={event => setForm({ ...form, note: event.target.value })} />
       </div>
-      <button className="panel-button" onClick={() => void save()}>{editingId ? 'Salvar edição' : 'Criar RCA'}</button>{' '}
-      {editingId ? <button className="panel-button" onClick={() => { setEditingId(null); setForm(EMPTY_FORM); }}>Cancelar</button> : null}
+      <button className="panel-button" disabled={panel.mutationBusy} onClick={() => void save()}>{panel.mutationBusy ? 'Operação em andamento…' : editingId ? 'Salvar edição' : 'Criar RCA'}</button>{' '}
+      {editingId ? <button className="panel-button" disabled={panel.mutationBusy} onClick={() => { setEditingId(null); setForm(EMPTY_FORM); }}>Cancelar</button> : null}
     </PanelCard>
 
     <PanelCard>
@@ -113,7 +109,7 @@ export function RcasRegistryPanel() {
       </div>
       {panel.diagnostics.length ? <PanelAlert tone="warning">{panel.diagnostics.map(item => item.message).join(' • ')}</PanelAlert> : null}
       <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Atual</th><th>Legado</th><th>Nome</th><th>Coord.</th><th>Papel</th><th>Origem</th><th>Status</th><th>Ações</th></tr></thead><tbody>
-        {filtered.map(record => <tr key={record.id}><td>{record.currentCode}</td><td>{record.legacyCode ?? '—'}</td><td>{record.name ?? '—'}</td><td>{record.coordinatorCode ?? '—'} {record.coordinatorName ?? ''}</td><td>{record.role}</td><td>{record.origin}</td><td>{record.active ? 'ATIVO' : 'INATIVO'}</td><td><button className="panel-button" onClick={() => edit(record)}>Editar</button>{' '}<button className="panel-button" onClick={() => void toggleActive(record)}>{record.active ? 'Inativar' : 'Reativar'}</button></td></tr>)}
+        {filtered.map(record => <tr key={record.id}><td>{record.currentCode}</td><td>{record.legacyCode ?? '—'}</td><td>{record.name ?? '—'}</td><td>{record.coordinatorCode ?? '—'} {record.coordinatorName ?? ''}</td><td>{record.role}</td><td>{record.origin}</td><td>{record.active ? 'ATIVO' : 'INATIVO'}</td><td><button className="panel-button" disabled={panel.mutationBusy} onClick={() => edit(record)}>Editar</button>{' '}<button className="panel-button" disabled={panel.mutationBusy} onClick={() => void toggleActive(record)}>{record.active ? 'Inativar' : 'Reativar'}</button></td></tr>)}
       </tbody></table></div>
     </PanelCard>
   </>;
