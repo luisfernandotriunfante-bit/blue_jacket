@@ -1,6 +1,7 @@
 export type SystemDataOperationOwner =
   | 'BASE_UPDATE'
   | 'REGISTRY_UPDATE'
+  | 'ENGINE_MIGRATION'
   | 'SYNC_SEND'
   | 'SYNC_RESTORE'
   | 'SYNC_CREATE_AND_SEND'
@@ -56,6 +57,7 @@ export const systemDataOperationCoordinator = createSystemDataOperationCoordinat
 export function systemDataOperationBusyMessage(owner: SystemDataOperationOwner | null) {
   if (owner === 'BASE_UPDATE') return 'Há uma atualização de bases em andamento. Aguarde a conclusão antes de iniciar outra operação de sincronização, cadastro ou recuperação.';
   if (owner === 'REGISTRY_UPDATE') return 'Há uma alteração de Cadastros sendo aplicada ao motor canônico. Aguarde a conclusão antes de atualizar bases, sincronizar ou recuperar bundle.';
+  if (owner === 'ENGINE_MIGRATION') return 'O build canônico está sendo migrado para a engine atual. Aguarde a conclusão antes de iniciar outra operação de dados.';
   if (owner === 'SYNC_SEND') return 'Há um envio da cópia atual em andamento. Aguarde a conclusão antes de atualizar bases, alterar cadastros, restaurar ou recuperar bundle.';
   if (owner === 'SYNC_RESTORE' || owner === 'SYNC_PAIR_AND_RESTORE' || owner === 'STARTUP_REMOTE_RESTORE') return 'Há uma restauração sincronizada em andamento. Aguarde a conclusão antes de iniciar outra operação de dados.';
   if (owner === 'SYNC_CREATE_AND_SEND') return 'A sincronização entre aparelhos está sendo criada e a cópia inicial ainda está em envio. Aguarde a conclusão.';
