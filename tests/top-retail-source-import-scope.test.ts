@@ -3,9 +3,20 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const sourceImport = fs.readFileSync(new URL('../src/canonical/sourceImport.ts', import.meta.url), 'utf8');
+const topRetailM2 = fs.readFileSync(new URL('../src/canonical/topRetailM2.ts', import.meta.url), 'utf8');
 
-test('Roteiro Top é materializado no M2 antes de salvar o build ativo', () => {
-  assert.ok(sourceImport.includes('materializeTopRetailRouteInM2'));
-  assert.ok(sourceImport.includes('bundle.lists.M2_CLIENTE_RCA = materializeTopRetailRouteInM2'));
-  assert.ok(sourceImport.includes('browser-stage4-product-assortment-v18-sellout-closure'));
+test('Roteiro Top/Registry é materializado no M2 antes de salvar o build ativo v19', () => {
+  const buildIndex = sourceImport.indexOf('const bundle = buildCanonicalBundleFromStaging(parsedSources);');
+  const registryAuthorityIndex = sourceImport.indexOf('applyAdminRegistryCanonicalAuthority(bundle, parsedSources, registry);');
+  const topIndex = sourceImport.indexOf('bundle.lists.M2_CLIENTE_RCA = materializeTopRetailRouteInM2');
+  const saveIndex = sourceImport.indexOf('await saveGeneratedBuild(active, lists');
+
+  assert.ok(buildIndex >= 0);
+  assert.ok(registryAuthorityIndex > buildIndex);
+  assert.ok(topIndex > registryAuthorityIndex);
+  assert.ok(saveIndex > topIndex);
+  assert.ok(sourceImport.includes('browser-stage4-product-assortment-v19-admin-registry-authority'));
+  assert.match(topRetailM2, /routeCompetence === targetCompetence/);
+  assert.match(topRetailM2, /resolveTopAuthority\(registry, targetCompetence, cnpj, imported\)/);
+  assert.match(topRetailM2, /SOURCE_PRESERVED/);
 });
