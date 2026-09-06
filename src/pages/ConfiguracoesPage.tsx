@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { importCanonicalBundle } from '../canonical/bundleStore';
+import { recoverTechnicalBundle } from '../canonical/bundleRecovery';
 import {
   clearIncomingDeviceSyncCode,
   connectDeviceSyncWorkspace,
@@ -12,9 +13,9 @@ import {
   type DeviceSyncIdentity,
 } from '../canonical/cloudSync';
 import { loadCandidateList } from '../canonical/candidateLists';
-import { APPROVED_CANONICAL_BUILD } from '../canonical/runtime';
-import { networkTargetFor, setNetworkTargetFor } from '../canonical/reportSettings';
 import {
+  buildCanonicalFromStoredSources,
+  CANONICAL_ENGINE_VERSION,
   detectSourceForFileName,
   isSourceStageCurrent,
   loadSourceStagingManifests,
@@ -37,6 +38,7 @@ function syncError(reason: unknown) {
   if (code.includes('SYNC_SOURCE_SNAPSHOT_OUTDATED')) return 'A cópia remota foi gerada com uma regra antiga. Atualize essa base no aparelho de origem e sincronize novamente.';
   if (code.includes('SYNC_SNAPSHOT_MISSING')) return 'Ainda não existe uma cópia sincronizada para restaurar.';
   if (code.includes('SYNC_PAYLOAD_INVALID')) return 'A cópia recebida não passou na validação de integridade e não foi aplicada.';
+  if (code.includes('BUNDLE_LEGACY_REBUILD_UNAVAILABLE:')) return 'Este bundle pertence a uma versão antiga do motor e não contém as fontes necessárias para reconstrução com a versão atual. Utilize a cópia sincronizada ou recarregue as bases.';
   if (code.includes('SOURCES_OUTDATED:')) {
     const sources = code.split('SOURCES_OUTDATED:')[1]?.split('|').map(source => SOURCE_LABELS[source] ?? source).join(', ');
     return `A regra de leitura mudou. Selecione novamente somente: ${sources || 'a fonte marcada como atualização necessária'}.`;
@@ -57,8 +59,6 @@ export function ConfiguracoesPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncCode, setSyncCode] = useState('');
   const [syncNotice, setSyncNotice] = useState('');
-  const competence = '2026-08';
-  const [networkTarget, setNetworkTarget] = useState(() => networkTargetFor(competence)?.toString() ?? '');
   const refresh = () => loadSourceStagingManifests().then(setManifests).catch(reason => setError(String(reason)));
 
   useEffect(() => { void refresh(); }, []);
@@ -136,8 +136,18 @@ export function ConfiguracoesPage() {
   const onBundleImport = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]; if (!file) return;
     setStatus('Validando e restaurando bundle técnico…'); setError('');
-    try { const imported = await importCanonicalBundle(file); activateCanonical(); setStatus(`Bundle de restauração ${imported.motorBuildId} importado e ativado.`); }
-    catch (reason) { setStatus(''); setError(String(reason)); }
+    try {
+      const recovered = await recoverTechnicalBundle({
+        currentEngineVersion: CANONICAL_ENGINE_VERSION,
+        importBundle: () => importCanonicalBundle(file),
+        rebuildFromStaging: () => buildCanonicalFromStoredSources(),
+        activate: activateCanonical,
+      });
+      setStatus(recovered.mode === 'COMPATIBLE'
+        ? `Bundle ${recovered.active.motorBuildId} validado e ativado com a engine atual.`
+        : `Bundle legado validado. Dados foram reconstruídos com a engine atual. Build ativo: ${recovered.active.motorBuildId}.`);
+    }
+    catch (reason) { setStatus(''); setError(syncError(reason)); }
     finally { event.target.value = ''; }
   };
 
@@ -174,18 +184,6 @@ export function ConfiguracoesPage() {
       setDeviceSync(identity); setSyncCode(''); await refresh();
       setSyncNotice(restored ? `Aparelho pareado e build ${restored.motorBuildId} restaurado.` : 'Aparelho pareado; ainda não há build remoto para restaurar.');
     } catch (reason) { setError(`Não foi possível parear este aparelho: ${syncError(reason)}`); }
-    finally { setSyncing(false); }
-  };
-
-  const saveNetworkTarget = async () => {
-    setNetworkTargetFor(competence, networkTarget.trim() === '' ? null : Number(networkTarget));
-    setStatus('Meta Redes Geral salva para a competência.');
-    if (!deviceSync) return;
-    setSyncing(true);
-    try {
-      await uploadCurrentDeviceSnapshot(deviceSync);
-      setSyncNotice('Meta manual e bases foram sincronizadas com o outro aparelho.');
-    } catch (reason) { setError(`A meta foi salva neste aparelho, mas a sincronização não foi enviada: ${syncError(reason)}`); }
     finally { setSyncing(false); }
   };
 
@@ -231,7 +229,6 @@ export function ConfiguracoesPage() {
       <div className="panel-table-wrap" style={{ marginTop: 12 }}><table className="panel-table"><thead><tr><th>Fonte</th><th>Status</th><th>Arquivo atual</th><th>Linhas</th><th>Hash</th><th>Substituir</th></tr></thead><tbody>{REQUIRED_SOURCE_IDS.map(source => { const manifest = manifestBySource.get(source), file = selected[source]; return <tr key={source}><td>{SOURCE_LABELS[source] ?? source}</td><td>{statusLabel(manifest, file)}</td><td>{file?.name ?? manifest?.fileName ?? '—'}</td><td>{manifest?.parsedRows ?? '—'}</td><td>{manifest ? shortHash(manifest.fileHash) : '—'}</td><td><label className="panel-button" style={{ display: 'inline-block', cursor: 'pointer' }}>Selecionar<input type="file" accept=".xls,.xlsx,.txt" onChange={event => onSource(source, event)} style={{ display: 'none' }} /></label></td></tr>; })}</tbody></table></div>
     </PanelCard>
 
-    <PanelCard><PanelSectionHeader eyebrow="META MANUAL" title="Meta Redes Geral" description="Parâmetro separado da meta de Sell Out, por competência. Sem valor, o relatório mostra Não configurada." /><label className="panel-muted">Competência {competence} <input type="number" min="0" value={networkTarget} onChange={event => setNetworkTarget(event.target.value)} /></label>{' '}<button className="panel-button" disabled={syncing} onClick={() => void saveNetworkTarget()}>Salvar Meta Redes</button></PanelCard>
-    <PanelCard><PanelSectionHeader eyebrow="AVANÇADO / RECUPERAÇÃO" title="Restaurar Bundle Canônico" description="Backup técnico. Não é necessário para a atualização normal das bases." /><label className="panel-button" style={{ display: 'inline-block', cursor: 'pointer' }}>Selecionar bundle ZIP<input type="file" accept=".zip,application/zip" onChange={onBundleImport} style={{ display: 'none' }} /></label><p className="panel-muted">Build homologado de recuperação: {APPROVED_CANONICAL_BUILD.motorBuildId}</p></PanelCard>
+    <PanelCard><PanelSectionHeader eyebrow="AVANÇADO / RECUPERAÇÃO" title="Restaurar Bundle Canônico" description="Backup técnico. Não é necessário para a atualização normal das bases. Bundles antigos somente são ativados após reconstrução segura com a engine atual." /><label className="panel-button" style={{ display: 'inline-block', cursor: 'pointer' }}>Selecionar bundle ZIP<input type="file" accept=".zip,application/zip" onChange={onBundleImport} style={{ display: 'none' }} /></label><p className="panel-muted">Engine obrigatória: {CANONICAL_ENGINE_VERSION}</p></PanelCard>
   </PanelPage>;
 }

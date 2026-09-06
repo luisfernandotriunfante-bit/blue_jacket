@@ -1,5 +1,5 @@
 import { inflateSync } from 'fflate';
-import { APPROVED_CANONICAL_BUILD, resolveActiveCanonicalBundle } from './runtime';
+import { APPROVED_CANONICAL_BUILD, resolveActiveCanonicalBundle, type ActiveCanonicalBundle } from './runtime';
 import { hasGeneratedCanonicalBuild, loadGeneratedCanonicalList, loadGeneratedCanonicalManifest } from './sourceImport';
 import type { CanonicalList } from './types';
 
@@ -9,7 +9,14 @@ type BundleManifest = {
   rowCounts: Record<ListId, number>; files: Record<string, { path: string; sha256: string; bytes: number }>; createdAt: string;
 };
 type StoredBundle = { id: string; manifest: BundleManifest; zip: Blob; importedAt: string };
-export type BundleImportResult = { motorBuildId: string; stagingManifestHash: string; rowCounts: Record<ListId, number> };
+export type BundleImportResult = {
+  motorBuildId: string;
+  stagingManifestHash: string;
+  schemaVersion: string;
+  engineVersion: string;
+  rowCounts: Record<ListId, number>;
+  active: ActiveCanonicalBundle;
+};
 const DB_NAME = 'blue-jacket-v3-canonical-bundles'; const STORE_NAME = 'bundles';
 const ids: ListId[] = ['M1_ITEM_ESTOQUE', 'M2_CLIENTE_RCA', 'M3_MOVIMENTO_VENDAS', 'M4_HISTORICO_TRANSICAO'];
 const encoder = new TextEncoder(); const decoder = new TextDecoder();
@@ -31,22 +38,32 @@ function entries(bytes: Uint8Array) {
 function extract(bytes: Uint8Array, map: Map<string, ZipEntry>, path: string) { const entry = map.get(path); if (!entry) throw new Error(`BUNDLE_FILE_MISSING:${path}`); const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength); if (view.getUint32(entry.localOffset, true) !== 0x04034b50) throw new Error('BUNDLE_ZIP_INVALID'); const nameLength = view.getUint16(entry.localOffset + 26, true); const extraLength = view.getUint16(entry.localOffset + 28, true); const start = entry.localOffset + 30 + nameLength + extraLength; const compressed = bytes.slice(start, start + entry.compressedSize); const output = entry.method === 0 ? compressed : entry.method === 8 ? inflateSync(compressed) : (() => { throw new Error('BUNDLE_COMPRESSION_UNSUPPORTED'); })(); if (output.byteLength !== entry.uncompressedSize) throw new Error(`BUNDLE_FILE_SIZE_INVALID:${path}`); return output; }
 
 type ExpectedBuild = Pick<typeof APPROVED_CANONICAL_BUILD, 'motorBuildId' | 'stagingManifestHash' | 'schemaVersion' | 'rowCounts'>;
-export async function validateCanonicalBundleBytes(bytes: Uint8Array, expectedBuild: ExpectedBuild = APPROVED_CANONICAL_BUILD): Promise<{ manifest: BundleManifest; zipEntries: Map<string, ZipEntry> }> {
+export async function validateCanonicalBundleBytes(bytes: Uint8Array, expectedBuild?: ExpectedBuild): Promise<{ manifest: BundleManifest; zipEntries: Map<string, ZipEntry> }> {
   const zipEntries = entries(bytes); const manifest = JSON.parse(decoder.decode(extract(bytes, zipEntries, 'manifest.json'))) as BundleManifest;
-  if (manifest.bundleFormat !== 'blue-jacket-canonical-bundle/v1' || manifest.motorBuildId !== expectedBuild.motorBuildId || manifest.stagingManifestHash !== expectedBuild.stagingManifestHash || manifest.schemaVersion !== expectedBuild.schemaVersion) throw new Error('BUNDLE_MANIFEST_REJECTED');
+  if (manifest.bundleFormat !== 'blue-jacket-canonical-bundle/v1' || !manifest.motorBuildId || !manifest.stagingManifestHash || !manifest.engineVersion || manifest.schemaVersion !== 'v1') throw new Error('BUNDLE_MANIFEST_REJECTED');
+  if (expectedBuild && (manifest.motorBuildId !== expectedBuild.motorBuildId || manifest.stagingManifestHash !== expectedBuild.stagingManifestHash || manifest.schemaVersion !== expectedBuild.schemaVersion)) throw new Error('BUNDLE_MANIFEST_REJECTED');
   for (const id of ids) {
-    const path = `${id}.json`; const expected = manifest.files[path]; if (!expected || expected.path !== path || manifest.rowCounts[id] !== expectedBuild.rowCounts[id]) throw new Error(`BUNDLE_MANIFEST_REJECTED:${id}`);
+    const path = `${id}.json`; const expected = manifest.files[path]; const rowCount = manifest.rowCounts[id];
+    if (!expected || expected.path !== path || !Number.isInteger(rowCount) || rowCount < 0 || (expectedBuild && rowCount !== expectedBuild.rowCounts[id])) throw new Error(`BUNDLE_MANIFEST_REJECTED:${id}`);
     const content = extract(bytes, zipEntries, path); if (content.byteLength !== expected.bytes || await sha256(content) !== expected.sha256) throw new Error(`BUNDLE_HASH_MISMATCH:${id}`);
-    if (id !== 'M4_HISTORICO_TRANSICAO') { const list = JSON.parse(decoder.decode(content)) as CanonicalList; if (list.id !== id || list.records.length !== manifest.rowCounts[id]) throw new Error(`BUNDLE_LIST_INVALID:${id}`); }
+    const list = JSON.parse(decoder.decode(content)) as CanonicalList; if (list.id !== id || !Array.isArray(list.records) || list.records.length !== rowCount) throw new Error(`BUNDLE_LIST_INVALID:${id}`);
   }
   return { manifest, zipEntries };
 }
 
 export async function importCanonicalBundle(file: File): Promise<BundleImportResult> {
-  const bytes = new Uint8Array(await file.arrayBuffer()); const { manifest } = await validateCanonicalBundleBytes(bytes);
+  const bytes = new Uint8Array(await file.arrayBuffer()); const { manifest, zipEntries } = await validateCanonicalBundleBytes(bytes);
   const bundle: StoredBundle = { id: manifest.motorBuildId, manifest, zip: new Blob([bytes], { type: 'application/zip' }), importedAt: new Date().toISOString() };
   await put(bundle); const verified = await get(manifest.motorBuildId); if (!verified || verified.manifest.stagingManifestHash !== manifest.stagingManifestHash) throw new Error('BUNDLE_STORAGE_VERIFY_FAILED');
-  return { motorBuildId: manifest.motorBuildId, stagingManifestHash: manifest.stagingManifestHash, rowCounts: manifest.rowCounts };
+  const m3 = JSON.parse(decoder.decode(extract(bytes, zipEntries, 'M3_MOVIMENTO_VENDAS.json'))) as CanonicalList;
+  const factTypeCounts = { SALE: 0, INBOUND_ORDER: 0, RECEIPT: 0, TARGET: 0 };
+  for (const record of m3.records) { const type = record.fact_type; if (type === 'SALE' || type === 'INBOUND_ORDER' || type === 'RECEIPT' || type === 'TARGET') factTypeCounts[type] += 1; }
+  const active: ActiveCanonicalBundle = {
+    status: 'ACTIVE', motorBuildId: manifest.motorBuildId, stagingManifestHash: manifest.stagingManifestHash,
+    schemaVersion: manifest.schemaVersion, engineVersion: manifest.engineVersion,
+    approvedAt: manifest.createdAt || new Date().toISOString(), rowCounts: manifest.rowCounts, factTypeCounts,
+  };
+  return { motorBuildId: manifest.motorBuildId, stagingManifestHash: manifest.stagingManifestHash, schemaVersion: manifest.schemaVersion, engineVersion: manifest.engineVersion, rowCounts: manifest.rowCounts, active };
 }
 async function activeZipBundle() { const active = resolveActiveCanonicalBundle(); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); const bundle = await get(active.motorBuildId); if (!bundle || bundle.manifest.stagingManifestHash !== active.stagingManifestHash) throw new Error('CANONICAL_BUNDLE_UNAVAILABLE'); return bundle; }
 export async function loadImportedBundleManifest() { const active = resolveActiveCanonicalBundle(); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); if (await hasGeneratedCanonicalBuild(active.motorBuildId)) return loadGeneratedCanonicalManifest(active.motorBuildId); const bundle = await activeZipBundle(); return { status: 'VALID', generatedAt: bundle.manifest.createdAt, lists: Object.fromEntries(ids.map(id => [id, { rowCount: bundle.manifest.rowCounts[id], warnings: 0, errors: 0 }])) as Record<string, { rowCount: number; warnings: number; errors: number }> }; }

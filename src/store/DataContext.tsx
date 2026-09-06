@@ -1,10 +1,10 @@
 import React,{createContext,useContext,useEffect,useState,type ReactNode} from 'react';
-import { activateApprovedCanonicalBundle,activateCanonicalBundleReference,deactivateCanonicalBundle,resolveActiveCanonicalBundle,type ActiveCanonicalBundle } from '../canonical/runtime';
+import { activateCanonicalBundleReference,deactivateCanonicalBundle,resolveActiveCanonicalBundle,type ActiveCanonicalBundle } from '../canonical/runtime';
 import { buildCanonicalFromStoredSources, CANONICAL_ENGINE_VERSION } from '../canonical/sourceImport';
 import { rebuildForCanonicalEngine } from '../canonical/engineMigration';
 import { RESET_NOTICE } from './migrationReset';
 
-interface DataContextType { activeCanonical:ActiveCanonicalBundle|null; activateCanonical:(bundle?:ActiveCanonicalBundle)=>void; deactivateCanonical:()=>void; dataNotice:string; migrationError:string }
+interface DataContextType { activeCanonical:ActiveCanonicalBundle|null; activateCanonical:(bundle:ActiveCanonicalBundle)=>void; deactivateCanonical:()=>void; dataNotice:string; migrationError:string }
 const DataContext=createContext<DataContextType>({activeCanonical:null,activateCanonical:()=>undefined,deactivateCanonical:()=>undefined,dataNotice:RESET_NOTICE,migrationError:''});
 export function DataProvider({children}:{children:ReactNode}){
   const [activeCanonical,setActiveCanonical]=useState<ActiveCanonicalBundle|null>(()=>resolveActiveCanonicalBundle());
@@ -26,7 +26,7 @@ export function DataProvider({children}:{children:ReactNode}){
     });
     return()=>{cancelled=true};
   },[activeCanonical]);
-  const activateCanonical=(bundle?:ActiveCanonicalBundle)=>{setMigrationError('');setActiveCanonical(bundle?activateCanonicalBundleReference(bundle):activateApprovedCanonicalBundle())};
+  const activateCanonical=(bundle:ActiveCanonicalBundle)=>{setMigrationError('');setActiveCanonical(activateCanonicalBundleReference(bundle))};
   const rollback=()=>{deactivateCanonicalBundle();setActiveCanonical(null);setMigrationError('')};
   return <DataContext.Provider value={{activeCanonical,activateCanonical,deactivateCanonical:rollback,dataNotice:migrationError||(activeCanonical?`Build canônico ativo: ${activeCanonical.motorBuildId}.`:RESET_NOTICE),migrationError}}>{children}</DataContext.Provider>
 }
