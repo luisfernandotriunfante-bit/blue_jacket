@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import * as XLSX from 'xlsx';
 import { strFromU8, unzipSync } from 'fflate';
-import { buildSellOutViewModel, buildTopNetworksViewModel } from '../src/canonical/operationalViewModels.ts';
+import { buildSellOutViewModel } from '../src/canonical/operationalViewModels.ts';
+import { buildTopRetailNetworksViewModel } from '../src/canonical/topRetailNetworksModel.ts';
 import { fillSellOutTemplateBytes, fillTopNetworksTemplateBytes } from '../src/canonical/reportTemplates.ts';
 
 const base = { sources: [], generatedAt: '2026-08-25T00:00:00Z', competence: '2026-08', snapshotDate: '2026-08-25', warnings: [], errors: [] };
 const m1 = { ...base, id: 'M1_ITEM_ESTOQUE' as const, records: [{ item_canonical_id: 'ITEM:1', winthor_code: '1', category_master: 'Linha teste', physical_stock_units: 4, cost_unit_105: 10, pVenda1_region11: 15 }] };
-const m2 = { ...base, id: 'M2_CLIENTE_RCA' as const, records: [{ cnpj: '00123456000100', customer_name: 'Cliente Teste', trade_name: 'Loja Teste', city: 'Campo Grande', winthor_customer_code: '99', premise_network: 'REDE TESTE', top_target: 40, network_resolution_status: 'SOURCE_PRESERVED' }] };
+const m2 = { ...base, id: 'M2_CLIENTE_RCA' as const, records: [{ cnpj: '00123456000100', customer_name: 'Cliente Teste', trade_name: 'Loja Teste', city: 'Campo Grande', winthor_customer_code: '99', top_network: 'REDE TESTE', manager_cnpj: '00123456000100', top_target: 40, network_resolution_status: 'SOURCE_PRESERVED' }] };
 const m3 = { ...base, id: 'M3_MOVIMENTO_VENDAS' as const, records: [
   { fact_type: 'SALE', source: '8022', order_status: 'FATURADO', value: 100, event_date: '2026-08-01', cnpj: '00123456000100', transaction_rca_code: '10', item_canonical_id: 'ITEM:1' },
   { fact_type: 'SALE', source: '8022', order_status: 'A FATURAR', value: 20, event_date: '2026-08-02', cnpj: '00123456000100', transaction_rca_code: '10', item_canonical_id: 'ITEM:1' },
@@ -27,7 +28,7 @@ test('official Sell Out template is preserved structurally and filled from the s
 });
 
 test('official Top Redes export retains only its visual panel and has no formula or technical-base parts', () => {
-  const view = buildTopNetworksViewModel({ m2, m3, generatedAt: '2026-08-25T00:00:00Z' });
+  const view = buildTopRetailNetworksViewModel({ m2, m3, sellOutTarget: null, networkTargetTotal: null, generatedAt: '2026-08-25T00:00:00Z' });
   const bytes = fillTopNetworksTemplateBytes(new Uint8Array(readFileSync('public/templates/top-redes-padrao.xlsx')), view);
   const reopened = XLSX.read(bytes, { type: 'array', cellDates: true });
   assert.deepEqual(reopened.SheetNames, ['Top Redes']);

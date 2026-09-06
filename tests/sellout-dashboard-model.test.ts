@@ -6,9 +6,9 @@ import type { CanonicalList } from '../src/canonical/types.ts';
 
 const base: SellOutViewModel = {
   motorBuildId: 'motor-test', stagingManifestHash: 'hash', generatedAt: '2026-08-25T00:00:00Z', competence: '2026-08', sourceFacts: { sales: 3, targets: 0 },
-  totals: { invoiced: 150, toInvoice: 50, realized: 200, salesTarget: 999, positivityTarget: 999, positiveCustomers: 2, salesAchievement: null, positivityAchievement: null, daysWithSales: 2 },
+  totals: { invoiced: 150, toInvoice: 50, realized: 200, salesTarget: 999, positivityTarget: 999, positiveCustomers: 2, invoicedPositiveCustomers: 2, salesAchievement: null, positivityAchievement: null, daysWithSales: 2 },
   vendorRows: [{ key: 'v1', rcaCanonicalId: 'RCA:1', rawRcaCode: '1', rcaName: 'RCA 1', rcaCurrentCode: '1', rcaLegacyCode: null, supervisorCode: null, supervisorName: null, label: 'RCA 1', salesTarget: 80, positivityTarget: 8, invoiced: 150, toInvoice: 50, realized: 200, positiveCustomers: 2, achievement: 2.5, positivityAchievement: .25, resolutionStatus: 'RESOLVED' }],
-  dailyRows: [{ date: '2026-08-24', invoiced: 100, toInvoice: 0, realized: 100 }, { date: '2026-08-25', invoiced: 50, toInvoice: 50, realized: 100 }],
+  dailyRows: [{ date: '2026-08-24', invoiced: 100, toInvoice: 0, realized: 100, invoicedPositivation: 1, totalPositivation: 1 }, { date: '2026-08-25', invoiced: 50, toInvoice: 50, realized: 100, invoicedPositivation: 1, totalPositivation: 2 }],
   networkRows: [], salesByLine: [{ line: 'Linha A', invoiced: 150, toInvoice: 50, realized: 200, share: 1, resolutionStatus: 'CLASSIFIED' }], stock: null, audits: [], reconciliation: { vendorsEqualTotal: true, dailyEqualTotal: true, networksEqualMappedUniverse: true, mappedNetworkValue: 0 },
 };
 
@@ -64,7 +64,7 @@ test('dashboard materializa as cinco divisões históricas antes da tela e da ex
     id: 'M3_MOVIMENTO_VENDAS', generatedAt: base.generatedAt, competence: base.competence, snapshotDate: '2026-08-25', sources: ['8022'], warnings: [], errors: [],
     records: [1, 2, 3, 4, 5].map(code => ({ fact_type: 'SALE', event_date: '2026-08-25', customer_canonical_id: `C:${code}`, order_status: code === 5 ? 'A FATURAR' : 'FATURADO', winthor_product_code: String(code), value: 100 })),
   };
-  const lineBase: SellOutViewModel = { ...base, sourceFacts: { sales: 5, targets: 0 }, totals: { ...base.totals, invoiced: 400, toInvoice: 100, realized: 500, positiveCustomers: 5 }, dailyRows: [{ date: '2026-08-25', invoiced: 400, toInvoice: 100, realized: 500 }] };
+  const lineBase: SellOutViewModel = { ...base, sourceFacts: { sales: 5, targets: 0 }, totals: { ...base.totals, invoiced: 400, toInvoice: 100, realized: 500, positiveCustomers: 5 }, dailyRows: [{ date: '2026-08-25', invoiced: 400, toInvoice: 100, realized: 500, invoicedPositivation: 4, totalPositivation: 5 }] };
   const dashboard = buildSellOutDashboardModel({ base: lineBase, m1, m3: sales, targets: { sellOutTarget: 1000, positivityTarget: 10 } });
   assert.deepEqual(dashboard.lineRows.map(row => row.line), ['Creme Dental', 'Esc + Enx + Fio', 'Sabonetes', 'Hair', 'Limpeza']);
   assert.deepEqual(dashboard.lineRows.map(row => row.realized), [100, 100, 100, 100, 100]);

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
 import { exportTopNetworksExcel, exportTopNetworksJson } from '../canonical/operationalExporters';
-import { networkTargetFor, sellOutTargets } from '../canonical/reportSettings';
+import { networkTargetFor, sellOutTargetsFor } from '../canonical/reportSettings';
+import { canonicalSellOutCompetence } from '../canonical/sellOutRules';
 import { buildTopRetailNetworksViewModel } from '../canonical/topRetailNetworksModel';
 import type { CanonicalList } from '../canonical/types';
 import { useData } from '../store/DataContext';
-import { PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
+import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFractionDigits: 1 });
@@ -52,8 +53,9 @@ export function TopRetailNetworksPage() {
   const hasTopRoute = lists.m2.records.some(row => textValue(row.top_network));
   if (!hasTopRoute) return <PanelPage title="Sell Out"><PanelEmptyState variant="page" title="Roteiro Top ainda não materializado neste build" description="Vá em Atualizar Bases, selecione somente o Roteiro Top e processe. As outras 18 fontes válidas serão reutilizadas; a aba Redes não lê o arquivo original diretamente." /></PanelPage>;
 
-  const targets = sellOutTargets();
-  const manualNetworkTarget = networkTargetFor(lists.m3.competence);
+  const competence = canonicalSellOutCompetence(lists.m3.records, lists.m3.competence);
+  const targets = sellOutTargetsFor(competence);
+  const manualNetworkTarget = networkTargetFor(competence);
   const built = buildTopRetailNetworksViewModel({
     m2: lists.m2,
     m3: lists.m3,
@@ -65,6 +67,8 @@ export function TopRetailNetworksPage() {
   const { networkAchievement, customerCoverage, sellOutShare, gapShare } = model.progress;
 
   return <PanelPage title="Sell Out"><div className="panel-stack sellout-page-stack">
+    <div className="panel-badge">COMPETÊNCIA · {model.competence === 'MIXED' || model.competence === 'UNRESOLVED' ? model.competence : `${model.competence.slice(5, 7)}/${model.competence.slice(0, 4)}`}</div>
+    {model.audits.map(audit => <PanelAlert key={audit.code} tone="warning"><strong>{audit.code}</strong> — {audit.message} {audit.action}</PanelAlert>)}
     <div className="sellout-metric-grid" style={{ width: '100%', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
       <MetricCard
         label="Meta Redes"

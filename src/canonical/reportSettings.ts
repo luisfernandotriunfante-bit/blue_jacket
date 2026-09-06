@@ -1,15 +1,17 @@
 export type ReportSettings = {
   networkTargetByCompetence: Record<string, number>;
   networkAllocationByCompetence: Record<string, Record<string, number>>;
-  sellOutTarget: number | null;
-  positivityTarget: number | null;
+  sellOutTargetByCompetence: Record<string, number>;
+  positivityTargetByCompetence: Record<string, number>;
+  legacySellOutTarget: number | null;
+  legacyPositivityTarget: number | null;
   /** Datas manuais de chegada por NF da Carteira, no formato ISO. */
   inboundForecastByInvoice: Record<string, string>;
 };
 
 const KEY = 'blue-jacket-v3-report-settings';
 const validTarget = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
-const empty = (): ReportSettings => ({ networkTargetByCompetence: {}, networkAllocationByCompetence: {}, sellOutTarget: null, positivityTarget: null, inboundForecastByInvoice: {} });
+const empty = (): ReportSettings => ({ networkTargetByCompetence: {}, networkAllocationByCompetence: {}, sellOutTargetByCompetence: {}, positivityTargetByCompetence: {}, legacySellOutTarget: null, legacyPositivityTarget: null, inboundForecastByInvoice: {} });
 const invoiceKey = (value: unknown) => {
   const raw = String(value ?? '').trim().replace(/\.0$/, '').replace(/\s+/g, '');
   const first = raw.match(/\d+/)?.[0];
@@ -46,11 +48,19 @@ function normalizedSettings(value: unknown): ReportSettings {
         return key && valid ? [[key, valid]] : [];
       }))
       : {};
+    const byCompetence = (candidate: unknown) => candidate && typeof candidate === 'object'
+      ? Object.fromEntries(Object.entries(candidate as Record<string, unknown>).flatMap(([competence, value]) => {
+        const target = /^\d{4}-\d{2}$/.test(competence) ? validTarget(value) : null;
+        return target === null ? [] : [[competence, target]];
+      })) : {};
+    const legacy = parsed as Partial<ReportSettings> & { sellOutTarget?: unknown; positivityTarget?: unknown };
     return {
       networkTargetByCompetence: targets,
       networkAllocationByCompetence: allocations,
-      sellOutTarget: validTarget(parsed.sellOutTarget),
-      positivityTarget: validTarget(parsed.positivityTarget),
+      sellOutTargetByCompetence: byCompetence(parsed.sellOutTargetByCompetence),
+      positivityTargetByCompetence: byCompetence(parsed.positivityTargetByCompetence),
+      legacySellOutTarget: validTarget(parsed.legacySellOutTarget) ?? validTarget(legacy.sellOutTarget),
+      legacyPositivityTarget: validTarget(parsed.legacyPositivityTarget) ?? validTarget(legacy.positivityTarget),
       inboundForecastByInvoice: forecasts,
     };
   } catch {
@@ -77,11 +87,8 @@ export function networkTargetFor(competence: string) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-export function networkAllocationFor(competence: string) {
-  return loadReportSettings().networkAllocationByCompetence[competence] ?? {};
-}
-
 export function setNetworkTargetFor(competence: string, value: number | null) {
+  if (!/^\d{4}-\d{2}$/.test(competence)) throw new Error('Competência inválida para Meta Redes.');
   const settings = loadReportSettings();
   if (value === null || !Number.isFinite(value) || value < 0) delete settings.networkTargetByCompetence[competence];
   else settings.networkTargetByCompetence[competence] = value;
@@ -89,23 +96,23 @@ export function setNetworkTargetFor(competence: string, value: number | null) {
   return persist(settings);
 }
 
-export function setNetworkAllocationFor(competence: string, allocation: Record<string, number> | null) {
+export function sellOutTargetsFor(competence: string) {
   const settings = loadReportSettings();
-  if (!allocation || !Object.keys(allocation).length) delete settings.networkAllocationByCompetence[competence];
-  else settings.networkAllocationByCompetence[competence] = validAllocation(allocation);
+  return { sellOutTarget: settings.sellOutTargetByCompetence[competence] ?? null, positivityTarget: settings.positivityTargetByCompetence[competence] ?? null };
+}
+
+export function setSellOutTargetsFor(competence: string, sellOutTarget: number | null, positivityTarget: number | null) {
+  if (!/^\d{4}-\d{2}$/.test(competence)) throw new Error('Competência inválida para metas de Sell Out.');
+  const settings = loadReportSettings();
+  const sales = validTarget(sellOutTarget); const positivity = validTarget(positivityTarget);
+  if (sales === null) delete settings.sellOutTargetByCompetence[competence]; else settings.sellOutTargetByCompetence[competence] = sales;
+  if (positivity === null) delete settings.positivityTargetByCompetence[competence]; else settings.positivityTargetByCompetence[competence] = positivity;
   return persist(settings);
 }
 
-export function sellOutTargets() {
+export function reportSettingsCompetences() {
   const settings = loadReportSettings();
-  return { sellOutTarget: settings.sellOutTarget, positivityTarget: settings.positivityTarget };
-}
-
-export function setSellOutTargets(sellOutTarget: number | null, positivityTarget: number | null) {
-  const settings = loadReportSettings();
-  settings.sellOutTarget = validTarget(sellOutTarget);
-  settings.positivityTarget = validTarget(positivityTarget);
-  return persist(settings);
+  return [...new Set([...Object.keys(settings.sellOutTargetByCompetence), ...Object.keys(settings.positivityTargetByCompetence), ...Object.keys(settings.networkTargetByCompetence)])].sort().reverse();
 }
 
 export function inboundForecasts() {
@@ -124,10 +131,4 @@ export function setInboundForecast(invoice: string, date: string | null) {
 
 export function clearInboundForecast(invoice: string) {
   return setInboundForecast(invoice, null);
-}
-
-export function proportionalNetworkTargets(total: number | null, weights: Array<{ network: string; realized: number }>) {
-  if (total === null) return new Map<string, number>();
-  const denominator = weights.reduce((sum, row) => sum + Math.max(0, row.realized), 0);
-  return new Map(weights.map(row => [row.network, denominator ? total * Math.max(0, row.realized) / denominator : total / Math.max(1, weights.length)]));
 }
