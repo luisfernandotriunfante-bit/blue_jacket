@@ -55,7 +55,9 @@ export function topNetworksExportPayload(view: TopNetworksViewModel & TargetProv
 function competenceName(competence: string) { const [year, month] = competence.split('-').map(Number); return new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric' }).format(new Date(Date.UTC(year || 2026, (month || 1) - 1, 1))).replace(/^./, value => value.toUpperCase()); }
 const reportMime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const templateUrl = (fileName: string) => new URL(`templates/${fileName}`, document.baseURI).toString();
-async function withCurrentTargetHash<T extends { targetStateHash?: string }>(view: T) { return { ...view, targetStateHash: await targetStateHash(loadTargetState()) }; }
+async function withCurrentTargetHash<T>(view: T): Promise<T & { targetStateHash: string }> {
+  return { ...view, targetStateHash: await targetStateHash(loadTargetState()) };
+}
 
 export async function exportSellOutExcel(view: SellOutViewModel) { const enriched = await withCurrentTargetHash(view); const template = await fetchTemplate(templateUrl('painel-sell-out-padrao.xlsx')); const data = fillSellOutTemplateBytes(template, enriched); download(new Blob([data], { type: reportMime }), `Painel Sell Out MILENIO - ${competenceName(view.competence)}.xlsx`); }
 export async function exportTopNetworksExcel(view: TopNetworksViewModel) { const enriched = await withCurrentTargetHash(view); const template = await fetchTemplate(templateUrl('top-redes-padrao.xlsx')); const data = fillTopNetworksTemplateBytes(template, enriched); download(new Blob([data], { type: reportMime }), `Top Redes MILENIO - ${competenceName(view.competence)}.xlsx`); }
