@@ -166,10 +166,12 @@ test('falha de verificação da persistência restaura atomicamente o bundle ant
   for (const id of ids) assert.equal((await loadCandidateList(id, bundleLoadOptions(repository, storage))).records[0]?.owner, 'B');
 });
 
-test('Atualizar Bases não edita Meta Redes e MetasPage continua como editor oficial', () => {
-  const settings = readFileSync(new URL('../src/pages/ConfiguracoesPage.tsx', import.meta.url), 'utf8');
+test('Bases não edita Meta Redes e MetasPage continua como editor oficial', () => {
+  const bases = readFileSync(new URL('../src/pages/admin/BasesPage.tsx', import.meta.url), 'utf8');
+  const admin = readFileSync(new URL('../src/pages/admin/AdminPage.tsx', import.meta.url), 'utf8');
   const targets = readFileSync(new URL('../src/pages/MetasPage.tsx', import.meta.url), 'utf8');
-  assert.doesNotMatch(settings, /const competence = '2026-08'|saveNetworkTarget|setNetworkTargetFor|Meta Redes Geral|Salvar Meta Redes/);
+  assert.doesNotMatch(bases, /const competence = '2026-08'|saveNetworkTarget|setNetworkTargetFor|Meta Redes Geral|Salvar Meta Redes/);
+  assert.match(admin, /view === 'metas'\) return <MetasPage \/>/);
   assert.match(targets, /setNetworkTargetFor/);
   assert.match(targets, /Meta Redes Geral/);
 });
