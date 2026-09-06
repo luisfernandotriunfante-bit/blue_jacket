@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
+import { compareOfficialCompetence, formatCompetenceId } from '../canonical/competence';
+import { loadCompetenceState, subscribeCompetenceState, type CompetenceState } from '../canonical/competenceStore';
 import { exportTopNetworksExcel, exportTopNetworksJson } from '../canonical/operationalExporters';
 import { networkTargetFor, sellOutTargetsFor } from '../canonical/reportSettings';
 import { canonicalSellOutCompetence } from '../canonical/sellOutRules';
@@ -30,11 +32,20 @@ function MetricCard({ label, value, progress, progressLabel, info }: { label: st
   </div>;
 }
 
+function officialGateMessage(official: string | null, observed: string, status: ReturnType<typeof compareOfficialCompetence>) {
+  if (status === 'NO_OFFICIAL_COMPETENCE') return 'Nenhuma competência oficial está selecionada. Defina-a em Administração → Competências.';
+  if (status === 'OBSERVED_MIXED') return 'O M3 contém mais de uma competência de Sell Out. Redes permanece bloqueada.';
+  if (status === 'OBSERVED_UNRESOLVED' || status === 'NO_OBSERVED_DATA') return 'A competência do Sell Out não pôde ser determinada por SALE/event_date. Redes permanece bloqueada.';
+  return `Sell Out/M3 ${formatCompetenceId(observed)} diverge da competência oficial ${formatCompetenceId(official)}. Atualize o 8022 ou revise a competência oficial.`;
+}
+
 export function TopRetailNetworksPage() {
   const { activeCanonical } = useData();
   const [lists, setLists] = useState<{ m2: CanonicalList; m3: CanonicalList } | null>(null);
   const [error, setError] = useState('');
+  const [competenceState, setCompetenceState] = useState<CompetenceState | null>(() => { try { return loadCompetenceState(); } catch { return null; } });
 
+  useEffect(() => { try { return subscribeCompetenceState(setCompetenceState); } catch (reason) { setError(`Estado de Competências inválido: ${String(reason)}`); return undefined; } }, []);
   useEffect(() => {
     if (!activeCanonical) { setLists(null); return; }
     let live = true;
@@ -50,12 +61,16 @@ export function TopRetailNetworksPage() {
   if (error) return <PanelPage title="Sell Out"><PanelEmptyState variant="page" title="Erro ao carregar Redes" description={error} /></PanelPage>;
   if (!lists) return <PanelPage title="Sell Out"><PanelEmptyState variant="page" title="Carregando Redes" description="Leitura passiva de M2 e M3; nenhum parser ou motor é acionado pela aba." /></PanelPage>;
 
+  const competence = canonicalSellOutCompetence(lists.m3.records, lists.m3.competence);
+  const officialCompetence = competenceState?.currentCompetence ?? null;
+  const officialCompatibility = compareOfficialCompetence(officialCompetence, competence);
+  if (officialCompatibility !== 'MATCH') return <PanelPage title="Sell Out"><PanelAlert tone="warning"><strong>Redes bloqueada por competência oficial.</strong><br />{officialGateMessage(officialCompetence, competence, officialCompatibility)}</PanelAlert></PanelPage>;
+
   const hasTopRoute = lists.m2.records.some(row => textValue(row.top_network));
   if (!hasTopRoute) return <PanelPage title="Sell Out"><PanelEmptyState variant="page" title="Roteiro Top ainda não materializado neste build" description="Vá em Atualizar Bases, selecione somente o Roteiro Top e processe. As outras 18 fontes válidas serão reutilizadas; a aba Redes não lê o arquivo original diretamente." /></PanelPage>;
 
-  const competence = canonicalSellOutCompetence(lists.m3.records, lists.m3.competence);
-  const targets = sellOutTargetsFor(competence);
-  const manualNetworkTarget = networkTargetFor(competence);
+  const targets = sellOutTargetsFor(officialCompetence!);
+  const manualNetworkTarget = networkTargetFor(officialCompetence!);
   const built = buildTopRetailNetworksViewModel({
     m2: lists.m2,
     m3: lists.m3,
@@ -70,71 +85,15 @@ export function TopRetailNetworksPage() {
     <div className="panel-badge">COMPETÊNCIA · {model.competence === 'MIXED' || model.competence === 'UNRESOLVED' ? model.competence : `${model.competence.slice(5, 7)}/${model.competence.slice(0, 4)}`}</div>
     {model.audits.map(audit => <PanelAlert key={audit.code} tone="warning"><strong>{audit.code}</strong> — {audit.message} {audit.action}</PanelAlert>)}
     <div className="sellout-metric-grid" style={{ width: '100%', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
-      <MetricCard
-        label="Meta Redes"
-        value={model.totals.networkTarget === null ? 'Definir em Metas' : currency.format(model.totals.networkTarget)}
-        progress={networkAchievement}
-        progressLabel={networkAchievement === null ? 'Meta Redes não definida' : `${percent.format(networkAchievement)} atingido`}
-        info="Meta Redes Geral definida manualmente na aba Metas. As metas individuais são distribuídas pela representatividade mensal dos clientes do Roteiro Ativo, usando Meta T&C e Meta Indústria como referência de peso."
-      />
-      <MetricCard
-        label="Realizado"
-        value={currency.format(model.totals.realized)}
-        progress={sellOutShare}
-        progressLabel={sellOutShare === null ? 'Sem Sell Out realizado' : `${percent.format(sellOutShare)} do Sell Out`}
-        info="Somente SALE do M3 para CNPJs presentes no Roteiro Ativo Top Varejistas do M2."
-      />
-      <MetricCard
-        label="Clientes × com venda"
-        value={`${number.format(model.totals.customers)} × ${number.format(model.totals.customersWithSales)}`}
-        progress={customerCoverage}
-        progressLabel={customerCoverage === null ? 'Sem clientes no roteiro' : `${percent.format(customerCoverage)} com venda`}
-        info="Primeiro número: CNPJs do Roteiro Ativo. Segundo: quantos desses CNPJs tiveram venda no 8022/M3."
-      />
-      <MetricCard
-        label="Gap de valor"
-        value={model.totals.gap === null ? '—' : currency.format(model.totals.gap)}
-        progress={gapShare}
-        progressLabel={model.totals.gap === null ? 'Meta Redes não definida' : model.totals.gap <= 0 ? 'Meta Redes atingida' : `${percent.format(gapShare ?? 0)} restante`}
-        info="Diferença entre a Meta Redes Geral e o realizado dos clientes que pertencem ao Roteiro Ativo."
-      />
+      <MetricCard label="Meta Redes" value={model.totals.networkTarget === null ? 'Definir em Metas' : currency.format(model.totals.networkTarget)} progress={networkAchievement} progressLabel={networkAchievement === null ? 'Meta Redes não definida' : `${percent.format(networkAchievement)} atingido`} info="Meta Redes Geral definida manualmente na aba Metas. As metas individuais são distribuídas pela representatividade mensal dos clientes do Roteiro Ativo, usando Meta T&C e Meta Indústria como referência de peso." />
+      <MetricCard label="Realizado" value={currency.format(model.totals.realized)} progress={sellOutShare} progressLabel={sellOutShare === null ? 'Sem Sell Out realizado' : `${percent.format(sellOutShare)} do Sell Out`} info="Somente SALE do M3 para CNPJs presentes no Roteiro Ativo Top Varejistas do M2." />
+      <MetricCard label="Clientes × com venda" value={`${number.format(model.totals.customers)} × ${number.format(model.totals.customersWithSales)}`} progress={customerCoverage} progressLabel={customerCoverage === null ? 'Sem clientes no roteiro' : `${percent.format(customerCoverage)} com venda`} info="Primeiro número: CNPJs do Roteiro Ativo. Segundo: quantos desses CNPJs tiveram venda no 8022/M3." />
+      <MetricCard label="Gap de valor" value={model.totals.gap === null ? '—' : currency.format(model.totals.gap)} progress={gapShare} progressLabel={model.totals.gap === null ? 'Meta Redes não definida' : model.totals.gap <= 0 ? 'Meta Redes atingida' : `${percent.format(gapShare ?? 0)} restante`} info="Diferença entre a Meta Redes Geral e o realizado dos clientes que pertencem ao Roteiro Ativo." />
     </div>
 
     <PanelCard>
-      <PanelSectionHeader
-        eyebrow="TOP VAREJISTAS"
-        title="Redes do Roteiro Ativo"
-        description="Somente CNPJs do Roteiro Ativo mensal, agrupados pelo CNPJ gestor/COD AGRUPAMENTO do próprio roteiro — nunca pelo texto do nome da rede. As metas Top dos CNPJs do mesmo gestor são somadas; Faturado/A faturar vêm do M3. A Meta da Rede preserva a Meta Redes Geral e usa como peso a representatividade da Meta Top agregada convertida pela relação Meta T&C ÷ Meta Indústria."
-        action={<div className="panel-inline-actions"><button className="panel-secondary-button" onClick={() => exportTopNetworksExcel(model)}>Exportar Excel</button><button className="panel-secondary-button" onClick={() => exportTopNetworksJson(model)}>Exportar JSON</button></div>}
-      />
-      <div className="panel-table-wrap">
-        <table className="panel-table" style={{ minWidth: 1540 }}>
-          <thead><tr>
-            <th>Rede</th>
-            <th className="is-right">Clientes</th>
-            <th className="is-right">Meta da rede</th>
-            <th className="is-right">Meta Top Varejista</th>
-            <th className="is-right">Ating. Meta Rede</th>
-            <th className="is-right">Ating. Meta Top</th>
-            <th className="is-right">Faturado</th>
-            <th className="is-right">A faturar</th>
-            <th className="is-right">Total</th>
-            <th className="is-right">Participação</th>
-          </tr></thead>
-          <tbody>{model.rows.map(row => <tr key={row.groupKey}>
-            <td className="is-strong">{row.network}</td>
-            <td className="is-right">{number.format(row.customers)}</td>
-            <td className="is-right">{row.networkTarget === null ? '—' : currency.format(row.networkTarget)}</td>
-            <td className="is-right">{row.topTarget === null ? '—' : currency.format(row.topTarget)}</td>
-            <td className="is-right">{percentValue(row.achievement)}</td>
-            <td className="is-right">{percentValue(row.topAchievement)}</td>
-            <td className="is-right is-blue">{currency.format(row.invoiced)}</td>
-            <td className="is-right is-green">{currency.format(row.toInvoice)}</td>
-            <td className="is-right is-strong">{currency.format(row.realized)}</td>
-            <td className="is-right">{percent.format(row.share)}</td>
-          </tr>)}</tbody>
-        </table>
-      </div>
+      <PanelSectionHeader eyebrow="TOP VAREJISTAS" title="Redes do Roteiro Ativo" description="Somente CNPJs do Roteiro Ativo mensal, agrupados pelo CNPJ gestor/COD AGRUPAMENTO do próprio roteiro — nunca pelo texto do nome da rede. As metas Top dos CNPJs do mesmo gestor são somadas; Faturado/A faturar vêm do M3. A Meta da Rede preserva a Meta Redes Geral e usa como peso a representatividade da Meta Top agregada convertida pela relação Meta T&C ÷ Meta Indústria." action={<div className="panel-inline-actions"><button className="panel-secondary-button" onClick={() => exportTopNetworksExcel(model)}>Exportar Excel</button><button className="panel-secondary-button" onClick={() => exportTopNetworksJson(model)}>Exportar JSON</button></div>} />
+      <div className="panel-table-wrap"><table className="panel-table" style={{ minWidth: 1540 }}><thead><tr><th>Rede</th><th className="is-right">Clientes</th><th className="is-right">Meta da rede</th><th className="is-right">Meta Top Varejista</th><th className="is-right">Ating. Meta Rede</th><th className="is-right">Ating. Meta Top</th><th className="is-right">Faturado</th><th className="is-right">A faturar</th><th className="is-right">Total</th><th className="is-right">Participação</th></tr></thead><tbody>{model.rows.map(row => <tr key={row.groupKey}><td className="is-strong">{row.network}</td><td className="is-right">{number.format(row.customers)}</td><td className="is-right">{row.networkTarget === null ? '—' : currency.format(row.networkTarget)}</td><td className="is-right">{row.topTarget === null ? '—' : currency.format(row.topTarget)}</td><td className="is-right">{percentValue(row.achievement)}</td><td className="is-right">{percentValue(row.topAchievement)}</td><td className="is-right is-blue">{currency.format(row.invoiced)}</td><td className="is-right is-green">{currency.format(row.toInvoice)}</td><td className="is-right is-strong">{currency.format(row.realized)}</td><td className="is-right">{percent.format(row.share)}</td></tr>)}</tbody></table></div>
     </PanelCard>
   </div></PanelPage>;
 }
