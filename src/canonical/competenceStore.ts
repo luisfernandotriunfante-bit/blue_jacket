@@ -54,7 +54,7 @@ export function validateCompetenceState(value: unknown): CompetenceState {
     ids.add(record.id);
     if (record.note !== undefined && typeof record.note !== 'string') throw new Error('COMPETENCE_STATE_INVALID');
     return { ...record } as CompetenceRecord;
-  }).sort((a, b) => b.id.localeCompare(a.id));
+  });
 
   const currentCompetence = candidate.currentCompetence ?? null;
   if (currentCompetence !== null) {
