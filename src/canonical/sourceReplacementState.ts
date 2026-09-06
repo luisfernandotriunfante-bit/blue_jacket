@@ -1,9 +1,9 @@
-import type { SourceReplacementAuthority } from './sourceDependencyContract';
+import type { SourceReplacementAuthority } from './sourceContract';
 import { REPLACEABLE_SOURCE_IDS, type SourceReplacementScope } from './sourceContract';
 
 export const SOURCE_REPLACEMENT_STATE_FORMAT = 'blue-jacket-source-replacement-state/v1' as const;
 export const SOURCE_REPLACEMENT_PROOF_VERSION = 'blue-jacket-source-replacement-proof/v1' as const;
-export const EMPTY_SOURCE_REPLACEMENT_PROOF = 'EMPTY' as const;
+export const EMPTY_SOURCE_REPLACEMENT_PROOF: string = 'EMPTY';
 const STORAGE_KEY = 'blue-jacket-v21:source-replacement-state';
 
 export type SourceReplacementCertificate = {
