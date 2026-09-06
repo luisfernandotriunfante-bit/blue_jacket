@@ -8,19 +8,27 @@ import {
 import { adminRegistryRepository } from '../../../canonical/adminRegistryIndexedDb';
 import {
   ADMIN_REGISTRY_SEED_SOURCE,
-  applyCurrentAdminRegistrySeed,
   previewCurrentAdminRegistrySeed,
 } from '../../../canonical/adminRegistrySeed';
+import {
+  systemDataOperationBusyMessage,
+  systemDataOperationCoordinator,
+} from '../../../canonical/systemDataOperationCoordinator';
+import { useData } from '../../../store/DataContext';
 import { PanelAlert, PanelCard, PanelInfoRow, PanelSectionHeader, PanelStat } from '../../../ui/pattern/PanelVisual';
+import { canonicalRegistryActions, registryUpdateCoordinator } from '../registryUpdateFlow';
 
-export const LOCAL_SAVE_NOTICE = 'Alteração salva neste aparelho. Envie a cópia atual em Administração → Sincronização para atualizar o aparelho pareado.';
+const shortHash = (value: string | null | undefined) => value ? `${value.slice(0, 12)}…` : '—';
 
 export function useRegistryPanel(kind: AdminRegistryKind) {
+  const { activeCanonical, activateCanonical, deactivateCanonical } = useData();
   const [state, setState] = useState<AdminRegistryState | null>(null);
   const [preview, setPreview] = useState<RegistrySeedPreview | null>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [lifecycle, setLifecycle] = useState(() => registryUpdateCoordinator.getState());
+  const [globalOperation, setGlobalOperation] = useState(() => systemDataOperationCoordinator.getState());
 
   const reload = useCallback(async () => {
     const loaded = await adminRegistryRepository.load();
@@ -29,37 +37,61 @@ export function useRegistryPanel(kind: AdminRegistryKind) {
   }, []);
 
   useEffect(() => { void reload().catch(reason => setError(String(reason))); }, [reload]);
+  useEffect(() => registryUpdateCoordinator.subscribe(setLifecycle), []);
+  useEffect(() => systemDataOperationCoordinator.subscribe(setGlobalOperation), []);
+  useEffect(() => {
+    if (!lifecycle.busy && lifecycle.phase !== 'IDLE') void reload();
+  }, [lifecycle.busy, lifecycle.phase, reload]);
+
+  const runtime = useMemo(() => ({
+    getActive: () => activeCanonical,
+    activate: activateCanonical,
+    deactivate: deactivateCanonical,
+  }), [activeCanonical, activateCanonical, deactivateCanonical]);
+  const actions = useMemo(() => canonicalRegistryActions(runtime), [runtime]);
 
   const previewSeed = useCallback(async () => {
-    setBusy(true); setError(''); setNotice('');
+    setPreviewBusy(true); setError(''); setNotice('');
     try { setPreview(await previewCurrentAdminRegistrySeed(kind)); }
     catch (reason) { setPreview(null); setError(String(reason)); }
-    finally { setBusy(false); }
+    finally { setPreviewBusy(false); }
   }, [kind]);
 
-  const applySeed = useCallback(async () => {
-    setBusy(true); setError('');
-    try {
-      const result = await applyCurrentAdminRegistrySeed(kind);
-      setState(result.state);
-      setPreview(result.preview);
-      setNotice(`Importação administrativa aplicada. ${LOCAL_SAVE_NOTICE}`);
-    } catch (reason) { setError(String(reason)); }
-    finally { setBusy(false); }
-  }, [kind]);
-
-  const mutationSaved = useCallback(async () => {
+  const execute = useCallback(async (action: () => Promise<any>) => {
+    setError(''); setNotice('');
+    const result = await action();
+    if (result.status === 'BUSY') {
+      setError(systemDataOperationBusyMessage(result.owner));
+      return false;
+    }
+    const lifecycleResult = result.value;
+    if (lifecycleResult.status === 'BUSY') {
+      setError('Já existe uma atualização de Cadastros em andamento.');
+      return false;
+    }
     await reload();
     setPreview(null);
-    setError('');
-    setNotice(LOCAL_SAVE_NOTICE);
+    const completion = lifecycleResult.value;
+    if (completion.phase === 'FAILED') {
+      setError(completion.error);
+      return false;
+    }
+    setNotice(completion.status);
+    if (completion.phase === 'LOCAL_SUCCESS_SYNC_FAILED') setError(completion.error);
+    return true;
   }, [reload]);
+
+  const applySeed = useCallback(() => execute(() => actions.applySeed(kind)), [actions, execute, kind]);
 
   const diagnostics = useMemo(() => diagnoseAdminRegistry(state)[kind], [state, kind]);
   const records = kind === 'rcas' ? state?.rcas ?? [] : kind === 'launches' ? state?.launches ?? [] : state?.topRetailers ?? [];
   const lastSeed = state?.lastSeed[kind] ?? null;
+  const mutationBusy = lifecycle.busy || globalOperation.busy;
 
-  return { state, records, lastSeed, diagnostics, preview, notice, error, busy, previewSeed, applySeed, mutationSaved, reload };
+  return {
+    state, records, lastSeed, diagnostics, preview, notice, error, previewBusy, mutationBusy,
+    lifecycle, globalOperation, activeCanonical, actions, previewSeed, applySeed, execute, reload,
+  };
 }
 
 export function RegistryStatus({ kind, records, lastSeed, conflicts }: {
@@ -68,8 +100,9 @@ export function RegistryStatus({ kind, records, lastSeed, conflicts }: {
   lastSeed: { fileName: string; appliedAt: string } | null;
   conflicts: number;
 }) {
+  const { activeCanonical } = useData();
   return <PanelCard compact>
-    <PanelSectionHeader eyebrow="STATUS ADMINISTRATIVO" title="Registry local" description="Estes dados ainda não participam de nenhum motor canônico." />
+    <PanelSectionHeader eyebrow="STATUS CANÔNICO" title="Registry administrativo" description="Os registros ativos participam do build canônico com precedência MANUAL → SOURCE_SEED → fonte física. Inativação MANUAL funciona como supressão administrativa." />
     <div className="panel-stat-grid">
       <PanelStat label="Registros" value={records.length} />
       <PanelStat label="Ativos" value={records.filter(record => record.active).length} />
@@ -78,13 +111,17 @@ export function RegistryStatus({ kind, records, lastSeed, conflicts }: {
     </div>
     <PanelInfoRow label="Fonte atual" value={ADMIN_REGISTRY_SEED_SOURCE[kind]} />
     <PanelInfoRow label="Último seed" value={lastSeed ? `${lastSeed.fileName} — ${new Date(lastSeed.appliedAt).toLocaleString('pt-BR')}` : 'Nunca aplicado'} />
-    <PanelInfoRow label="USO NOS MOTORES" value="AINDA NÃO ATIVO — FASE 3B" />
+    <PanelInfoRow label="USO NOS MOTORES" value="ATIVO" />
+    <PanelInfoRow label="Build ativo" value={activeCanonical?.motorBuildId ?? 'Nenhum build ativo'} />
+    <PanelInfoRow label="Admin Registry Hash" value={shortHash(activeCanonical?.adminRegistryHash)} />
+    <PanelInfoRow label="Canonical Input Hash" value={shortHash(activeCanonical?.canonicalInputHash)} />
   </PanelCard>;
 }
 
-export function SeedPreviewCard({ preview, busy, onPreview, onApply }: {
+export function SeedPreviewCard({ preview, previewBusy, mutationBusy, onPreview, onApply }: {
   preview: RegistrySeedPreview | null;
-  busy: boolean;
+  previewBusy: boolean;
+  mutationBusy: boolean;
   onPreview: () => void;
   onApply: () => void;
 }) {
@@ -92,8 +129,8 @@ export function SeedPreviewCard({ preview, busy, onPreview, onApply }: {
     <PanelSectionHeader
       eyebrow="SEED CONTROLADO"
       title="Importar da fonte atual"
-      description="A pré-visualização usa somente o ParsedSource já persistido. Alterações MANUAL nunca são sobrescritas; registros ausentes na fonte não são apagados nem inativados."
-      action={<button className="panel-button" disabled={busy} onClick={onPreview}>{busy ? 'Processando…' : 'Pré-visualizar importação'}</button>}
+      description="Pré-visualizar é passivo. Aplicar itens seguros persiste o Registry, executa full rebuild v19, ativa o novo build e sincroniza se houver pareamento. MANUAL nunca é sobrescrito pelo seed."
+      action={<button className="panel-button" disabled={previewBusy} onClick={onPreview}>{previewBusy ? 'Processando…' : 'Pré-visualizar importação'}</button>}
     />
     {preview ? <>
       <div className="panel-stat-grid">
@@ -107,7 +144,7 @@ export function SeedPreviewCard({ preview, busy, onPreview, onApply }: {
       {preview.competence ? <PanelInfoRow label="Competência explícita da fonte" value={preview.competence} /> : null}
       {preview.items.some(item => item.status === 'CONFLICT') ? <PanelAlert tone="warning">Há conflitos no preview. Linhas conflitantes não serão aplicadas silenciosamente.</PanelAlert> : null}
       {preview.items.some(item => item.status === 'MISSING_SOURCE') ? <PanelAlert tone="warning">Há registros SOURCE_SEED ausentes na fonte atual. Eles permanecerão intactos.</PanelAlert> : null}
-      <button className="panel-button" disabled={busy} onClick={onApply}>Aplicar itens seguros do preview</button>
+      <button className="panel-button" disabled={mutationBusy} onClick={onApply}>{mutationBusy ? 'Operação em andamento…' : 'Aplicar itens seguros do preview'}</button>
     </> : <PanelAlert tone="info">Nenhum seed é executado ao abrir esta página. Pré-visualize antes de aplicar.</PanelAlert>}
   </PanelCard>;
 }
