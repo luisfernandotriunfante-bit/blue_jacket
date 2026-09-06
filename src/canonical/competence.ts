@@ -6,6 +6,38 @@ const MONTHS: Record<string, string> = {
   NOV: '11', DEZ: '12', DEC: '12',
 };
 
+export type CompetenceCompatibility =
+  | 'MATCH'
+  | 'MISMATCH'
+  | 'NO_OFFICIAL_COMPETENCE'
+  | 'OBSERVED_MIXED'
+  | 'OBSERVED_UNRESOLVED'
+  | 'NO_OBSERVED_DATA';
+
+/** Validação compartilhada do identificador administrativo YYYY-MM, incluindo faixa real do mês. */
+export function isValidCompetenceId(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const match = value.match(/^(\d{4})-(\d{2})$/);
+  if (!match) return false;
+  const month = Number(match[2]);
+  return month >= 1 && month <= 12;
+}
+
+export function formatCompetenceId(value: string | null | undefined) {
+  return isValidCompetenceId(value) ? `${value.slice(5, 7)}/${value.slice(0, 4)}` : value ?? '—';
+}
+
+export function compareOfficialCompetence(
+  official: string | null,
+  observed: string | null | undefined,
+): CompetenceCompatibility {
+  if (!official) return 'NO_OFFICIAL_COMPETENCE';
+  if (observed === null || observed === undefined || observed === '') return 'NO_OBSERVED_DATA';
+  if (observed === 'MIXED') return 'OBSERVED_MIXED';
+  if (observed === 'UNRESOLVED' || !isValidCompetenceId(observed)) return 'OBSERVED_UNRESOLVED';
+  return observed === official ? 'MATCH' : 'MISMATCH';
+}
+
 /** Extrai competência somente de evidência explícita no nome da fonte. */
 export function competenceFromFileName(fileName: string | null | undefined) {
   if (!fileName) return null;
