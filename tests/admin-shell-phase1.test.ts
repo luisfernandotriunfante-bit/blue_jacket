@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { ADMIN_TABS, MAIN_SECTIONS, initialNavigationState } from '../src/navigation.ts';
-import { CANONICAL_ENGINE_VERSION, REQUIRED_SOURCE_IDS } from '../src/canonical/sourceImport.ts';
+import { CANONICAL_ENGINE_VERSION } from '../src/canonical/sourceImport.ts';
+import { HARD_REQUIRED_SOURCE_IDS, REPLACEABLE_SOURCE_IDS, SUPPORTED_SOURCE_IDS } from '../src/canonical/sourceContract.ts';
 
 const source = (relative: string) => readFileSync(new URL(relative, import.meta.url), 'utf8');
 
@@ -24,17 +25,18 @@ test('uso normal abre Estoque e deep-link sync abre Administração → Sincroni
   assert.deepEqual(initialNavigationState('sync=BJ1.workspace.secret'), { section: 'administracao', adminTab: 'sync' });
 });
 
-test('Bases mantém as 19 fontes e não contém implementação de sync ou bundle', () => {
-  assert.equal(REQUIRED_SOURCE_IDS.length, 19);
+test('Bases mantém 19 formatos suportados, 15 hard e 4 condicionais sem conter implementação de sync ou bundle', () => {
+  assert.equal(SUPPORTED_SOURCE_IDS.length, 19); assert.equal(HARD_REQUIRED_SOURCE_IDS.length, 15); assert.equal(REPLACEABLE_SOURCE_IDS.length, 4);
   const bases = source('../src/pages/admin/BasesPage.tsx');
-  assert.match(bases, /processSourceUpdates/); assert.match(bases, /REQUIRED_SOURCE_IDS\.map/);
+  assert.match(bases, /processSourceUpdates/); assert.match(bases, /SUPPORTED_SOURCE_IDS\.map/);
+  assert.match(bases, /15 sempre obrigatórias/); assert.match(bases, /4 condicionalmente substituíveis/);
   assert.doesNotMatch(bases, /cloudSync|deviceSync|Bundle Canônico|onBundleImport|recoverTechnicalBundle|persistCanonicalBundle/);
 });
 
 test('Sincronização concentra pareamento, restore e Bundle sem tabela principal de fontes', () => {
   const sync = source('../src/pages/admin/SincronizacaoPage.tsx');
   assert.match(sync, /connectDeviceSyncWorkspace/); assert.match(sync, /restoreCurrentDeviceSnapshot/); assert.match(sync, /recoverTechnicalBundle/); assert.match(sync, /Restaurar Bundle Canônico/);
-  assert.doesNotMatch(sync, /REQUIRED_SOURCE_IDS|<table|processSourceUpdates/);
+  assert.doesNotMatch(sync, /SUPPORTED_SOURCE_IDS|<table|processSourceUpdates/);
 });
 
 test('Administração reutiliza os editores e visualizações oficiais sem duplicá-los', () => {
@@ -51,6 +53,7 @@ test('deep-link mantém o mesmo hash sync e o shell não usa Configurações com
   assert.match(main, /initialNavigationState\(window\.location\.hash\)/); assert.match(main, /activeTab === 'administracao'/); assert.doesNotMatch(main, /configuracoes|ConfiguracoesPage/);
 });
 
-test('engine canônica evolui para v20 sem alterar o shell homologado da Fase 1', () => {
-  assert.equal(CANONICAL_ENGINE_VERSION, 'browser-stage4-product-assortment-v20-targets-by-competence');
+test('engine canônica evolui para v21 sem alterar o shell homologado da Fase 1; v20 é legado', () => {
+  assert.equal(CANONICAL_ENGINE_VERSION, 'browser-stage4-product-assortment-v21-source-replacement');
+  assert.notEqual(CANONICAL_ENGINE_VERSION, 'browser-stage4-product-assortment-v20-targets-by-competence');
 });
