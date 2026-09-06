@@ -7,9 +7,9 @@ const topRetailM2 = fs.readFileSync(new URL('../src/canonical/topRetailM2.ts', i
 
 test('Roteiro Top/Registry é materializado no M2 antes de salvar o build ativo v19', () => {
   const buildIndex = sourceImport.indexOf('const bundle = buildCanonicalBundleFromStaging(parsedSources);');
-  const registryAuthorityIndex = sourceImport.indexOf('applyAdminRegistryCanonicalAuthority(bundle, parsedSources, registry);');
-  const topIndex = sourceImport.indexOf('bundle.lists.M2_CLIENTE_RCA = materializeTopRetailRouteInM2');
-  const saveIndex = sourceImport.indexOf('await saveGeneratedBuild(active, lists');
+  const registryAuthorityIndex = sourceImport.indexOf('applyAdminRegistryCanonicalAuthority(bundle, parsedSources, registry);', buildIndex);
+  const topIndex = sourceImport.indexOf('bundle.lists.M2_CLIENTE_RCA = materializeTopRetailRouteInM2', registryAuthorityIndex);
+  const saveIndex = sourceImport.indexOf('await saveGeneratedBuild(active, lists', topIndex);
 
   assert.ok(buildIndex >= 0);
   assert.ok(registryAuthorityIndex > buildIndex);
