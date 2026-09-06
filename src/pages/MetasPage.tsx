@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { loadAdminRegistryState, type } from '../canonical/adminRegistryIndexedDb';
-import type { AdminRegistryState, RcaRegistryRecord } from '../canonical/adminRegistry';
+import { loadAdminRegistryState } from '../canonical/adminRegistryIndexedDb';
+import type { AdminRegistryState } from '../canonical/adminRegistry';
 import { loadCandidateList } from '../canonical/candidateLists';
 import { formatCompetenceId, isValidCompetenceId } from '../canonical/competence';
 import { competenceRecord, loadCompetenceState, subscribeCompetenceState, type CompetenceState } from '../canonical/competenceStore';
