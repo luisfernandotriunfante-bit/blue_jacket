@@ -69,8 +69,10 @@ export function TopRetailNetworksPage() {
   const hasTopRoute = lists.m2.records.some(row => textValue(row.top_network));
   if (!hasTopRoute) return <PanelPage title="Sell Out"><PanelEmptyState variant="page" title="Roteiro Top ainda não materializado neste build" description="Vá em Atualizar Bases, selecione somente o Roteiro Top e processe. As outras 18 fontes válidas serão reutilizadas; a aba Redes não lê o arquivo original diretamente." /></PanelPage>;
 
-  const targets = sellOutTargetsFor(officialCompetence!);
-  const manualNetworkTarget = networkTargetFor(officialCompetence!);
+  // Após MATCH, a competência observada e a oficial são necessariamente a mesma.
+  // Mantemos a chave local já homologada para preservar o contrato existente de metas de Redes.
+  const targets = sellOutTargetsFor(competence);
+  const manualNetworkTarget = networkTargetFor(competence);
   const built = buildTopRetailNetworksViewModel({
     m2: lists.m2,
     m3: lists.m3,
