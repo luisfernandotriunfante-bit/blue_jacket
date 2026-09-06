@@ -1,5 +1,6 @@
 export type SystemDataOperationOwner =
   | 'BASE_UPDATE'
+  | 'REGISTRY_UPDATE'
   | 'SYNC_SEND'
   | 'SYNC_RESTORE'
   | 'SYNC_CREATE_AND_SEND'
@@ -18,9 +19,9 @@ const idleState = (): SystemDataOperationState => ({ busy: false, owner: null })
 
 /**
  * Application-lifetime mutual exclusion for operations that read or mutate
- * source staging, the active canonical build, encrypted cloud snapshots, or
- * technical bundle recovery. There is intentionally no queue: a second action
- * is rejected as BUSY so it can be requested again against fresh state later.
+ * source staging, the active canonical build, Admin Registry, encrypted cloud
+ * snapshots, or technical bundle recovery. There is intentionally no queue:
+ * a second action is rejected as BUSY so it can be requested again later.
  */
 export function createSystemDataOperationCoordinator() {
   let state = idleState();
@@ -53,10 +54,11 @@ export function createSystemDataOperationCoordinator() {
 export const systemDataOperationCoordinator = createSystemDataOperationCoordinator();
 
 export function systemDataOperationBusyMessage(owner: SystemDataOperationOwner | null) {
-  if (owner === 'BASE_UPDATE') return 'Há uma atualização de bases em andamento. Aguarde a conclusão antes de iniciar outra operação de sincronização ou recuperação.';
-  if (owner === 'SYNC_SEND') return 'Há um envio da cópia atual em andamento. Aguarde a conclusão antes de atualizar bases, restaurar ou recuperar bundle.';
+  if (owner === 'BASE_UPDATE') return 'Há uma atualização de bases em andamento. Aguarde a conclusão antes de iniciar outra operação de sincronização, cadastro ou recuperação.';
+  if (owner === 'REGISTRY_UPDATE') return 'Há uma alteração de Cadastros sendo aplicada ao motor canônico. Aguarde a conclusão antes de atualizar bases, sincronizar ou recuperar bundle.';
+  if (owner === 'SYNC_SEND') return 'Há um envio da cópia atual em andamento. Aguarde a conclusão antes de atualizar bases, alterar cadastros, restaurar ou recuperar bundle.';
   if (owner === 'SYNC_RESTORE' || owner === 'SYNC_PAIR_AND_RESTORE' || owner === 'STARTUP_REMOTE_RESTORE') return 'Há uma restauração sincronizada em andamento. Aguarde a conclusão antes de iniciar outra operação de dados.';
   if (owner === 'SYNC_CREATE_AND_SEND') return 'A sincronização entre aparelhos está sendo criada e a cópia inicial ainda está em envio. Aguarde a conclusão.';
-  if (owner === 'BUNDLE_RECOVERY') return 'Há uma recuperação de Bundle Canônico em andamento. Aguarde a conclusão antes de atualizar bases ou sincronizar.';
+  if (owner === 'BUNDLE_RECOVERY') return 'Há uma recuperação de Bundle Canônico em andamento. Aguarde a conclusão antes de atualizar bases, alterar cadastros ou sincronizar.';
   return 'Há outra operação de dados em andamento. Aguarde a conclusão e tente novamente.';
 }
