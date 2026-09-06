@@ -1,6 +1,6 @@
 import React,{createContext,useContext,useEffect,useState,type ReactNode} from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
-import { bootstrapCompetenceState, loadCompetenceState } from '../canonical/competenceStore';
+import { initializeCompetenceFromAvailableEvidence } from '../canonical/competenceStore';
 import { reportSettingsCompetences } from '../canonical/reportSettings';
 import { activateCanonicalBundleReference,deactivateCanonicalBundle,resolveActiveCanonicalBundle,type ActiveCanonicalBundle } from '../canonical/runtime';
 import { canonicalSellOutCompetence } from '../canonical/sellOutRules';
@@ -33,25 +33,31 @@ export function DataProvider({children}:{children:ReactNode}){
 
   useEffect(()=>{
     let cancelled=false;
-    const settingsCompetences=reportSettingsCompetences();
-    try {
-      if(loadCompetenceState()) return;
-    } catch(reason) {
-      setMigrationError(`Estado administrativo de competência inválido: ${String(reason)}`);
-      return;
-    }
+    const initialize=(observedM3:string|null|undefined,hasActiveBuild:boolean)=>{
+      initializeCompetenceFromAvailableEvidence({
+        hasActiveBuild,
+        observedM3,
+        // Lemos as metas no momento de aplicar a decisão. Isso também cobre
+        // settings recém-restaurados por um snapshot legado enquanto M3 era lido.
+        settingsCompetences:reportSettingsCompetences(),
+      });
+    };
+
     if(!activeCanonical) {
-      try { bootstrapCompetenceState(null,settingsCompetences); }
+      try { initialize(null,false); }
       catch(reason) { setMigrationError(`Não foi possível inicializar Competências: ${String(reason)}`); }
       return;
     }
+
     void loadCandidateList('M3_MOVIMENTO_VENDAS').then(m3=>{
       if(cancelled)return;
       const observed=canonicalSellOutCompetence(m3.records,m3.competence);
-      bootstrapCompetenceState(observed,settingsCompetences);
+      // A função relê CompetenceState aqui, depois do await. Assim uma decisão
+      // manual feita durante a leitura assíncrona sempre prevalece.
+      initialize(observed,true);
     }).catch(reason=>{
       if(cancelled)return;
-      try { bootstrapCompetenceState(null,settingsCompetences); }
+      try { initialize(null,true); }
       catch { setMigrationError(`Não foi possível inicializar Competências a partir do build: ${String(reason)}`); }
     });
     return()=>{cancelled=true};
