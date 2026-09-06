@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
-import { importCanonicalBundle } from '../canonical/bundleStore';
+import { inspectCanonicalBundle, persistCanonicalBundle } from '../canonical/bundleStore';
 import { recoverTechnicalBundle } from '../canonical/bundleRecovery';
 import {
   clearIncomingDeviceSyncCode,
@@ -39,6 +39,7 @@ function syncError(reason: unknown) {
   if (code.includes('SYNC_SNAPSHOT_MISSING')) return 'Ainda não existe uma cópia sincronizada para restaurar.';
   if (code.includes('SYNC_PAYLOAD_INVALID')) return 'A cópia recebida não passou na validação de integridade e não foi aplicada.';
   if (code.includes('BUNDLE_LEGACY_REBUILD_UNAVAILABLE:')) return 'Este bundle pertence a uma versão antiga do motor e não contém as fontes necessárias para reconstrução com a versão atual. Utilize a cópia sincronizada ou recarregue as bases.';
+  if (code.includes('BUNDLE_STAGING_SNAPSHOT_MISMATCH')) return 'Os relatórios armazenados neste aparelho não correspondem ao snapshot deste bundle. Não é possível reconstruir este backup com segurança. Restaure a cópia sincronizada correspondente ou carregue as fontes daquele snapshot.';
   if (code.includes('SOURCES_OUTDATED:')) {
     const sources = code.split('SOURCES_OUTDATED:')[1]?.split('|').map(source => SOURCE_LABELS[source] ?? source).join(', ');
     return `A regra de leitura mudou. Selecione novamente somente: ${sources || 'a fonte marcada como atualização necessária'}.`;
@@ -139,7 +140,8 @@ export function ConfiguracoesPage() {
     try {
       const recovered = await recoverTechnicalBundle({
         currentEngineVersion: CANONICAL_ENGINE_VERSION,
-        importBundle: () => importCanonicalBundle(file),
+        inspectBundle: () => inspectCanonicalBundle(file),
+        persistBundle: prepared => persistCanonicalBundle(prepared),
         rebuildFromStaging: () => buildCanonicalFromStoredSources(),
         activate: activateCanonical,
       });

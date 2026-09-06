@@ -1,4 +1,4 @@
-import type { BundleImportResult } from './bundleStore';
+import type { BundleImportResult, PreparedCanonicalBundle } from './bundleStore';
 import type { ActiveCanonicalBundle } from './runtime';
 
 export type BundleRecoveryResult = {
@@ -9,7 +9,8 @@ export type BundleRecoveryResult = {
 
 type BundleRecoveryDependencies = {
   currentEngineVersion: string;
-  importBundle: () => Promise<BundleImportResult>;
+  inspectBundle: () => Promise<PreparedCanonicalBundle>;
+  persistBundle: (prepared: PreparedCanonicalBundle) => Promise<BundleImportResult>;
   rebuildFromStaging: () => Promise<ActiveCanonicalBundle>;
   activate: (bundle: ActiveCanonicalBundle) => void;
 };
@@ -19,11 +20,13 @@ type BundleRecoveryDependencies = {
  * Um ZIP legado nunca é ativado; se sua reconstrução falhar, o estado anterior
  * permanece intacto porque `activate` ainda não foi chamado.
  */
-export async function recoverTechnicalBundle({ currentEngineVersion, importBundle, rebuildFromStaging, activate }: BundleRecoveryDependencies): Promise<BundleRecoveryResult> {
-  const imported = await importBundle();
+export async function recoverTechnicalBundle({ currentEngineVersion, inspectBundle, persistBundle, rebuildFromStaging, activate }: BundleRecoveryDependencies): Promise<BundleRecoveryResult> {
+  const prepared = await inspectBundle();
+  const imported = prepared;
   if (imported.active.engineVersion === currentEngineVersion) {
-    activate(imported.active);
-    return { active: imported.active, mode: 'COMPATIBLE', imported };
+    const persisted = await persistBundle(prepared);
+    activate(persisted.active);
+    return { active: persisted.active, mode: 'COMPATIBLE', imported: persisted };
   }
   let rebuilt: ActiveCanonicalBundle;
   try {
@@ -33,6 +36,7 @@ export async function recoverTechnicalBundle({ currentEngineVersion, importBundl
   }
   if (rebuilt.engineVersion !== currentEngineVersion) throw new Error(`BUNDLE_REBUILD_ENGINE_MISMATCH:${rebuilt.engineVersion}`);
   if (rebuilt.motorBuildId === imported.motorBuildId) throw new Error('BUNDLE_REBUILD_DID_NOT_CREATE_NEW_BUILD');
+  if (rebuilt.stagingManifestHash !== imported.stagingManifestHash) throw new Error('BUNDLE_STAGING_SNAPSHOT_MISMATCH');
   activate(rebuilt);
   return { active: rebuilt, mode: 'REBUILT', imported };
 }

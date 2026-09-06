@@ -4,11 +4,11 @@ import { hasGeneratedCanonicalBuild, loadGeneratedCanonicalList, loadGeneratedCa
 import type { CanonicalList } from './types';
 
 type ListId = CanonicalList['id'];
-type BundleManifest = {
+export type BundleManifest = {
   bundleFormat: 'blue-jacket-canonical-bundle/v1'; motorBuildId: string; stagingManifestHash: string; schemaVersion: string; engineVersion: string;
   rowCounts: Record<ListId, number>; files: Record<string, { path: string; sha256: string; bytes: number }>; createdAt: string;
 };
-type StoredBundle = { id: string; manifest: BundleManifest; zip: Blob; importedAt: string };
+export type StoredCanonicalBundle = { id: string; manifest: BundleManifest; zip: Blob; importedAt: string };
 export type BundleImportResult = {
   motorBuildId: string;
   stagingManifestHash: string;
@@ -17,13 +17,24 @@ export type BundleImportResult = {
   rowCounts: Record<ListId, number>;
   active: ActiveCanonicalBundle;
 };
+export type PreparedCanonicalBundle = BundleImportResult & {
+  bytes: Uint8Array;
+  manifest: BundleManifest;
+};
+export type CanonicalBundleRepository = {
+  put: (bundle: StoredCanonicalBundle) => Promise<void>;
+  get: (id: string) => Promise<StoredCanonicalBundle | undefined>;
+  delete: (id: string) => Promise<void>;
+};
 const DB_NAME = 'blue-jacket-v3-canonical-bundles'; const STORE_NAME = 'bundles';
 const ids: ListId[] = ['M1_ITEM_ESTOQUE', 'M2_CLIENTE_RCA', 'M3_MOVIMENTO_VENDAS', 'M4_HISTORICO_TRANSICAO'];
 const encoder = new TextEncoder(); const decoder = new TextDecoder();
 
 function db() { return new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open(DB_NAME, 1); request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME, { keyPath: 'id' }); }; request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error ?? new Error('CANONICAL_STORAGE_UNAVAILABLE')); }); }
-async function put(bundle: StoredBundle) { const database = await db(); await new Promise<void>((resolve, reject) => { const transaction = database.transaction(STORE_NAME, 'readwrite'); transaction.objectStore(STORE_NAME).put(bundle); transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error ?? new Error('CANONICAL_STORAGE_WRITE_FAILED')); }); database.close(); }
-async function get(id: string) { const database = await db(); const bundle = await new Promise<StoredBundle | undefined>((resolve, reject) => { const request = database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(id); request.onsuccess = () => resolve(request.result as StoredBundle | undefined); request.onerror = () => reject(request.error ?? new Error('CANONICAL_STORAGE_READ_FAILED')); }); database.close(); return bundle; }
+async function put(bundle: StoredCanonicalBundle) { const database = await db(); await new Promise<void>((resolve, reject) => { const transaction = database.transaction(STORE_NAME, 'readwrite'); transaction.objectStore(STORE_NAME).put(bundle); transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error ?? new Error('CANONICAL_STORAGE_WRITE_FAILED')); }); database.close(); }
+async function get(id: string) { const database = await db(); const bundle = await new Promise<StoredCanonicalBundle | undefined>((resolve, reject) => { const request = database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(id); request.onsuccess = () => resolve(request.result as StoredCanonicalBundle | undefined); request.onerror = () => reject(request.error ?? new Error('CANONICAL_STORAGE_READ_FAILED')); }); database.close(); return bundle; }
+async function remove(id: string) { const database = await db(); await new Promise<void>((resolve, reject) => { const transaction = database.transaction(STORE_NAME, 'readwrite'); transaction.objectStore(STORE_NAME).delete(id); transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error ?? new Error('CANONICAL_STORAGE_DELETE_FAILED')); }); database.close(); }
+export const indexedDbCanonicalBundleRepository: CanonicalBundleRepository = { put, get, delete: remove };
 async function sha256(bytes: Uint8Array) { const copy = new Uint8Array(bytes.byteLength); copy.set(bytes); const digest = await crypto.subtle.digest('SHA-256', copy.buffer); return Array.from(new Uint8Array(digest)).map(value => value.toString(16).padStart(2, '0')).join(''); }
 
 type ZipEntry = { method: number; compressedSize: number; uncompressedSize: number; localOffset: number };
@@ -51,10 +62,8 @@ export async function validateCanonicalBundleBytes(bytes: Uint8Array, expectedBu
   return { manifest, zipEntries };
 }
 
-export async function importCanonicalBundle(file: File): Promise<BundleImportResult> {
+export async function inspectCanonicalBundle(file: File): Promise<PreparedCanonicalBundle> {
   const bytes = new Uint8Array(await file.arrayBuffer()); const { manifest, zipEntries } = await validateCanonicalBundleBytes(bytes);
-  const bundle: StoredBundle = { id: manifest.motorBuildId, manifest, zip: new Blob([bytes], { type: 'application/zip' }), importedAt: new Date().toISOString() };
-  await put(bundle); const verified = await get(manifest.motorBuildId); if (!verified || verified.manifest.stagingManifestHash !== manifest.stagingManifestHash) throw new Error('BUNDLE_STORAGE_VERIFY_FAILED');
   const m3 = JSON.parse(decoder.decode(extract(bytes, zipEntries, 'M3_MOVIMENTO_VENDAS.json'))) as CanonicalList;
   const factTypeCounts = { SALE: 0, INBOUND_ORDER: 0, RECEIPT: 0, TARGET: 0 };
   for (const record of m3.records) { const type = record.fact_type; if (type === 'SALE' || type === 'INBOUND_ORDER' || type === 'RECEIPT' || type === 'TARGET') factTypeCounts[type] += 1; }
@@ -63,10 +72,45 @@ export async function importCanonicalBundle(file: File): Promise<BundleImportRes
     schemaVersion: manifest.schemaVersion, engineVersion: manifest.engineVersion,
     approvedAt: manifest.createdAt || new Date().toISOString(), rowCounts: manifest.rowCounts, factTypeCounts,
   };
-  return { motorBuildId: manifest.motorBuildId, stagingManifestHash: manifest.stagingManifestHash, schemaVersion: manifest.schemaVersion, engineVersion: manifest.engineVersion, rowCounts: manifest.rowCounts, active };
+  return { motorBuildId: manifest.motorBuildId, stagingManifestHash: manifest.stagingManifestHash, schemaVersion: manifest.schemaVersion, engineVersion: manifest.engineVersion, rowCounts: manifest.rowCounts, active, bytes, manifest };
 }
-async function activeZipBundle() { const active = resolveActiveCanonicalBundle(); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); const bundle = await get(active.motorBuildId); if (!bundle || bundle.manifest.stagingManifestHash !== active.stagingManifestHash) throw new Error('CANONICAL_BUNDLE_UNAVAILABLE'); return bundle; }
-export async function loadImportedBundleManifest() { const active = resolveActiveCanonicalBundle(); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); if (await hasGeneratedCanonicalBuild(active.motorBuildId)) return loadGeneratedCanonicalManifest(active.motorBuildId); const bundle = await activeZipBundle(); return { status: 'VALID', generatedAt: bundle.manifest.createdAt, lists: Object.fromEntries(ids.map(id => [id, { rowCount: bundle.manifest.rowCounts[id], warnings: 0, errors: 0 }])) as Record<string, { rowCount: number; warnings: number; errors: number }> }; }
-export async function loadImportedCanonicalList(id: ListId): Promise<CanonicalList> { const active = resolveActiveCanonicalBundle(); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); if (await hasGeneratedCanonicalBuild(active.motorBuildId)) return loadGeneratedCanonicalList(active.motorBuildId, id); const bundle = await activeZipBundle(); const bytes = new Uint8Array(await bundle.zip.arrayBuffer()); const content = extract(bytes, entries(bytes), `${id}.json`); const list = JSON.parse(decoder.decode(content)) as CanonicalList; if (list.id !== id || list.records.length !== bundle.manifest.rowCounts[id]) throw new Error(`CANONICAL_LIST_INVALID:${id}`); return list; }
-export async function hasImportedCanonicalBundle(motorBuildId: string) { return Boolean(await get(motorBuildId)) || hasGeneratedCanonicalBuild(motorBuildId); }
+
+async function storedBundleFor(active: ActiveCanonicalBundle, repository: CanonicalBundleRepository) {
+  const bundle = await repository.get(active.motorBuildId);
+  if (!bundle || bundle.manifest.stagingManifestHash !== active.stagingManifestHash || bundle.manifest.engineVersion !== active.engineVersion || bundle.manifest.schemaVersion !== active.schemaVersion) throw new Error('CANONICAL_BUNDLE_UNAVAILABLE');
+  return bundle;
+}
+export async function loadStoredCanonicalList(active: ActiveCanonicalBundle, id: ListId, repository: CanonicalBundleRepository = indexedDbCanonicalBundleRepository): Promise<CanonicalList> {
+  const bundle = await storedBundleFor(active, repository); const bytes = new Uint8Array(await bundle.zip.arrayBuffer());
+  const content = extract(bytes, entries(bytes), `${id}.json`); const list = JSON.parse(decoder.decode(content)) as CanonicalList;
+  if (list.id !== id || !Array.isArray(list.records) || list.records.length !== bundle.manifest.rowCounts[id]) throw new Error(`CANONICAL_LIST_INVALID:${id}`);
+  return list;
+}
+export async function persistCanonicalBundle(prepared: PreparedCanonicalBundle, repository: CanonicalBundleRepository = indexedDbCanonicalBundleRepository): Promise<BundleImportResult> {
+  const zipBytes = new Uint8Array(prepared.bytes.byteLength); zipBytes.set(prepared.bytes);
+  const bundle: StoredCanonicalBundle = { id: prepared.motorBuildId, manifest: prepared.manifest, zip: new Blob([zipBytes.buffer], { type: 'application/zip' }), importedAt: new Date().toISOString() };
+  const previous = await repository.get(prepared.motorBuildId);
+  try {
+    await repository.put(bundle);
+    const verified = await repository.get(prepared.motorBuildId);
+    if (!verified || verified.manifest.stagingManifestHash !== prepared.stagingManifestHash || verified.manifest.engineVersion !== prepared.engineVersion || verified.manifest.schemaVersion !== prepared.schemaVersion) throw new Error('BUNDLE_STORAGE_VERIFY_FAILED');
+    for (const id of ids) await loadStoredCanonicalList(prepared.active, id, repository);
+  } catch (reason) {
+    if (previous) await repository.put(previous); else await repository.delete(prepared.motorBuildId);
+    throw reason;
+  }
+  const { bytes: _bytes, manifest: _manifest, ...result } = prepared;
+  return result;
+}
+
+export type BundleLoadOptions = {
+  repository?: CanonicalBundleRepository;
+  activeStorage?: Storage;
+  hasGeneratedBuild?: (buildId: string) => Promise<boolean>;
+  loadGeneratedList?: typeof loadGeneratedCanonicalList;
+  loadGeneratedManifest?: typeof loadGeneratedCanonicalManifest;
+};
+export async function loadImportedBundleManifest(options: BundleLoadOptions = {}) { const active = resolveActiveCanonicalBundle(options.activeStorage); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); const hasGenerated = options.hasGeneratedBuild ?? hasGeneratedCanonicalBuild; if (await hasGenerated(active.motorBuildId)) return (options.loadGeneratedManifest ?? loadGeneratedCanonicalManifest)(active.motorBuildId); const bundle = await storedBundleFor(active, options.repository ?? indexedDbCanonicalBundleRepository); return { status: 'VALID', generatedAt: bundle.manifest.createdAt, lists: Object.fromEntries(ids.map(id => [id, { rowCount: bundle.manifest.rowCounts[id], warnings: 0, errors: 0 }])) as Record<string, { rowCount: number; warnings: number; errors: number }> }; }
+export async function loadImportedCanonicalList(id: ListId, options: BundleLoadOptions = {}): Promise<CanonicalList> { const active = resolveActiveCanonicalBundle(options.activeStorage); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); const hasGenerated = options.hasGeneratedBuild ?? hasGeneratedCanonicalBuild; if (await hasGenerated(active.motorBuildId)) return (options.loadGeneratedList ?? loadGeneratedCanonicalList)(active.motorBuildId, id); return loadStoredCanonicalList(active, id, options.repository ?? indexedDbCanonicalBundleRepository); }
+export async function hasImportedCanonicalBundle(motorBuildId: string) { return Boolean(await indexedDbCanonicalBundleRepository.get(motorBuildId)) || hasGeneratedCanonicalBuild(motorBuildId); }
 export const canonicalBundleTestHelpers = { entries, extract, sha256, encoder };
