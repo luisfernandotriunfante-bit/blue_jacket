@@ -1,4 +1,6 @@
 import { useEffect, useState, type ChangeEvent } from 'react';
+import { canonicalAdminRegistryHash } from '../../canonical/adminRegistryIdentity';
+import { loadAdminRegistryState } from '../../canonical/adminRegistryIndexedDb';
 import { inspectCanonicalBundle, persistCanonicalBundle } from '../../canonical/bundleStore';
 import { recoverTechnicalBundle } from '../../canonical/bundleRecovery';
 import {
@@ -24,9 +26,10 @@ export function syncErrorMessage(reason: unknown) {
   const code = String(reason);
   if (code.includes('SYNC_SOURCES_INCOMPLETE')) return 'Ainda faltam fontes válidas neste aparelho. Conclua a carga das 19 bases antes de ativar a sincronização.';
   if (code.includes('SYNC_SOURCE_SNAPSHOT_OUTDATED')) return 'A cópia remota foi gerada com uma regra antiga. Atualize essa base no aparelho de origem e sincronize novamente.';
-  if (code.includes('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE')) return 'As fontes ou o build ativo mudaram durante a captura. Nenhuma cópia foi enviada; aguarde a operação em andamento e tente novamente.';
+  if (code.includes('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE')) return 'As fontes, os cadastros administrativos ou o build ativo mudaram durante a captura. Nenhuma cópia foi enviada; aguarde a operação em andamento e tente novamente.';
   if (code.includes('SYNC_SNAPSHOT_MISSING')) return 'Ainda não existe uma cópia sincronizada para restaurar.';
   if (code.includes('SYNC_PAYLOAD_INVALID')) return 'A cópia recebida não passou na validação de integridade e não foi aplicada.';
+  if (code.includes('BUNDLE_LOCAL_REGISTRY_IDENTITY_REQUIRED')) return 'Não foi possível confirmar a identidade dos cadastros administrativos locais antes da recuperação do bundle.';
   if (code.includes('BUNDLE_LEGACY_REBUILD_UNAVAILABLE:')) return 'Este bundle pertence a uma versão antiga do motor e não contém as fontes necessárias para reconstrução com a versão atual. Utilize a cópia sincronizada ou recarregue as bases.';
   if (code.includes('BUNDLE_STAGING_SNAPSHOT_MISMATCH')) return 'Os relatórios armazenados neste aparelho não correspondem ao snapshot deste bundle. Não é possível reconstruir este backup com segurança. Restaure a cópia sincronizada correspondente ou carregue as fontes daquele snapshot.';
   if (code.includes('SOURCES_OUTDATED:')) {
@@ -81,12 +84,14 @@ export function SincronizacaoPage() {
       setStatus('Validando e restaurando bundle técnico…');
       setError('');
       try {
+        const localRegistryHash = await canonicalAdminRegistryHash(await loadAdminRegistryState());
         const recovered = await recoverTechnicalBundle({
           currentEngineVersion: CANONICAL_ENGINE_VERSION,
           inspectBundle: () => inspectCanonicalBundle(file),
           persistBundle: prepared => persistCanonicalBundle(prepared),
           rebuildFromStaging: () => buildCanonicalFromStoredSources(),
           activate: activateCanonical,
+          localAdminRegistryHash: localRegistryHash,
         });
         setStatus(recovered.mode === 'COMPATIBLE'
           ? `Bundle ${recovered.active.motorBuildId} validado e ativado com a engine atual.`
@@ -204,7 +209,7 @@ export function SincronizacaoPage() {
   const syncLink = deviceSync ? deviceSyncLink(deviceSync) : '';
   const mutableOperationBusy = syncing || operationState.busy;
 
-  return <PanelPage title="Sincronização" metricLabel="Engine" metricValue="v18">
+  return <PanelPage title="Sincronização" metricLabel="Engine" metricValue="v19">
     {activeCanonical
       ? <PanelAlert tone="success">Build ativo: {activeCanonical.motorBuildId}</PanelAlert>
       : <PanelAlert tone="info">Nenhum build canônico está ativo neste aparelho.</PanelAlert>}

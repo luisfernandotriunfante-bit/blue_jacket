@@ -1,26 +1,40 @@
 import { inflateSync } from 'fflate';
+import { canonicalInputHash } from './adminRegistryIdentity';
 import { APPROVED_CANONICAL_BUILD, resolveActiveCanonicalBundle, type ActiveCanonicalBundle } from './runtime';
-import { hasGeneratedCanonicalBuild, loadGeneratedCanonicalList, loadGeneratedCanonicalManifest } from './sourceImport';
+import {
+  generatedBuildMatchesActive,
+  hasGeneratedCanonicalBuild,
+  loadGeneratedCanonicalList,
+  loadGeneratedCanonicalManifest,
+} from './sourceImport';
 import type { CanonicalList } from './types';
 
 type ListId = CanonicalList['id'];
+const V19_ENGINE = 'browser-stage4-product-assortment-v19-admin-registry-authority';
 export type BundleManifest = {
-  bundleFormat: 'blue-jacket-canonical-bundle/v1'; motorBuildId: string; stagingManifestHash: string; schemaVersion: string; engineVersion: string;
-  rowCounts: Record<ListId, number>; files: Record<string, { path: string; sha256: string; bytes: number }>; createdAt: string;
+  bundleFormat: 'blue-jacket-canonical-bundle/v1';
+  motorBuildId: string;
+  stagingManifestHash: string;
+  adminRegistryHash?: string;
+  canonicalInputHash?: string;
+  schemaVersion: string;
+  engineVersion: string;
+  rowCounts: Record<ListId, number>;
+  files: Record<string, { path: string; sha256: string; bytes: number }>;
+  createdAt: string;
 };
 export type StoredCanonicalBundle = { id: string; manifest: BundleManifest; zip: Blob; importedAt: string };
 export type BundleImportResult = {
   motorBuildId: string;
   stagingManifestHash: string;
+  adminRegistryHash?: string;
+  canonicalInputHash?: string;
   schemaVersion: string;
   engineVersion: string;
   rowCounts: Record<ListId, number>;
   active: ActiveCanonicalBundle;
 };
-export type PreparedCanonicalBundle = BundleImportResult & {
-  bytes: Uint8Array;
-  manifest: BundleManifest;
-};
+export type PreparedCanonicalBundle = BundleImportResult & { bytes: Uint8Array; manifest: BundleManifest };
 export type CanonicalBundleRepository = {
   put: (bundle: StoredCanonicalBundle) => Promise<void>;
   get: (id: string) => Promise<StoredCanonicalBundle | undefined>;
@@ -48,11 +62,34 @@ function entries(bytes: Uint8Array) {
 }
 function extract(bytes: Uint8Array, map: Map<string, ZipEntry>, path: string) { const entry = map.get(path); if (!entry) throw new Error(`BUNDLE_FILE_MISSING:${path}`); const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength); if (view.getUint32(entry.localOffset, true) !== 0x04034b50) throw new Error('BUNDLE_ZIP_INVALID'); const nameLength = view.getUint16(entry.localOffset + 26, true); const extraLength = view.getUint16(entry.localOffset + 28, true); const start = entry.localOffset + 30 + nameLength + extraLength; const compressed = bytes.slice(start, start + entry.compressedSize); const output = entry.method === 0 ? compressed : entry.method === 8 ? inflateSync(compressed) : (() => { throw new Error('BUNDLE_COMPRESSION_UNSUPPORTED'); })(); if (output.byteLength !== entry.uncompressedSize) throw new Error(`BUNDLE_FILE_SIZE_INVALID:${path}`); return output; }
 
-type ExpectedBuild = Pick<typeof APPROVED_CANONICAL_BUILD, 'motorBuildId' | 'stagingManifestHash' | 'schemaVersion' | 'rowCounts'>;
+function manifestIdentityMatchesActive(manifest: BundleManifest, active: ActiveCanonicalBundle) {
+  return manifest.motorBuildId === active.motorBuildId
+    && manifest.stagingManifestHash === active.stagingManifestHash
+    && manifest.schemaVersion === active.schemaVersion
+    && manifest.engineVersion === active.engineVersion
+    && manifest.adminRegistryHash === active.adminRegistryHash
+    && manifest.canonicalInputHash === active.canonicalInputHash;
+}
+
+async function validateManifestInputIdentity(manifest: BundleManifest) {
+  if (manifest.engineVersion !== V19_ENGINE) return;
+  if (!manifest.adminRegistryHash || !manifest.canonicalInputHash) throw new Error('BUNDLE_MANIFEST_REJECTED:V19_IDENTITY_REQUIRED');
+  if (await canonicalInputHash(manifest.stagingManifestHash, manifest.adminRegistryHash) !== manifest.canonicalInputHash) throw new Error('BUNDLE_CANONICAL_INPUT_HASH_MISMATCH');
+}
+
+type ExpectedBuild = Pick<typeof APPROVED_CANONICAL_BUILD, 'motorBuildId' | 'stagingManifestHash' | 'schemaVersion' | 'rowCounts'> & Partial<Pick<ActiveCanonicalBundle, 'adminRegistryHash' | 'canonicalInputHash' | 'engineVersion'>>;
 export async function validateCanonicalBundleBytes(bytes: Uint8Array, expectedBuild?: ExpectedBuild): Promise<{ manifest: BundleManifest; zipEntries: Map<string, ZipEntry> }> {
   const zipEntries = entries(bytes); const manifest = JSON.parse(decoder.decode(extract(bytes, zipEntries, 'manifest.json'))) as BundleManifest;
   if (manifest.bundleFormat !== 'blue-jacket-canonical-bundle/v1' || !manifest.motorBuildId || !manifest.stagingManifestHash || !manifest.engineVersion || manifest.schemaVersion !== 'v1') throw new Error('BUNDLE_MANIFEST_REJECTED');
-  if (expectedBuild && (manifest.motorBuildId !== expectedBuild.motorBuildId || manifest.stagingManifestHash !== expectedBuild.stagingManifestHash || manifest.schemaVersion !== expectedBuild.schemaVersion)) throw new Error('BUNDLE_MANIFEST_REJECTED');
+  await validateManifestInputIdentity(manifest);
+  if (expectedBuild && (
+    manifest.motorBuildId !== expectedBuild.motorBuildId
+    || manifest.stagingManifestHash !== expectedBuild.stagingManifestHash
+    || manifest.schemaVersion !== expectedBuild.schemaVersion
+    || (expectedBuild.engineVersion !== undefined && manifest.engineVersion !== expectedBuild.engineVersion)
+    || (expectedBuild.adminRegistryHash !== undefined && manifest.adminRegistryHash !== expectedBuild.adminRegistryHash)
+    || (expectedBuild.canonicalInputHash !== undefined && manifest.canonicalInputHash !== expectedBuild.canonicalInputHash)
+  )) throw new Error('BUNDLE_MANIFEST_REJECTED');
   for (const id of ids) {
     const path = `${id}.json`; const expected = manifest.files[path]; const rowCount = manifest.rowCounts[id];
     if (!expected || expected.path !== path || !Number.isInteger(rowCount) || rowCount < 0 || (expectedBuild && rowCount !== expectedBuild.rowCounts[id])) throw new Error(`BUNDLE_MANIFEST_REJECTED:${id}`);
@@ -69,15 +106,24 @@ export async function inspectCanonicalBundle(file: File): Promise<PreparedCanoni
   for (const record of m3.records) { const type = record.fact_type; if (type === 'SALE' || type === 'INBOUND_ORDER' || type === 'RECEIPT' || type === 'TARGET') factTypeCounts[type] += 1; }
   const active: ActiveCanonicalBundle = {
     status: 'ACTIVE', motorBuildId: manifest.motorBuildId, stagingManifestHash: manifest.stagingManifestHash,
+    ...(manifest.adminRegistryHash ? { adminRegistryHash: manifest.adminRegistryHash } : {}),
+    ...(manifest.canonicalInputHash ? { canonicalInputHash: manifest.canonicalInputHash } : {}),
     schemaVersion: manifest.schemaVersion, engineVersion: manifest.engineVersion,
     approvedAt: manifest.createdAt || new Date().toISOString(), rowCounts: manifest.rowCounts, factTypeCounts,
   };
-  return { motorBuildId: manifest.motorBuildId, stagingManifestHash: manifest.stagingManifestHash, schemaVersion: manifest.schemaVersion, engineVersion: manifest.engineVersion, rowCounts: manifest.rowCounts, active, bytes, manifest };
+  return {
+    motorBuildId: manifest.motorBuildId,
+    stagingManifestHash: manifest.stagingManifestHash,
+    ...(manifest.adminRegistryHash ? { adminRegistryHash: manifest.adminRegistryHash } : {}),
+    ...(manifest.canonicalInputHash ? { canonicalInputHash: manifest.canonicalInputHash } : {}),
+    schemaVersion: manifest.schemaVersion, engineVersion: manifest.engineVersion, rowCounts: manifest.rowCounts, active, bytes, manifest,
+  };
 }
 
 async function storedBundleFor(active: ActiveCanonicalBundle, repository: CanonicalBundleRepository) {
   const bundle = await repository.get(active.motorBuildId);
-  if (!bundle || bundle.manifest.stagingManifestHash !== active.stagingManifestHash || bundle.manifest.engineVersion !== active.engineVersion || bundle.manifest.schemaVersion !== active.schemaVersion) throw new Error('CANONICAL_BUNDLE_UNAVAILABLE');
+  if (!bundle || !manifestIdentityMatchesActive(bundle.manifest, active)) throw new Error('CANONICAL_BUNDLE_UNAVAILABLE');
+  await validateManifestInputIdentity(bundle.manifest);
   return bundle;
 }
 export async function loadStoredCanonicalList(active: ActiveCanonicalBundle, id: ListId, repository: CanonicalBundleRepository = indexedDbCanonicalBundleRepository): Promise<CanonicalList> {
@@ -87,13 +133,15 @@ export async function loadStoredCanonicalList(active: ActiveCanonicalBundle, id:
   return list;
 }
 export async function persistCanonicalBundle(prepared: PreparedCanonicalBundle, repository: CanonicalBundleRepository = indexedDbCanonicalBundleRepository): Promise<BundleImportResult> {
+  await validateManifestInputIdentity(prepared.manifest);
+  if (!manifestIdentityMatchesActive(prepared.manifest, prepared.active)) throw new Error('BUNDLE_PREPARED_IDENTITY_MISMATCH');
   const zipBytes = new Uint8Array(prepared.bytes.byteLength); zipBytes.set(prepared.bytes);
   const bundle: StoredCanonicalBundle = { id: prepared.motorBuildId, manifest: prepared.manifest, zip: new Blob([zipBytes.buffer], { type: 'application/zip' }), importedAt: new Date().toISOString() };
   const previous = await repository.get(prepared.motorBuildId);
   try {
     await repository.put(bundle);
     const verified = await repository.get(prepared.motorBuildId);
-    if (!verified || verified.manifest.stagingManifestHash !== prepared.stagingManifestHash || verified.manifest.engineVersion !== prepared.engineVersion || verified.manifest.schemaVersion !== prepared.schemaVersion) throw new Error('BUNDLE_STORAGE_VERIFY_FAILED');
+    if (!verified || !manifestIdentityMatchesActive(verified.manifest, prepared.active)) throw new Error('BUNDLE_STORAGE_VERIFY_FAILED');
     for (const id of ids) await loadStoredCanonicalList(prepared.active, id, repository);
   } catch (reason) {
     if (previous) await repository.put(previous); else await repository.delete(prepared.motorBuildId);
@@ -107,10 +155,38 @@ export type BundleLoadOptions = {
   repository?: CanonicalBundleRepository;
   activeStorage?: Storage;
   hasGeneratedBuild?: (buildId: string) => Promise<boolean>;
+  generatedMatchesActive?: (active: ActiveCanonicalBundle) => Promise<boolean>;
   loadGeneratedList?: typeof loadGeneratedCanonicalList;
   loadGeneratedManifest?: typeof loadGeneratedCanonicalManifest;
 };
-export async function loadImportedBundleManifest(options: BundleLoadOptions = {}) { const active = resolveActiveCanonicalBundle(options.activeStorage); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); const hasGenerated = options.hasGeneratedBuild ?? hasGeneratedCanonicalBuild; if (await hasGenerated(active.motorBuildId)) return (options.loadGeneratedManifest ?? loadGeneratedCanonicalManifest)(active.motorBuildId); const bundle = await storedBundleFor(active, options.repository ?? indexedDbCanonicalBundleRepository); return { status: 'VALID', generatedAt: bundle.manifest.createdAt, lists: Object.fromEntries(ids.map(id => [id, { rowCount: bundle.manifest.rowCounts[id], warnings: 0, errors: 0 }])) as Record<string, { rowCount: number; warnings: number; errors: number }> }; }
-export async function loadImportedCanonicalList(id: ListId, options: BundleLoadOptions = {}): Promise<CanonicalList> { const active = resolveActiveCanonicalBundle(options.activeStorage); if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE'); const hasGenerated = options.hasGeneratedBuild ?? hasGeneratedCanonicalBuild; if (await hasGenerated(active.motorBuildId)) return (options.loadGeneratedList ?? loadGeneratedCanonicalList)(active.motorBuildId, id); return loadStoredCanonicalList(active, id, options.repository ?? indexedDbCanonicalBundleRepository); }
+async function shouldUseGenerated(active: ActiveCanonicalBundle, options: BundleLoadOptions) {
+  if (options.generatedMatchesActive) return options.generatedMatchesActive(active);
+  // Legacy unit-test injection remains supported. Production never selects a generated
+  // list by motorBuildId alone: it validates the complete ActiveCanonicalBundle identity.
+  if (options.hasGeneratedBuild) return options.hasGeneratedBuild(active.motorBuildId);
+  return generatedBuildMatchesActive(active);
+}
+export async function loadImportedBundleManifest(options: BundleLoadOptions = {}) {
+  const active = resolveActiveCanonicalBundle(options.activeStorage);
+  if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE');
+  if (await shouldUseGenerated(active, options)) return (options.loadGeneratedManifest ?? loadGeneratedCanonicalManifest)(active.motorBuildId);
+  const bundle = await storedBundleFor(active, options.repository ?? indexedDbCanonicalBundleRepository);
+  return {
+    status: 'VALID', generatedAt: bundle.manifest.createdAt,
+    motorBuildId: bundle.manifest.motorBuildId,
+    stagingManifestHash: bundle.manifest.stagingManifestHash,
+    adminRegistryHash: bundle.manifest.adminRegistryHash ?? null,
+    canonicalInputHash: bundle.manifest.canonicalInputHash ?? null,
+    schemaVersion: bundle.manifest.schemaVersion,
+    engineVersion: bundle.manifest.engineVersion,
+    lists: Object.fromEntries(ids.map(id => [id, { rowCount: bundle.manifest.rowCounts[id], warnings: 0, errors: 0 }])) as Record<string, { rowCount: number; warnings: number; errors: number }>,
+  };
+}
+export async function loadImportedCanonicalList(id: ListId, options: BundleLoadOptions = {}): Promise<CanonicalList> {
+  const active = resolveActiveCanonicalBundle(options.activeStorage);
+  if (!active) throw new Error('CANONICAL_BUNDLE_INACTIVE');
+  if (await shouldUseGenerated(active, options)) return (options.loadGeneratedList ?? loadGeneratedCanonicalList)(active.motorBuildId, id);
+  return loadStoredCanonicalList(active, id, options.repository ?? indexedDbCanonicalBundleRepository);
+}
 export async function hasImportedCanonicalBundle(motorBuildId: string) { return Boolean(await indexedDbCanonicalBundleRepository.get(motorBuildId)) || hasGeneratedCanonicalBuild(motorBuildId); }
-export const canonicalBundleTestHelpers = { entries, extract, sha256, encoder };
+export const canonicalBundleTestHelpers = { entries, extract, sha256, encoder, manifestIdentityMatchesActive, validateManifestInputIdentity, shouldUseGenerated };

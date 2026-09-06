@@ -6,30 +6,40 @@ import { activateCanonicalBundleReference,deactivateCanonicalBundle,resolveActiv
 import { canonicalSellOutCompetence } from '../canonical/sellOutRules';
 import { buildCanonicalFromStoredSources, CANONICAL_ENGINE_VERSION } from '../canonical/sourceImport';
 import { rebuildForCanonicalEngine } from '../canonical/engineMigration';
+import { systemDataOperationCoordinator } from '../canonical/systemDataOperationCoordinator';
 import { RESET_NOTICE } from './migrationReset';
 
 interface DataContextType { activeCanonical:ActiveCanonicalBundle|null; activateCanonical:(bundle:ActiveCanonicalBundle)=>void; deactivateCanonical:()=>void; dataNotice:string; migrationError:string }
 const DataContext=createContext<DataContextType>({activeCanonical:null,activateCanonical:()=>undefined,deactivateCanonical:()=>undefined,dataNotice:RESET_NOTICE,migrationError:''});
 export function DataProvider({children}:{children:ReactNode}){
-  const [activeCanonical,setActiveCanonical]=useState<ActiveCanonicalBundle|null>(()=>resolveActiveCanonicalBundle());
+  const [initialPointer]=useState<ActiveCanonicalBundle|null>(()=>resolveActiveCanonicalBundle());
+  const [legacyToMigrate,setLegacyToMigrate]=useState<ActiveCanonicalBundle|null>(()=>initialPointer&&initialPointer.engineVersion!==CANONICAL_ENGINE_VERSION?initialPointer:null);
+  const [activeCanonical,setActiveCanonical]=useState<ActiveCanonicalBundle|null>(()=>initialPointer?.engineVersion===CANONICAL_ENGINE_VERSION?initialPointer:null);
   const [migrationError,setMigrationError]=useState('');
+  const [operationState,setOperationState]=useState(()=>systemDataOperationCoordinator.getState());
+  useEffect(()=>systemDataOperationCoordinator.subscribe(setOperationState),[]);
+
   useEffect(()=>{
-    if(!activeCanonical||activeCanonical.engineVersion===CANONICAL_ENGINE_VERSION)return;
+    if(!legacyToMigrate||operationState.busy)return;
     let cancelled=false;
-    // A mudança é de regra canônica, não de arquivo. Remontamos o M1–M4 a
-    // partir do staging local para que campos novos (como Vl. Total do 218)
-    // não dependam de o usuário reenviar uma fonte que já está válida.
     setMigrationError('');
-    void rebuildForCanonicalEngine(activeCanonical,CANONICAL_ENGINE_VERSION,buildCanonicalFromStoredSources).then(bundle=>{
-      if(!cancelled)setActiveCanonical(activateCanonicalBundleReference(bundle));
+    // A referência v18 permanece apenas como evidência para a migração. Ela não
+    // é exposta pelo DataContext nem consumida pelas telas enquanto o rebuild v19
+    // usa as 19 fontes locais + Admin Registry local atual.
+    void systemDataOperationCoordinator.run('ENGINE_MIGRATION',async()=>rebuildForCanonicalEngine(legacyToMigrate,CANONICAL_ENGINE_VERSION,buildCanonicalFromStoredSources)).then(result=>{
+      if(cancelled||result.status==='BUSY')return;
+      const bundle=result.value;
+      setActiveCanonical(activateCanonicalBundleReference(bundle));
+      setLegacyToMigrate(null);
     }).catch(reason=>{
       if(cancelled)return;
       deactivateCanonicalBundle();
       setActiveCanonical(null);
+      setLegacyToMigrate(null);
       setMigrationError(`Build anterior incompatível com o motor atual e não pôde ser reconstruído: ${String(reason)}`);
     });
     return()=>{cancelled=true};
-  },[activeCanonical]);
+  },[legacyToMigrate,operationState.busy]);
 
   useEffect(()=>{
     let cancelled=false;
@@ -63,8 +73,9 @@ export function DataProvider({children}:{children:ReactNode}){
     return()=>{cancelled=true};
   },[activeCanonical?.motorBuildId]);
 
-  const activateCanonical=(bundle:ActiveCanonicalBundle)=>{setMigrationError('');setActiveCanonical(activateCanonicalBundleReference(bundle))};
-  const rollback=()=>{deactivateCanonicalBundle();setActiveCanonical(null);setMigrationError('')};
-  return <DataContext.Provider value={{activeCanonical,activateCanonical,deactivateCanonical:rollback,dataNotice:migrationError||(activeCanonical?`Build canônico ativo: ${activeCanonical.motorBuildId}.`:RESET_NOTICE),migrationError}}>{children}</DataContext.Provider>
+  const activateCanonical=(bundle:ActiveCanonicalBundle)=>{setMigrationError('');setLegacyToMigrate(null);setActiveCanonical(activateCanonicalBundleReference(bundle))};
+  const rollback=()=>{deactivateCanonicalBundle();setLegacyToMigrate(null);setActiveCanonical(null);setMigrationError('')};
+  const dataNotice=migrationError||(legacyToMigrate?'Build legado identificado. Migração canônica v19 em andamento.':activeCanonical?`Build canônico ativo: ${activeCanonical.motorBuildId}.`:RESET_NOTICE);
+  return <DataContext.Provider value={{activeCanonical,activateCanonical,deactivateCanonical:rollback,dataNotice,migrationError}}>{children}</DataContext.Provider>
 }
 export const useData=()=>useContext(DataContext);

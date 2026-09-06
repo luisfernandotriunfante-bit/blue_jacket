@@ -78,6 +78,6 @@ test('deep-link mantém o mesmo hash sync e o shell não usa Configurações com
   assert.doesNotMatch(main, /configuracoes|ConfiguracoesPage/);
 });
 
-test('engine canônica permanece v18', () => {
-  assert.equal(CANONICAL_ENGINE_VERSION, 'browser-stage4-product-assortment-v18-sellout-closure');
+test('engine canônica é exatamente v19 Admin Registry Authority sem alterar o shell da Fase 1', () => {
+  assert.equal(CANONICAL_ENGINE_VERSION, 'browser-stage4-product-assortment-v19-admin-registry-authority');
 });

@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
-import { setRegistryRecordActive, upsertManualTopRetail, type TopRetailRegistryRecord } from '../../../canonical/adminRegistry';
-import { adminRegistryRepository } from '../../../canonical/adminRegistryIndexedDb';
+import { type TopRetailRegistryRecord } from '../../../canonical/adminRegistry';
 import { PanelAlert, PanelCard, PanelSectionHeader } from '../../../ui/pattern/PanelVisual';
 import { RegistryMessages, RegistryStatus, SeedPreviewCard, useRegistryPanel } from './RegistryPanelShared';
 
@@ -43,15 +42,9 @@ export function TopRetailRegistryPanel() {
   const edit = (record: TopRetailRegistryRecord) => {
     setEditingId(record.id);
     setForm({
-      competence: record.competence,
-      customerCnpj: record.customerCnpj,
-      network: record.network,
-      banner: record.banner ?? '',
-      managerCnpj: record.managerCnpj ?? '',
-      groupCode: record.groupCode ?? '',
-      category: record.category ?? '',
-      topTarget: record.topTarget === null ? '' : String(record.topTarget),
-      note: record.note ?? '',
+      competence: record.competence, customerCnpj: record.customerCnpj, network: record.network, banner: record.banner ?? '',
+      managerCnpj: record.managerCnpj ?? '', groupCode: record.groupCode ?? '', category: record.category ?? '',
+      topTarget: record.topTarget === null ? '' : String(record.topTarget), note: record.note ?? '',
     });
     setMutationError('');
   };
@@ -60,7 +53,7 @@ export function TopRetailRegistryPanel() {
     setMutationError('');
     try {
       const topTarget = form.topTarget.trim() === '' ? null : Number(form.topTarget.replace(',', '.'));
-      await upsertManualTopRetail(adminRegistryRepository, {
+      const ok = await panel.execute(() => panel.actions.upsertTopRetail({
         competence: form.competence,
         customerCnpj: form.customerCnpj,
         network: form.network,
@@ -70,27 +63,24 @@ export function TopRetailRegistryPanel() {
         category: form.category || null,
         topTarget,
         note: form.note || null,
-      }, editingId ?? undefined);
-      setEditingId(null); setForm(EMPTY_FORM);
-      await panel.mutationSaved();
+      }, editingId ?? undefined));
+      if (ok) { setEditingId(null); setForm(EMPTY_FORM); }
     } catch (reason) { setMutationError(String(reason)); }
   };
 
   const toggleActive = async (record: TopRetailRegistryRecord) => {
     setMutationError('');
-    try {
-      await setRegistryRecordActive(adminRegistryRepository, 'topRetailers', record.id, !record.active);
-      await panel.mutationSaved();
-    } catch (reason) { setMutationError(String(reason)); }
+    try { await panel.execute(() => panel.actions.setActive('topRetailers', record.id, !record.active)); }
+    catch (reason) { setMutationError(String(reason)); }
   };
 
   return <>
     <RegistryStatus kind="topRetailers" records={records} lastSeed={panel.lastSeed} conflicts={panel.diagnostics.length} />
     <RegistryMessages notice={panel.notice} error={panel.error || mutationError} />
-    <SeedPreviewCard preview={panel.preview} busy={panel.busy} onPreview={() => void panel.previewSeed()} onApply={() => void panel.applySeed()} />
+    <SeedPreviewCard preview={panel.preview} previewBusy={panel.previewBusy} mutationBusy={panel.mutationBusy} onPreview={() => void panel.previewSeed()} onApply={() => void panel.applySeed()} />
 
     <PanelCard>
-      <PanelSectionHeader eyebrow="CADASTRO MENSAL" title={editingId ? 'Editar Top Varejista' : 'Criar Top Varejista'} description="A chave administrativa é competência + CNPJ do cliente. Rede é descritiva; gestor e agrupamento são preservados separadamente." />
+      <PanelSectionHeader eyebrow="CADASTRO CANÔNICO MENSAL" title={editingId ? 'Editar Top Varejista' : 'Criar Top Varejista'} description="A chave é competência + CNPJ. Salvar executa Registry → full rebuild v19 → ativação → sincronização; rede, gestor, agrupamento e Top Target passam a ser autoridade canônica." />
       <div className="panel-form-grid">
         <input className="panel-input" type="month" value={form.competence} onChange={event => setForm({ ...form, competence: event.target.value })} aria-label="Competência" />
         <input className="panel-input" placeholder="CNPJ cliente" value={form.customerCnpj} onChange={event => setForm({ ...form, customerCnpj: event.target.value })} />
@@ -102,8 +92,8 @@ export function TopRetailRegistryPanel() {
         <input className="panel-input" inputMode="decimal" placeholder="Top Target" value={form.topTarget} onChange={event => setForm({ ...form, topTarget: event.target.value })} />
         <input className="panel-input" placeholder="Observação" value={form.note} onChange={event => setForm({ ...form, note: event.target.value })} />
       </div>
-      <button className="panel-button" onClick={() => void save()}>{editingId ? 'Salvar edição' : 'Criar Top Varejista'}</button>{' '}
-      {editingId ? <button className="panel-button" onClick={() => { setEditingId(null); setForm(EMPTY_FORM); }}>Cancelar</button> : null}
+      <button className="panel-button" disabled={panel.mutationBusy} onClick={() => void save()}>{panel.mutationBusy ? 'Operação em andamento…' : editingId ? 'Salvar edição' : 'Criar Top Varejista'}</button>{' '}
+      {editingId ? <button className="panel-button" disabled={panel.mutationBusy} onClick={() => { setEditingId(null); setForm(EMPTY_FORM); }}>Cancelar</button> : null}
     </PanelCard>
 
     <PanelCard>
@@ -115,7 +105,7 @@ export function TopRetailRegistryPanel() {
       </div>
       {panel.diagnostics.length ? <PanelAlert tone="warning">{panel.diagnostics.map(item => item.message).join(' • ')}</PanelAlert> : null}
       <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Competência</th><th>CNPJ</th><th>Rede</th><th>Gestor</th><th>Agrupamento</th><th>Top Target</th><th>Origem</th><th>Status</th><th>Ações</th></tr></thead><tbody>
-        {filtered.map(record => <tr key={record.id}><td>{record.competence}</td><td>{record.customerCnpj}</td><td>{record.network}</td><td>{record.managerCnpj ?? '—'}</td><td>{record.groupCode ?? '—'}</td><td>{record.topTarget === null ? '—' : record.topTarget.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td><td>{record.origin}</td><td>{record.active ? 'ATIVO' : 'INATIVO'}</td><td><button className="panel-button" onClick={() => edit(record)}>Editar</button>{' '}<button className="panel-button" onClick={() => void toggleActive(record)}>{record.active ? 'Inativar' : 'Reativar'}</button></td></tr>)}
+        {filtered.map(record => <tr key={record.id}><td>{record.competence}</td><td>{record.customerCnpj}</td><td>{record.network}</td><td>{record.managerCnpj ?? '—'}</td><td>{record.groupCode ?? '—'}</td><td>{record.topTarget === null ? '—' : record.topTarget.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td><td>{record.origin}</td><td>{record.active ? 'ATIVO' : 'INATIVO'}</td><td><button className="panel-button" disabled={panel.mutationBusy} onClick={() => edit(record)}>Editar</button>{' '}<button className="panel-button" disabled={panel.mutationBusy} onClick={() => void toggleActive(record)}>{record.active ? 'Inativar' : 'Reativar'}</button></td></tr>)}
       </tbody></table></div>
     </PanelCard>
   </>;
