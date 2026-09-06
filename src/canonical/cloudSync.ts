@@ -1,6 +1,6 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { validateAdminRegistryState, type AdminRegistryState } from './adminRegistry';
-import { canonicalAdminRegistryHash, canonicalInputHash } from './adminRegistryIdentity';
+import { canonicalAdminRegistryHash } from './adminRegistryIdentity';
 import { loadAdminRegistryState, replaceAdminRegistryState } from './adminRegistryIndexedDb';
 import {
   loadCompetenceState,
@@ -12,6 +12,14 @@ import { buildCanonicalFromStoredSources, exportSourceStorageSnapshot, restoreSo
 import { sourceStorageSnapshotManifestHash } from './sourceSnapshotIdentity';
 import { loadReportSettings, restoreReportSettings, type ReportSettings } from './reportSettings';
 import { resolveActiveCanonicalBundle, type ActiveCanonicalBundle } from './runtime';
+import { canonicalInputHashV2, rcaTargetRegistryHash } from './targetIdentity';
+import {
+  bootstrapTargetStateFromReportSettings,
+  loadTargetState,
+  replaceTargetState,
+  validateTargetState,
+  type TargetState,
+} from './targetStore';
 
 const SYNC_URL = 'https://wsdmcnvnpjpberzeizjc.supabase.co/functions/v1/blue-jacket-sync';
 const PUBLISHABLE_KEY = 'sb_publishable_W6YcgHB39DwRXCFR0wZUBA_pAafJ8wp';
@@ -30,6 +38,7 @@ export type CloudSnapshot = {
   settings: ReportSettings;
   competenceState?: CompetenceState;
   adminRegistryState?: AdminRegistryState;
+  targetState?: TargetState;
 };
 
 export type CloudRestoreDependencies = {
@@ -37,10 +46,13 @@ export type CloudRestoreDependencies = {
   loadSettings: () => ReportSettings;
   loadCompetence: () => CompetenceState | null;
   loadAdminRegistry?: () => Promise<AdminRegistryState | null>;
+  loadTargetState?: () => TargetState | null;
   restoreSources: (snapshot: SourceStorageSnapshot) => Promise<void>;
   restoreSettings: (value: unknown) => ReportSettings;
   replaceCompetence: (value: unknown | null) => CompetenceState | null;
   replaceAdminRegistry?: (value: AdminRegistryState | null) => Promise<AdminRegistryState | null>;
+  replaceTargetState?: (value: TargetState | null) => TargetState | null;
+  bootstrapTargetState?: (settings: ReportSettings) => TargetState;
   build: () => Promise<ActiveCanonicalBundle>;
 };
 
@@ -49,10 +61,12 @@ export type CloudUploadDependencies = {
   exportSources: () => Promise<SourceStorageSnapshot>;
   sourceManifestHash: (snapshot: SourceStorageSnapshot) => Promise<string>;
   registryHash: (state: AdminRegistryState | null) => Promise<string>;
-  inputHash: (sourceHash: string, registryHash: string) => Promise<string>;
+  targetHash: (state: TargetState | null) => Promise<string>;
+  inputHash: (sourceHash: string, registryHash: string, targetHash: string) => Promise<string>;
   loadSettings: () => ReportSettings;
   loadCompetence: () => CompetenceState | null;
   loadAdminRegistry: () => Promise<AdminRegistryState | null>;
+  loadTargetState: () => TargetState | null;
   encryptSnapshot: (identity: DeviceSyncIdentity, snapshot: CloudSnapshot) => Promise<Uint8Array>;
   uploadPayload: (identity: DeviceSyncIdentity, payload: Uint8Array) => Promise<DeviceSyncStatus>;
   saveState: (identity: DeviceSyncIdentity, remoteUpdatedAt: string) => void;
@@ -155,6 +169,10 @@ async function decrypt(identity: DeviceSyncIdentity, payload: Uint8Array) {
     try { snapshot.adminRegistryState = validateAdminRegistryState(snapshot.adminRegistryState); }
     catch { throw new Error('SYNC_PAYLOAD_INVALID'); }
   }
+  if (snapshot.targetState !== undefined) {
+    try { snapshot.targetState = validateTargetState(snapshot.targetState); }
+    catch { throw new Error('SYNC_PAYLOAD_INVALID'); }
+  }
   return snapshot;
 }
 
@@ -165,6 +183,7 @@ function buildCloudSnapshot(
   competenceState: CompetenceState | null,
   createdAt = new Date().toISOString(),
   adminRegistryState: AdminRegistryState | null = null,
+  targetState: TargetState | null = null,
 ): CloudSnapshot {
   return {
     format: 'blue-jacket-device-sync/v1',
@@ -174,6 +193,7 @@ function buildCloudSnapshot(
     settings,
     ...(competenceState ? { competenceState: validateCompetenceState(competenceState) } : {}),
     ...(adminRegistryState ? { adminRegistryState: validateAdminRegistryState(adminRegistryState) } : {}),
+    ...(targetState ? { targetState: validateTargetState(targetState) } : {}),
   };
 }
 
@@ -182,35 +202,50 @@ const defaultRestoreDependencies: CloudRestoreDependencies = {
   loadSettings: loadReportSettings,
   loadCompetence: loadCompetenceState,
   loadAdminRegistry: loadAdminRegistryState,
+  loadTargetState,
   restoreSources: restoreSourceStorageSnapshot,
   restoreSettings: restoreReportSettings,
   replaceCompetence: replaceCompetenceState,
   replaceAdminRegistry: replaceAdminRegistryState,
+  replaceTargetState,
+  bootstrapTargetState: settings => bootstrapTargetStateFromReportSettings(settings).state,
   build: buildCanonicalFromStoredSources,
 };
 
 async function applyCloudSnapshot(snapshot: CloudSnapshot, dependencies: CloudRestoreDependencies = defaultRestoreDependencies) {
   if (snapshot.competenceState !== undefined) validateCompetenceState(snapshot.competenceState);
   if (snapshot.adminRegistryState !== undefined) validateAdminRegistryState(snapshot.adminRegistryState);
+  if (snapshot.targetState !== undefined) validateTargetState(snapshot.targetState);
   const previousSources = await dependencies.exportSources().catch(() => null);
   const previousSettings = dependencies.loadSettings();
   const previousCompetence = dependencies.loadCompetence();
   const previousAdminRegistry = dependencies.loadAdminRegistry ? await dependencies.loadAdminRegistry() : null;
+  const previousTarget = dependencies.loadTargetState ? dependencies.loadTargetState() : null;
   let registryTouched = false;
+  let targetTouched = false;
 
   try {
     await dependencies.restoreSources(snapshot.sources);
-    dependencies.restoreSettings(snapshot.settings);
+    const restoredSettings = dependencies.restoreSettings(snapshot.settings);
     if (snapshot.competenceState !== undefined) dependencies.replaceCompetence(snapshot.competenceState);
     if (snapshot.adminRegistryState !== undefined) {
       if (!dependencies.replaceAdminRegistry) throw new Error('SYNC_ADMIN_REGISTRY_UNAVAILABLE');
       await dependencies.replaceAdminRegistry(snapshot.adminRegistryState);
       registryTouched = true;
     }
+    if (snapshot.targetState !== undefined) {
+      if (!dependencies.replaceTargetState) throw new Error('SYNC_TARGET_STATE_UNAVAILABLE');
+      dependencies.replaceTargetState(snapshot.targetState);
+      targetTouched = true;
+    } else if (!previousTarget && dependencies.bootstrapTargetState) {
+      dependencies.bootstrapTargetState(restoredSettings);
+      targetTouched = true;
+    }
     const rebuilt = await dependencies.build();
-    if (snapshot.adminRegistryState !== undefined && snapshot.active?.adminRegistryHash && snapshot.active?.canonicalInputHash) {
+    if (snapshot.targetState !== undefined && snapshot.active?.adminRegistryHash && snapshot.active?.rcaTargetRegistryHash && snapshot.active?.canonicalInputHash) {
       if (rebuilt.stagingManifestHash !== snapshot.active.stagingManifestHash
         || rebuilt.adminRegistryHash !== snapshot.active.adminRegistryHash
+        || rebuilt.rcaTargetRegistryHash !== snapshot.active.rcaTargetRegistryHash
         || rebuilt.canonicalInputHash !== snapshot.active.canonicalInputHash) throw new Error('SYNC_RESTORED_INPUT_IDENTITY_MISMATCH');
     }
     return rebuilt;
@@ -220,6 +255,7 @@ async function applyCloudSnapshot(snapshot: CloudSnapshot, dependencies: CloudRe
       dependencies.restoreSettings(previousSettings);
       dependencies.replaceCompetence(previousCompetence);
       if (registryTouched && dependencies.replaceAdminRegistry) await dependencies.replaceAdminRegistry(previousAdminRegistry);
+      if (targetTouched && dependencies.replaceTargetState) dependencies.replaceTargetState(previousTarget);
       if (previousSources) await dependencies.build();
     } catch { /* The original restore error remains the actionable failure. */ }
     throw reason;
@@ -264,7 +300,6 @@ export async function deviceSyncRemoteStatus(identity = deviceSyncIdentity()) {
   return status;
 }
 
-/** Returns true only when a paired server snapshot is newer than this device's last verified copy. */
 export async function deviceSyncHasNewerRemoteSnapshot(identity = deviceSyncIdentity()) {
   if (!identity) return false;
   const local = deviceSyncState();
@@ -319,10 +354,12 @@ const defaultUploadDependencies: CloudUploadDependencies = {
   exportSources: exportSourceStorageSnapshot,
   sourceManifestHash: sourceStorageSnapshotManifestHash,
   registryHash: canonicalAdminRegistryHash,
-  inputHash: canonicalInputHash,
+  targetHash: rcaTargetRegistryHash,
+  inputHash: canonicalInputHashV2,
   loadSettings: loadReportSettings,
   loadCompetence: loadCompetenceState,
   loadAdminRegistry: loadAdminRegistryState,
+  loadTargetState,
   encryptSnapshot: encrypt,
   uploadPayload,
   saveState: saveSyncState,
@@ -338,27 +375,30 @@ async function uploadCurrentDeviceSnapshotWithDependencies(identity: DeviceSyncI
     dependencies.exportSources(),
     dependencies.loadAdminRegistry(),
   ]);
+  const targetState = dependencies.loadTargetState();
   const exportedSourcesManifestHash = await dependencies.sourceManifestHash(sources);
   const exportedAdminRegistryHash = await dependencies.registryHash(adminRegistryState);
-  const exportedCanonicalInputHash = await dependencies.inputHash(exportedSourcesManifestHash, exportedAdminRegistryHash);
+  const exportedRcaTargetRegistryHash = await dependencies.targetHash(targetState);
+  const exportedCanonicalInputHash = await dependencies.inputHash(exportedSourcesManifestHash, exportedAdminRegistryHash, exportedRcaTargetRegistryHash);
   const activeAfter = dependencies.getActive();
 
   if (
     !activeAfter ||
     !activeBefore.adminRegistryHash ||
+    !activeBefore.rcaTargetRegistryHash ||
     !activeBefore.canonicalInputHash ||
     activeBefore.motorBuildId !== activeAfter.motorBuildId ||
     activeBefore.stagingManifestHash !== activeAfter.stagingManifestHash ||
     activeBefore.adminRegistryHash !== activeAfter.adminRegistryHash ||
+    activeBefore.rcaTargetRegistryHash !== activeAfter.rcaTargetRegistryHash ||
     activeBefore.canonicalInputHash !== activeAfter.canonicalInputHash ||
     exportedSourcesManifestHash !== activeBefore.stagingManifestHash ||
     exportedAdminRegistryHash !== activeBefore.adminRegistryHash ||
+    exportedRcaTargetRegistryHash !== activeBefore.rcaTargetRegistryHash ||
     exportedCanonicalInputHash !== activeBefore.canonicalInputHash
-  ) {
-    throw new Error('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE');
-  }
+  ) throw new Error('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE');
 
-  const snapshot = buildCloudSnapshot(activeBefore, sources, dependencies.loadSettings(), dependencies.loadCompetence(), createdAt, adminRegistryState);
+  const snapshot = buildCloudSnapshot(activeBefore, sources, dependencies.loadSettings(), dependencies.loadCompetence(), createdAt, adminRegistryState, targetState);
   const payload = await dependencies.encryptSnapshot(identity, snapshot);
   const status = await dependencies.uploadPayload(identity, payload);
   dependencies.saveState(identity, status.updatedAt);
