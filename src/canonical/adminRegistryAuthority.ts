@@ -1,5 +1,5 @@
 import type { AdminRegistryState, LaunchRegistryRecord, TopRetailRegistryRecord } from './adminRegistry';
-import type { CanonicalAudit, ParsedSource, RawTyped } from './types';
+import type { CanonicalAudit, RawTyped } from './types';
 
 export type RegistryAuthority = 'MANUAL_REGISTRY' | 'ADMIN_REGISTRY' | 'IMPORTED_SOURCE' | 'NONE';
 export type AuthorityResolution<T> = {
@@ -20,7 +20,7 @@ const codeKey = (value: unknown) => {
 const eanKey = (value: unknown) => {
   const digits = String(value ?? '').replace(/\D/g, '');
   if (digits.length === 12) return `0${digits}`;
-  return digits.length === 13 ? digits : digits.length === 14 ? digits : '';
+  return digits.length === 13 || digits.length === 14 ? digits : '';
 };
 const semanticLaunch = (record: LaunchRegistryRecord) => JSON.stringify({
   winthorCode: record.winthorCode, ean: record.ean, description: record.description, type: record.type,
@@ -32,6 +32,7 @@ const semanticTop = (record: TopRetailRegistryRecord) => JSON.stringify({
   managerCnpj: record.managerCnpj, groupCode: record.groupCode, category: record.category, topTarget: record.topTarget,
   active: record.active, origin: record.origin,
 });
+const isLaunchRegistryRecord = (record: LaunchRegistryRecord | Record<string, RawTyped>): record is LaunchRegistryRecord => typeof (record as Partial<LaunchRegistryRecord>).id === 'string' && ((record as Partial<LaunchRegistryRecord>).origin === 'MANUAL' || (record as Partial<LaunchRegistryRecord>).origin === 'SOURCE_SEED');
 
 export const competenceFromDateEvidence = (value: unknown) => {
   const raw = String(value ?? '').trim();
@@ -74,8 +75,8 @@ export function resolveLaunchAuthority(
   const manual = resolveTier('MANUAL');
   if (manual.ambiguous) return { record: null, authority: 'MANUAL_REGISTRY', registryRecordId: null, tombstone: false, ambiguous: true, validityUnresolved: manual.unresolved };
   if (manual.record) return { record: manual.record, authority: 'MANUAL_REGISTRY', registryRecordId: manual.record.id, tombstone: false, ambiguous: false, validityUnresolved: manual.unresolved };
-  const manualTombstone = matching.some(record => record.origin === 'MANUAL' && !record.active);
-  if (manualTombstone) return { record: null, authority: 'MANUAL_REGISTRY', registryRecordId: matching.find(record => record.origin === 'MANUAL' && !record.active)?.id ?? null, tombstone: true, ambiguous: false, validityUnresolved: manual.unresolved };
+  const manualTombstone = matching.find(record => record.origin === 'MANUAL' && !record.active);
+  if (manualTombstone) return { record: null, authority: 'MANUAL_REGISTRY', registryRecordId: manualTombstone.id, tombstone: true, ambiguous: false, validityUnresolved: manual.unresolved };
   if (manual.unresolved) return { record: null, authority: 'MANUAL_REGISTRY', registryRecordId: null, tombstone: false, ambiguous: false, validityUnresolved: true };
 
   const seeded = resolveTier('SOURCE_SEED');
@@ -89,16 +90,19 @@ export function resolveLaunchAuthority(
 
 export function effectiveRegistryLaunches(registry: AdminRegistryState | null, competence?: string | null) {
   const records = registry?.launches ?? [];
-  const keys = new Set(records.flatMap(record => [record.winthorCode ? `W:${codeKey(record.winthorCode)}` : '', record.ean ? `E:${eanKey(record.ean)}` : '']).filter(Boolean));
+  const keys = new Set<string>(records.flatMap(record => [record.winthorCode ? `W:${codeKey(record.winthorCode)}` : '', record.ean ? `E:${eanKey(record.ean)}` : '']).filter((value): value is string => Boolean(value)));
   const winners: LaunchRegistryRecord[] = [];
   const audits: CanonicalAudit[] = [];
   const seenIds = new Set<string>();
   for (const key of keys) {
-    const [kind, value] = key.split(':');
+    const [kind, value = ''] = key.split(':');
     const resolution = resolveLaunchAuthority(registry, null, { winthorCode: kind === 'W' ? value : null, eans: kind === 'E' ? [value] : [], competence });
     if (resolution.ambiguous) audits.push(authorityAudit('ADMIN_REGISTRY_LAUNCH_AMBIGUOUS', `Lançamento ${key} possui definições conflitantes na camada administrativa.`));
     else if (resolution.validityUnresolved) audits.push(authorityAudit('ADMIN_REGISTRY_VALIDITY_UNRESOLVED', `Lançamento ${key} possui vigência, mas a competência do snapshot não é inequívoca.`));
-    else if (resolution.record && 'id' in resolution.record && !seenIds.has(resolution.record.id)) { winners.push(resolution.record); seenIds.add(resolution.record.id); }
+    else if (resolution.record && isLaunchRegistryRecord(resolution.record) && !seenIds.has(resolution.record.id)) {
+      winners.push(resolution.record);
+      seenIds.add(resolution.record.id);
+    }
   }
   return { records: winners, audits };
 }
@@ -123,4 +127,4 @@ export function authorityAudit(code: string, message: string, source = 'AdminReg
   return { code, severity: 'WARNING', source, file: '', message, action: 'Resolver a divergência em Administração → Cadastros antes de depender deste vínculo.' };
 }
 
-export const adminRegistryAuthorityTestHelpers = { codeKey, eanKey, semanticLaunch, semanticTop, typed };
+export const adminRegistryAuthorityTestHelpers = { codeKey, eanKey, semanticLaunch, semanticTop, typed, isLaunchRegistryRecord };
