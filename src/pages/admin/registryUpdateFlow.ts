@@ -40,7 +40,7 @@ export type RegistryUpdateCoordinatorState = {
 };
 
 type ActivePhase = 'MUTATING' | 'BUILDING' | 'ACTIVATING' | 'SYNCING';
-type Completion = {
+export type RegistryUpdateCompletion = {
   phase: 'SUCCESS' | 'LOCAL_SUCCESS_SYNC_FAILED' | 'FAILED';
   status: string;
   error: string;
@@ -49,6 +49,7 @@ type Completion = {
   canonicalInputHash?: string | null;
 };
 type Listener = (state: RegistryUpdateCoordinatorState) => void;
+export type RegistryUpdateControls = { setPhase: (phase: ActivePhase) => void };
 
 const idle = (): RegistryUpdateCoordinatorState => ({
   phase: 'IDLE', busy: false, status: '', error: '', motorBuildId: null, adminRegistryHash: null, canonicalInputHash: null,
@@ -74,7 +75,7 @@ export function createRegistryUpdateCoordinator() {
       for (const listener of listeners) listener(state);
       return true;
     },
-    async run(operation: (controls: { setPhase: (phase: ActivePhase) => void }) => Promise<Completion>) {
+    async run(operation: (controls: RegistryUpdateControls) => Promise<RegistryUpdateCompletion>) {
       if (state.busy) return { status: 'BUSY' } as const;
       publish({ phase: 'MUTATING', busy: true, status: '', error: '', motorBuildId: null, adminRegistryHash: null, canonicalInputHash: null });
       try {
@@ -91,7 +92,7 @@ export function createRegistryUpdateCoordinator() {
         return { status: 'DONE', value: completion } as const;
       } catch (reason) {
         const error = reason instanceof Error ? reason.message : String(reason);
-        const completion: Completion = { phase: 'FAILED', status: '', error };
+        const completion: RegistryUpdateCompletion = { phase: 'FAILED', status: '', error };
         publish({ ...completion, busy: false, motorBuildId: null, adminRegistryHash: null, canonicalInputHash: null });
         return { status: 'DONE', value: completion } as const;
       }
@@ -108,72 +109,95 @@ export type RegistryUpdateRuntime = {
   autoSync?: (active: ActiveCanonicalBundle) => Promise<BaseAutoSyncResult>;
 };
 
-export type RegistryMutationResult<T> = {
-  mutationResult: T;
-  state: AdminRegistryState | null;
-  active: ActiveCanonicalBundle;
+export type RegistryTransactionDependencies = {
+  loadRegistry: () => Promise<AdminRegistryState | null>;
+  replaceRegistry: (state: AdminRegistryState | null) => Promise<AdminRegistryState | null>;
+  build: (registry: AdminRegistryState | null) => Promise<ActiveCanonicalBundle>;
+  registryHash: (state: AdminRegistryState | null) => Promise<string>;
+  inputHash: (sourceHash: string, registryHash: string) => Promise<string>;
+  sync: (active: ActiveCanonicalBundle) => Promise<BaseAutoSyncResult>;
+  engineVersion: string;
 };
 
-export async function runCanonicalRegistryMutation<T>(mutation: () => Promise<T>, runtime: RegistryUpdateRuntime) {
-  return systemDataOperationCoordinator.run('REGISTRY_UPDATE', async () => registryUpdateCoordinator.run(async controls => {
-    const previousRegistry = await adminRegistryRepository.load();
-    const previousActive = runtime.getActive();
-    let activated = false;
-    let mutationResult!: T;
+const defaultTransactionDependencies: RegistryTransactionDependencies = {
+  loadRegistry: () => adminRegistryRepository.load(),
+  replaceRegistry: state => adminRegistryRepository.replace(state),
+  build: registry => buildCanonicalFromStoredSources(undefined, registry),
+  registryHash: canonicalAdminRegistryHash,
+  inputHash: canonicalInputHash,
+  sync: active => syncActiveBuildIfPaired(active.motorBuildId),
+  engineVersion: CANONICAL_ENGINE_VERSION,
+};
+
+/** Core transaction, browser-independent and fully injectable for C28-C30. */
+export async function executeRegistryUpdateTransaction<T>(
+  mutation: () => Promise<T>,
+  runtime: RegistryUpdateRuntime,
+  controls: RegistryUpdateControls,
+  dependencies: RegistryTransactionDependencies = defaultTransactionDependencies,
+): Promise<RegistryUpdateCompletion> {
+  const previousRegistry = await dependencies.loadRegistry();
+  const previousActive = runtime.getActive();
+  let activated = false;
+  try {
+    controls.setPhase('MUTATING');
+    await mutation();
+    const nextRegistry = await dependencies.loadRegistry();
+    const expectedRegistryHash = await dependencies.registryHash(nextRegistry);
+
+    controls.setPhase('BUILDING');
+    const nextActive = await dependencies.build(nextRegistry);
+    const expectedInputHash = await dependencies.inputHash(nextActive.stagingManifestHash, expectedRegistryHash);
+    if (nextActive.engineVersion !== dependencies.engineVersion
+      || nextActive.adminRegistryHash !== expectedRegistryHash
+      || nextActive.canonicalInputHash !== expectedInputHash) throw new Error('ADMIN_REGISTRY_BUILD_IDENTITY_MISMATCH');
+
+    controls.setPhase('ACTIVATING');
+    runtime.activate(nextActive);
+    activated = true;
+
+    controls.setPhase('SYNCING');
+    let sync: BaseAutoSyncResult | { status: 'SYNC_FAILED'; error: unknown };
     try {
-      controls.setPhase('MUTATING');
-      mutationResult = await mutation();
-      const nextRegistry = await adminRegistryRepository.load();
-      const expectedRegistryHash = await canonicalAdminRegistryHash(nextRegistry);
+      sync = runtime.autoSync ? await runtime.autoSync(nextActive) : await dependencies.sync(nextActive);
+    } catch (error) {
+      sync = { status: 'SYNC_FAILED', error };
+    }
 
-      controls.setPhase('BUILDING');
-      const nextActive = await buildCanonicalFromStoredSources(undefined, nextRegistry);
-      const expectedInputHash = await canonicalInputHash(nextActive.stagingManifestHash, expectedRegistryHash);
-      if (nextActive.engineVersion !== CANONICAL_ENGINE_VERSION
-        || nextActive.adminRegistryHash !== expectedRegistryHash
-        || nextActive.canonicalInputHash !== expectedInputHash) throw new Error('ADMIN_REGISTRY_BUILD_IDENTITY_MISMATCH');
-
-      controls.setPhase('ACTIVATING');
-      runtime.activate(nextActive);
-      activated = true;
-
-      let sync: BaseAutoSyncResult | { status: 'SYNC_FAILED'; error: unknown } = { status: 'NOT_PAIRED' };
-      controls.setPhase('SYNCING');
-      try {
-        sync = runtime.autoSync ? await runtime.autoSync(nextActive) : await syncActiveBuildIfPaired(nextActive.motorBuildId);
-      } catch (error) {
-        sync = { status: 'SYNC_FAILED', error };
-      }
-
-      const localStatus = `ALTERAÇÃO CANÔNICA CONCLUÍDA — Build ativo: ${nextActive.motorBuildId}.`;
-      if (sync.status === 'SYNC_FAILED') {
-        return {
-          phase: 'LOCAL_SUCCESS_SYNC_FAILED' as const,
-          status: `${localStatus} A cópia local foi preservada, mas a sincronização não foi enviada.`,
-          error: sync.error instanceof Error ? sync.error.message : String(sync.error),
-          motorBuildId: nextActive.motorBuildId,
-          adminRegistryHash: nextActive.adminRegistryHash ?? null,
-          canonicalInputHash: nextActive.canonicalInputHash ?? null,
-        };
-      }
+    const localStatus = `ALTERAÇÃO CANÔNICA CONCLUÍDA — Build ativo: ${nextActive.motorBuildId}.`;
+    if (sync.status === 'SYNC_FAILED') {
       return {
-        phase: 'SUCCESS' as const,
-        status: sync.status === 'SYNCED' ? `${localStatus} Sincronização entre aparelhos concluída.` : localStatus,
-        error: '',
+        phase: 'LOCAL_SUCCESS_SYNC_FAILED',
+        status: `${localStatus} A cópia local foi preservada, mas a sincronização não foi enviada.`,
+        error: sync.error instanceof Error ? sync.error.message : String(sync.error),
         motorBuildId: nextActive.motorBuildId,
         adminRegistryHash: nextActive.adminRegistryHash ?? null,
         canonicalInputHash: nextActive.canonicalInputHash ?? null,
       };
-    } catch (reason) {
-      if (!activated) {
-        try {
-          await adminRegistryRepository.replace(previousRegistry);
-          if (previousActive) runtime.activate(previousActive); else runtime.deactivate();
-        } catch { /* keep original failure as the actionable error */ }
-      }
-      throw reason;
     }
-  }));
+    return {
+      phase: 'SUCCESS',
+      status: sync.status === 'SYNCED' ? `${localStatus} Sincronização entre aparelhos concluída.` : localStatus,
+      error: '',
+      motorBuildId: nextActive.motorBuildId,
+      adminRegistryHash: nextActive.adminRegistryHash ?? null,
+      canonicalInputHash: nextActive.canonicalInputHash ?? null,
+    };
+  } catch (reason) {
+    if (!activated) {
+      try {
+        await dependencies.replaceRegistry(previousRegistry);
+        if (previousActive) runtime.activate(previousActive); else runtime.deactivate();
+      } catch { /* original error remains actionable */ }
+    }
+    throw reason;
+  }
+}
+
+export async function runCanonicalRegistryMutation<T>(mutation: () => Promise<T>, runtime: RegistryUpdateRuntime) {
+  return systemDataOperationCoordinator.run('REGISTRY_UPDATE', async () => registryUpdateCoordinator.run(
+    controls => executeRegistryUpdateTransaction(mutation, runtime, controls),
+  ));
 }
 
 export function canonicalRegistryActions(runtime: RegistryUpdateRuntime) {
