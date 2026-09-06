@@ -16,22 +16,18 @@ export function DataProvider({children}:{children:ReactNode}){
   const [legacyToMigrate,setLegacyToMigrate]=useState<ActiveCanonicalBundle|null>(()=>initialPointer&&initialPointer.engineVersion!==CANONICAL_ENGINE_VERSION?initialPointer:null);
   const [activeCanonical,setActiveCanonical]=useState<ActiveCanonicalBundle|null>(()=>initialPointer?.engineVersion===CANONICAL_ENGINE_VERSION?initialPointer:null);
   const [migrationError,setMigrationError]=useState('');
+  const [operationState,setOperationState]=useState(()=>systemDataOperationCoordinator.getState());
+  useEffect(()=>systemDataOperationCoordinator.subscribe(setOperationState),[]);
+
   useEffect(()=>{
-    if(!legacyToMigrate)return;
+    if(!legacyToMigrate||operationState.busy)return;
     let cancelled=false;
     setMigrationError('');
     // A referência v18 permanece apenas como evidência para a migração. Ela não
     // é exposta pelo DataContext nem consumida pelas telas enquanto o rebuild v19
     // usa as 19 fontes locais + Admin Registry local atual.
     void systemDataOperationCoordinator.run('ENGINE_MIGRATION',async()=>rebuildForCanonicalEngine(legacyToMigrate,CANONICAL_ENGINE_VERSION,buildCanonicalFromStoredSources)).then(result=>{
-      if(cancelled)return;
-      if(result.status==='BUSY'){
-        // Nenhuma fila obsoleta: uma operação concorrente continua dona do gate.
-        // Mantemos o build legado não consumível e tentamos de novo após um tick
-        // explícito do estado React, sem executar em paralelo.
-        setLegacyToMigrate(current=>current?{...current}:current);
-        return;
-      }
+      if(cancelled||result.status==='BUSY')return;
       const bundle=result.value;
       setActiveCanonical(activateCanonicalBundleReference(bundle));
       setLegacyToMigrate(null);
@@ -43,7 +39,7 @@ export function DataProvider({children}:{children:ReactNode}){
       setMigrationError(`Build anterior incompatível com o motor atual e não pôde ser reconstruído: ${String(reason)}`);
     });
     return()=>{cancelled=true};
-  },[legacyToMigrate]);
+  },[legacyToMigrate,operationState.busy]);
 
   useEffect(()=>{
     let cancelled=false;
