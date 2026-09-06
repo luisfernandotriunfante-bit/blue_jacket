@@ -1,5 +1,9 @@
 import React,{createContext,useContext,useEffect,useState,type ReactNode} from 'react';
+import { loadCandidateList } from '../canonical/candidateLists';
+import { bootstrapCompetenceState, loadCompetenceState } from '../canonical/competenceStore';
+import { reportSettingsCompetences } from '../canonical/reportSettings';
 import { activateCanonicalBundleReference,deactivateCanonicalBundle,resolveActiveCanonicalBundle,type ActiveCanonicalBundle } from '../canonical/runtime';
+import { canonicalSellOutCompetence } from '../canonical/sellOutRules';
 import { buildCanonicalFromStoredSources, CANONICAL_ENGINE_VERSION } from '../canonical/sourceImport';
 import { rebuildForCanonicalEngine } from '../canonical/engineMigration';
 import { RESET_NOTICE } from './migrationReset';
@@ -26,6 +30,33 @@ export function DataProvider({children}:{children:ReactNode}){
     });
     return()=>{cancelled=true};
   },[activeCanonical]);
+
+  useEffect(()=>{
+    let cancelled=false;
+    const settingsCompetences=reportSettingsCompetences();
+    try {
+      if(loadCompetenceState()) return;
+    } catch(reason) {
+      setMigrationError(`Estado administrativo de competência inválido: ${String(reason)}`);
+      return;
+    }
+    if(!activeCanonical) {
+      try { bootstrapCompetenceState(null,settingsCompetences); }
+      catch(reason) { setMigrationError(`Não foi possível inicializar Competências: ${String(reason)}`); }
+      return;
+    }
+    void loadCandidateList('M3_MOVIMENTO_VENDAS').then(m3=>{
+      if(cancelled)return;
+      const observed=canonicalSellOutCompetence(m3.records,m3.competence);
+      bootstrapCompetenceState(observed,settingsCompetences);
+    }).catch(reason=>{
+      if(cancelled)return;
+      try { bootstrapCompetenceState(null,settingsCompetences); }
+      catch { setMigrationError(`Não foi possível inicializar Competências a partir do build: ${String(reason)}`); }
+    });
+    return()=>{cancelled=true};
+  },[activeCanonical?.motorBuildId]);
+
   const activateCanonical=(bundle:ActiveCanonicalBundle)=>{setMigrationError('');setActiveCanonical(activateCanonicalBundleReference(bundle))};
   const rollback=()=>{deactivateCanonicalBundle();setActiveCanonical(null);setMigrationError('')};
   return <DataContext.Provider value={{activeCanonical,activateCanonical,deactivateCanonical:rollback,dataNotice:migrationError||(activeCanonical?`Build canônico ativo: ${activeCanonical.motorBuildId}.`:RESET_NOTICE),migrationError}}>{children}</DataContext.Provider>

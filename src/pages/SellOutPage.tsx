@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
+import { compareOfficialCompetence, formatCompetenceId } from '../canonical/competence';
+import { loadCompetenceState, subscribeCompetenceState, type CompetenceState } from '../canonical/competenceStore';
 import { buildSellOutViewModel, type SellOutRow, type SellOutViewModel } from '../canonical/operationalViewModels';
 import { exportSellOutExcel, exportSellOutJson } from '../canonical/operationalExporters';
 import { sellOutTargetsFor } from '../canonical/reportSettings';
 import { buildSellOutDashboardModel, type SellOutDashboardModel } from '../canonical/sellOutDashboardModel';
+import { canonicalSellOutCompetence } from '../canonical/sellOutRules';
 import type { CanonicalList } from '../canonical/types';
 import { useData } from '../store/DataContext';
 import { DailyMovementWindow } from '../ui/charts/DailyMovementWindow';
@@ -85,15 +88,32 @@ function Management({ model }: { model: SellOutViewModel }) {
   </>;
 }
 
+function competenceGateMessage(official: string | null, observed: string, status: ReturnType<typeof compareOfficialCompetence>) {
+  if (status === 'NO_OFFICIAL_COMPETENCE') return 'Nenhuma competência oficial está selecionada. Defina-a em Administração → Competências.';
+  if (status === 'OBSERVED_MIXED') return 'O Sell Out possui dados de mais de uma competência. Atualize o 8022 com um relatório mensal coerente.';
+  if (status === 'OBSERVED_UNRESOLVED' || status === 'NO_OBSERVED_DATA') return 'A competência do Sell Out não pôde ser determinada a partir de SALE/event_date. Nenhum período oficial foi presumido.';
+  return `Os dados de Sell Out pertencem a ${formatCompetenceId(observed)}, mas a competência oficial é ${formatCompetenceId(official)}. Atualize o 8022 ou revise a competência oficial em Administração → Competências.`;
+}
+
 export function SellOutPage({ view = 'resumo' }: { view?: SellOutView }) {
-  const { activeCanonical } = useData(); const [lists, setLists] = useState<{ m1: CanonicalList; m2: CanonicalList; m3: CanonicalList } | null>(null); const [error, setError] = useState('');
+  const { activeCanonical } = useData();
+  const [lists, setLists] = useState<{ m1: CanonicalList; m2: CanonicalList; m3: CanonicalList } | null>(null);
+  const [error, setError] = useState('');
+  const [competenceState, setCompetenceState] = useState<CompetenceState | null>(() => { try { return loadCompetenceState(); } catch { return null; } });
+  useEffect(() => { try { return subscribeCompetenceState(setCompetenceState); } catch (reason) { setError(`Estado de Competências inválido: ${String(reason)}`); return undefined; } }, []);
   useEffect(() => { if (!activeCanonical) { setLists(null); return; } let live = true; setLists(null); setError(''); Promise.all([loadCandidateList('M1_ITEM_ESTOQUE'), loadCandidateList('M2_CLIENTE_RCA'), loadCandidateList('M3_MOVIMENTO_VENDAS')]).then(([m1, m2, m3]) => { if (live) setLists({ m1, m2, m3 }); }).catch(reason => { if (live) setError(String(reason)); }); return () => { live = false; }; }, [activeCanonical]);
   if (!activeCanonical) return <PanelPage title="Sell Out"><PanelEmptyState variant="page" title="Sem bundle canônico ativo" description="Não existe fallback legado para esta tela." /></PanelPage>;
   if (error) return <PanelPage title="Sell Out"><PanelAlert tone="error">Erro ao carregar o bundle ativo: {error}</PanelAlert></PanelPage>;
   if (!lists) return <PanelPage title="Sell Out"><PanelEmptyState variant="page" title="Carregando bundle canônico" description="Leitura passiva de M1, M2 e M3; nenhum parser ou motor é acionado." /></PanelPage>;
+
+  const observedCompetence = canonicalSellOutCompetence(lists.m3.records, lists.m3.competence);
+  const officialCompetence = competenceState?.currentCompetence ?? null;
+  const compatibility = compareOfficialCompetence(officialCompetence, observedCompetence);
+  if (compatibility !== 'MATCH') return <PanelPage title="Sell Out"><PanelAlert tone="warning"><strong>Sell Out bloqueado por competência.</strong><br />{competenceGateMessage(officialCompetence, observedCompetence, compatibility)}</PanelAlert></PanelPage>;
+
   const baseModel = buildSellOutViewModel(lists);
   const canonicalModel: SellOutViewModel = { ...baseModel, motorBuildId: activeCanonical.motorBuildId, stagingManifestHash: activeCanonical.stagingManifestHash };
-  const dashboard = buildSellOutDashboardModel({ base: canonicalModel, m1: lists.m1, m3: lists.m3, targets: sellOutTargetsFor(canonicalModel.competence) });
+  const dashboard = buildSellOutDashboardModel({ base: canonicalModel, m1: lists.m1, m3: lists.m3, targets: sellOutTargetsFor(officialCompetence!) });
   const model = dashboard.operationalModel;
   return <PanelPage title="Sell Out"><div className="panel-stack sellout-page-stack"><Alerts model={model} />{view === 'gerencial' ? <Management model={model} /> : <Summary dashboard={dashboard} />}</div></PanelPage>;
 }

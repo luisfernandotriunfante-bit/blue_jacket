@@ -1,3 +1,5 @@
+import { isValidCompetenceId } from './competence';
+
 export type ReportSettings = {
   networkTargetByCompetence: Record<string, number>;
   networkAllocationByCompetence: Record<string, Record<string, number>>;
@@ -33,11 +35,11 @@ function normalizedSettings(value: unknown): ReportSettings {
     const parsed = value as Partial<ReportSettings> | null;
     if (!parsed) return empty();
     const allocations = parsed.networkAllocationByCompetence && typeof parsed.networkAllocationByCompetence === 'object'
-      ? Object.fromEntries(Object.entries(parsed.networkAllocationByCompetence).map(([competence, value]) => [competence, validAllocation(value)]))
+      ? Object.fromEntries(Object.entries(parsed.networkAllocationByCompetence).flatMap(([competence, value]) => isValidCompetenceId(competence) ? [[competence, validAllocation(value)]] : []))
       : {};
     const targets = parsed.networkTargetByCompetence && typeof parsed.networkTargetByCompetence === 'object'
       ? Object.fromEntries(Object.entries(parsed.networkTargetByCompetence).flatMap(([competence, value]) => {
-        const target = validTarget(value);
+        const target = isValidCompetenceId(competence) ? validTarget(value) : null;
         return target === null ? [] : [[competence, target]];
       }))
       : {};
@@ -50,7 +52,7 @@ function normalizedSettings(value: unknown): ReportSettings {
       : {};
     const byCompetence = (candidate: unknown) => candidate && typeof candidate === 'object'
       ? Object.fromEntries(Object.entries(candidate as Record<string, unknown>).flatMap(([competence, value]) => {
-        const target = /^\d{4}-\d{2}$/.test(competence) ? validTarget(value) : null;
+        const target = isValidCompetenceId(competence) ? validTarget(value) : null;
         return target === null ? [] : [[competence, target]];
       })) : {};
     const legacy = parsed as Partial<ReportSettings> & { sellOutTarget?: unknown; positivityTarget?: unknown };
@@ -88,7 +90,7 @@ export function networkTargetFor(competence: string) {
 }
 
 export function setNetworkTargetFor(competence: string, value: number | null) {
-  if (!/^\d{4}-\d{2}$/.test(competence)) throw new Error('Competência inválida para Meta Redes.');
+  if (!isValidCompetenceId(competence)) throw new Error('Competência inválida para Meta Redes.');
   const settings = loadReportSettings();
   if (value === null || !Number.isFinite(value) || value < 0) delete settings.networkTargetByCompetence[competence];
   else settings.networkTargetByCompetence[competence] = value;
@@ -102,7 +104,7 @@ export function sellOutTargetsFor(competence: string) {
 }
 
 export function setSellOutTargetsFor(competence: string, sellOutTarget: number | null, positivityTarget: number | null) {
-  if (!/^\d{4}-\d{2}$/.test(competence)) throw new Error('Competência inválida para metas de Sell Out.');
+  if (!isValidCompetenceId(competence)) throw new Error('Competência inválida para metas de Sell Out.');
   const settings = loadReportSettings();
   const sales = validTarget(sellOutTarget); const positivity = validTarget(positivityTarget);
   if (sales === null) delete settings.sellOutTargetByCompetence[competence]; else settings.sellOutTargetByCompetence[competence] = sales;
@@ -120,7 +122,7 @@ export function legacyTargetsPendingFor(competence: string) {
 
 /** Migra apenas por ação explícita e confirma a nova gravação antes de limpar o legado. */
 export function migrateLegacyTargetsToCompetence(competence: string) {
-  if (!/^\d{4}-\d{2}$/.test(competence)) throw new Error('Competência inválida para migração de metas legadas.');
+  if (!isValidCompetenceId(competence)) throw new Error('Competência inválida para migração de metas legadas.');
   const settings = loadReportSettings();
   const migrateSales = settings.sellOutTargetByCompetence[competence] === undefined && settings.legacySellOutTarget !== null;
   const migratePositivity = settings.positivityTargetByCompetence[competence] === undefined && settings.legacyPositivityTarget !== null;
@@ -138,7 +140,7 @@ export function migrateLegacyTargetsToCompetence(competence: string) {
 
 export function reportSettingsCompetences() {
   const settings = loadReportSettings();
-  return [...new Set([...Object.keys(settings.sellOutTargetByCompetence), ...Object.keys(settings.positivityTargetByCompetence), ...Object.keys(settings.networkTargetByCompetence)])].sort().reverse();
+  return [...new Set([...Object.keys(settings.sellOutTargetByCompetence), ...Object.keys(settings.positivityTargetByCompetence), ...Object.keys(settings.networkTargetByCompetence)])].filter(isValidCompetenceId).sort().reverse();
 }
 
 export function inboundForecasts() {

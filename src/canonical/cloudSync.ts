@@ -1,4 +1,10 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import {
+  loadCompetenceState,
+  replaceCompetenceState,
+  validateCompetenceState,
+  type CompetenceState,
+} from './competenceStore';
 import { buildCanonicalFromStoredSources, exportSourceStorageSnapshot, restoreSourceStorageSnapshot, type SourceStorageSnapshot } from './sourceImport';
 import { loadReportSettings, restoreReportSettings, type ReportSettings } from './reportSettings';
 import { resolveActiveCanonicalBundle, type ActiveCanonicalBundle } from './runtime';
@@ -18,6 +24,17 @@ export type CloudSnapshot = {
   active: ActiveCanonicalBundle | null;
   sources: SourceStorageSnapshot;
   settings: ReportSettings;
+  competenceState?: CompetenceState;
+};
+
+export type CloudRestoreDependencies = {
+  exportSources: () => Promise<SourceStorageSnapshot>;
+  loadSettings: () => ReportSettings;
+  loadCompetence: () => CompetenceState | null;
+  restoreSources: (snapshot: SourceStorageSnapshot) => Promise<void>;
+  restoreSettings: (value: unknown) => ReportSettings;
+  replaceCompetence: (value: unknown | null) => CompetenceState | null;
+  build: () => Promise<ActiveCanonicalBundle>;
 };
 
 function isIdentity(value: unknown): value is DeviceSyncIdentity {
@@ -108,7 +125,60 @@ async function decrypt(identity: DeviceSyncIdentity, payload: Uint8Array) {
   const text = strFromU8(unzipSync(packed)['snapshot.json'] ?? new Uint8Array());
   const snapshot = JSON.parse(text) as CloudSnapshot;
   if (snapshot?.format !== 'blue-jacket-device-sync/v1' || !snapshot.sources || !snapshot.settings || typeof snapshot.settings !== 'object') throw new Error('SYNC_PAYLOAD_INVALID');
+  if (snapshot.competenceState !== undefined) {
+    try { snapshot.competenceState = validateCompetenceState(snapshot.competenceState); }
+    catch { throw new Error('SYNC_PAYLOAD_INVALID'); }
+  }
   return snapshot;
+}
+
+function buildCloudSnapshot(
+  active: ActiveCanonicalBundle,
+  sources: SourceStorageSnapshot,
+  settings: ReportSettings,
+  competenceState: CompetenceState | null,
+  createdAt = new Date().toISOString(),
+): CloudSnapshot {
+  return {
+    format: 'blue-jacket-device-sync/v1',
+    createdAt,
+    active,
+    sources,
+    settings,
+    ...(competenceState ? { competenceState: validateCompetenceState(competenceState) } : {}),
+  };
+}
+
+const defaultRestoreDependencies: CloudRestoreDependencies = {
+  exportSources: exportSourceStorageSnapshot,
+  loadSettings: loadReportSettings,
+  loadCompetence: loadCompetenceState,
+  restoreSources: restoreSourceStorageSnapshot,
+  restoreSettings: restoreReportSettings,
+  replaceCompetence: replaceCompetenceState,
+  build: buildCanonicalFromStoredSources,
+};
+
+async function applyCloudSnapshot(snapshot: CloudSnapshot, dependencies: CloudRestoreDependencies = defaultRestoreDependencies) {
+  if (snapshot.competenceState !== undefined) validateCompetenceState(snapshot.competenceState);
+  const previousSources = await dependencies.exportSources().catch(() => null);
+  const previousSettings = dependencies.loadSettings();
+  const previousCompetence = dependencies.loadCompetence();
+
+  try {
+    await dependencies.restoreSources(snapshot.sources);
+    dependencies.restoreSettings(snapshot.settings);
+    if (snapshot.competenceState !== undefined) dependencies.replaceCompetence(snapshot.competenceState);
+    return await dependencies.build();
+  } catch (reason) {
+    try {
+      if (previousSources) await dependencies.restoreSources(previousSources);
+      dependencies.restoreSettings(previousSettings);
+      dependencies.replaceCompetence(previousCompetence);
+      if (previousSources) await dependencies.build();
+    } catch { /* The original restore error remains the actionable failure. */ }
+    throw reason;
+  }
 }
 
 function saveIdentity(identity: DeviceSyncIdentity) {
@@ -196,7 +266,8 @@ export async function uploadCurrentDeviceSnapshot(identity = deviceSyncIdentity(
   if (!active) throw new Error('SYNC_NO_ACTIVE_BUILD');
   const createdAt = new Date().toISOString();
   const sources = await exportSourceStorageSnapshot();
-  const payload = await encrypt(identity, { format: 'blue-jacket-device-sync/v1', createdAt, active, sources, settings: loadReportSettings() });
+  const snapshot = buildCloudSnapshot(active, sources, loadReportSettings(), loadCompetenceState(), createdAt);
+  const payload = await encrypt(identity, snapshot);
   const response = await request('upload', identity, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: payload });
   const status = await response.json() as unknown;
   if (!isStatus(status)) throw new Error('SYNC_STATUS_INVALID');
@@ -209,24 +280,9 @@ export async function restoreCurrentDeviceSnapshot(identity = deviceSyncIdentity
   const response = await request('download', identity);
   const remoteUpdatedAt = response.headers.get('x-blue-jacket-updated-at');
   const snapshot = await decrypt(identity, new Uint8Array(await response.arrayBuffer()));
-  const previousSources = await exportSourceStorageSnapshot().catch(() => null);
-  const previousSettings = loadReportSettings();
-  try {
-    await restoreSourceStorageSnapshot(snapshot.sources);
-    restoreReportSettings(snapshot.settings);
-    const active = await buildCanonicalFromStoredSources();
-    saveSyncState(identity, remoteUpdatedAt && Number.isFinite(Date.parse(remoteUpdatedAt)) ? remoteUpdatedAt : snapshot.createdAt);
-    return active;
-  } catch (reason) {
-    if (previousSources) {
-      try {
-        await restoreSourceStorageSnapshot(previousSources);
-        restoreReportSettings(previousSettings);
-        await buildCanonicalFromStoredSources();
-      } catch { /* The original restore error remains the actionable failure. */ }
-    }
-    throw reason;
-  }
+  const active = await applyCloudSnapshot(snapshot);
+  saveSyncState(identity, remoteUpdatedAt && Number.isFinite(Date.parse(remoteUpdatedAt)) ? remoteUpdatedAt : snapshot.createdAt);
+  return active;
 }
 
 export async function deleteDeviceSyncWorkspace(identity = deviceSyncIdentity()) {
@@ -235,4 +291,4 @@ export async function deleteDeviceSyncWorkspace(identity = deviceSyncIdentity())
   clearDeviceSyncIdentity();
 }
 
-export const cloudSyncTestHelpers = { pairingCode, parsePairingCode, encrypt, decrypt };
+export const cloudSyncTestHelpers = { pairingCode, parsePairingCode, encrypt, decrypt, buildCloudSnapshot, applyCloudSnapshot };
