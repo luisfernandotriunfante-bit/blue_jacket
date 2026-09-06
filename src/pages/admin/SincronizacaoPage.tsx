@@ -31,17 +31,6 @@ export function syncErrorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : code;
 }
 
-/** Preserves the automatic push after a successful source rebuild without coupling Bases to sync internals. */
-export async function syncActiveBuildIfPaired(expectedMotorBuildId: string) {
-  const identity = deviceSyncIdentity();
-  if (!identity) return { status: 'NOT_PAIRED' } as const;
-  const synced = await uploadCurrentDeviceSnapshot(identity);
-  if (synced.active.motorBuildId !== expectedMotorBuildId) {
-    throw new Error(`SYNC_ACTIVE_BUILD_MISMATCH: expected ${expectedMotorBuildId}, received ${synced.active.motorBuildId}`);
-  }
-  return { status: 'SYNCED', bytes: synced.bytes, motorBuildId: synced.active.motorBuildId } as const;
-}
-
 export function SincronizacaoPage() {
   const { activeCanonical, activateCanonical, deactivateCanonical } = useData();
   const [status, setStatus] = useState('');
