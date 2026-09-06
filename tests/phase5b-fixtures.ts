@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { canonicalInputHashV2, canonicalInputHashV1 } from '../src/canonical/targetIdentity.ts';
+import { canonicalInputHash as canonicalInputHashV1 } from '../src/canonical/adminRegistryIdentity.ts';
+import { canonicalInputHashV2 } from '../src/canonical/targetIdentity.ts';
 import { canonicalInputHashV3 } from '../src/canonical/sourceReplacementIdentity.ts';
 import {
   HARD_REQUIRED_SOURCE_IDS,
