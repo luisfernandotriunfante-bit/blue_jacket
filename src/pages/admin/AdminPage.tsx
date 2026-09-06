@@ -1,10 +1,11 @@
+import type { ActiveCanonicalBundle } from '../../canonical/runtime';
 import type { AdminTabId } from '../../navigation';
 import { PanelEmptyState, PanelPage } from '../../ui/pattern/PanelVisual';
 import { AuditoriaPage } from '../AuditoriaPage';
 import { ListasCanonicasPage } from '../ListasCanonicasPage';
 import { MetasPage } from '../MetasPage';
 import { BasesPage } from './BasesPage';
-import { SincronizacaoPage, syncActiveBuildIfPaired } from './SincronizacaoPage';
+import { SincronizacaoPage, syncActiveBuildIfPaired, syncErrorMessage } from './SincronizacaoPage';
 
 type AdminPageProps = {
   view: AdminTabId;
@@ -30,11 +31,12 @@ function CompetenciasPlaceholder() {
   </PanelPage>;
 }
 
-async function preserveAutomaticSyncAfterBaseUpdate() {
+async function preserveAutomaticSyncAfterBaseUpdate(active: ActiveCanonicalBundle) {
   try {
-    await syncActiveBuildIfPaired();
+    return await syncActiveBuildIfPaired(active.motorBuildId);
   } catch (reason) {
     console.warn('A atualização local foi concluída, mas a cópia pareada não pôde ser enviada.', reason);
+    throw new Error(syncErrorMessage(reason));
   }
 }
 

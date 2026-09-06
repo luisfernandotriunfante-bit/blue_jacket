@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { loadCandidateList } from '../../canonical/candidateLists';
+import type { ActiveCanonicalBundle } from '../../canonical/runtime';
 import {
   detectSourceForFileName,
   isSourceStageCurrent,
@@ -13,6 +14,12 @@ import {
 } from '../../canonical/sourceImport';
 import { useData } from '../../store/DataContext';
 import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../../ui/pattern/PanelVisual';
+import {
+  activateBuildAndWaitForAutoSync,
+  baseUpdateCompletionStatus,
+  createBaseUpdateSerialGate,
+  type BaseAutoSyncResult,
+} from './baseUpdateFlow';
 
 const statusLabel = (manifest: SourceStageManifest | undefined, file: File | undefined) => file
   ? 'SELECIONADA'
@@ -28,11 +35,11 @@ function sourceError(reason: unknown) {
     const sources = code.split('SOURCES_OUTDATED:')[1]?.split('|').map(source => SOURCE_LABELS[source] ?? source).join(', ');
     return `A regra de leitura mudou. Selecione novamente somente: ${sources || 'a fonte marcada como atualização necessária'}.`;
   }
-  return code;
+  return reason instanceof Error ? reason.message : code;
 }
 
 type BasesPageProps = {
-  onCanonicalActivated?: () => void | Promise<void>;
+  onCanonicalActivated?: (active: ActiveCanonicalBundle) => Promise<BaseAutoSyncResult>;
 };
 
 export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
@@ -44,6 +51,7 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   const [progress, setProgress] = useState<SourceUpdateProgress | null>(null);
   const [unmatched, setUnmatched] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);
+  const updateGate = useRef(createBaseUpdateSerialGate()).current;
   const refresh = () => loadSourceStagingManifests().then(setManifests).catch(reason => setError(String(reason)));
 
   useEffect(() => { void refresh(); }, []);
@@ -78,42 +86,47 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   };
 
   const process = async () => {
-    setProcessing(true);
-    setError('');
-    setStatus('');
-    try {
-      const storage = await requestPersistentSourceStorage();
-      if (storage.quota && storage.usage && storage.quota - storage.usage < 200 * 1024 * 1024) {
-        throw new Error('STORAGE_SPACE_LOW: menos de 200 MB livres para processar as bases.');
+    await updateGate.run(async () => {
+      setProcessing(true);
+      setError('');
+      setStatus('');
+      try {
+        const storage = await requestPersistentSourceStorage();
+        if (storage.quota && storage.usage && storage.quota - storage.usage < 200 * 1024 * 1024) {
+          throw new Error('STORAGE_SPACE_LOW: menos de 200 MB livres para processar as bases.');
+        }
+        const base = activeCanonical ? {
+          active: activeCanonical,
+          lists: Object.fromEntries((await Promise.all((['M1_ITEM_ESTOQUE', 'M2_CLIENTE_RCA', 'M3_MOVIMENTO_VENDAS', 'M4_HISTORICO_TRANSICAO'] as const)
+            .map(async id => [id, await loadCandidateList(id)]))) as [string, unknown][]) as any,
+        } : undefined;
+        const result = await processSourceUpdates(selected, setProgress, base);
+        await refresh();
+        if (result.rejected.length) {
+          setError(`Fonte rejeitada; o build anterior foi preservado. ${result.rejected.map(item => `${SOURCE_LABELS[item.source] ?? item.source}: ${item.errors.join(' | ')}`).join(' · ')}`);
+          return;
+        }
+        if (result.missing.length) {
+          setStatus(`Stagings salvos. Ainda faltam ${result.missing.length} fonte(s): ${result.missing.map(source => SOURCE_LABELS[source] ?? source).join(', ')}.`);
+          return;
+        }
+        if (!result.active) throw new Error('CANONICAL_BUILD_NOT_CREATED');
+
+        const localStatus = result.updated.length
+          ? `ATUALIZAÇÃO CONCLUÍDA — ${result.updated.length} fonte(s) atualizada(s), ${result.unchanged.length} reutilizada(s). Build ativo: ${result.active.motorBuildId}.`
+          : `MOTOR REPROCESSADO — ${result.manifests.length} fonte(s) válida(s) foram reaproveitadas e o novo build foi ativado. Build ativo: ${result.active.motorBuildId}.`;
+
+        const syncResult = await activateBuildAndWaitForAutoSync(result.active, activateCanonical, onCanonicalActivated);
+        setSelected({});
+        setStatus(baseUpdateCompletionStatus(localStatus, syncResult));
+        if (syncResult.status === 'SYNC_FAILED') setError(sourceError(syncResult.error));
+      } catch (reason) {
+        setError(sourceError(reason));
+      } finally {
+        setProcessing(false);
+        setProgress(null);
       }
-      const base = activeCanonical ? {
-        active: activeCanonical,
-        lists: Object.fromEntries((await Promise.all((['M1_ITEM_ESTOQUE', 'M2_CLIENTE_RCA', 'M3_MOVIMENTO_VENDAS', 'M4_HISTORICO_TRANSICAO'] as const)
-          .map(async id => [id, await loadCandidateList(id)]))) as [string, unknown][]) as any,
-      } : undefined;
-      const result = await processSourceUpdates(selected, setProgress, base);
-      await refresh();
-      if (result.rejected.length) {
-        setError(`Fonte rejeitada; o build anterior foi preservado. ${result.rejected.map(item => `${SOURCE_LABELS[item.source] ?? item.source}: ${item.errors.join(' | ')}`).join(' · ')}`);
-        return;
-      }
-      if (result.missing.length) {
-        setStatus(`Stagings salvos. Ainda faltam ${result.missing.length} fonte(s): ${result.missing.map(source => SOURCE_LABELS[source] ?? source).join(', ')}.`);
-        return;
-      }
-      if (!result.active) throw new Error('CANONICAL_BUILD_NOT_CREATED');
-      activateCanonical(result.active);
-      setSelected({});
-      setStatus(result.updated.length
-        ? `ATUALIZAÇÃO CONCLUÍDA — ${result.updated.length} fonte(s) atualizada(s), ${result.unchanged.length} reutilizada(s). Build ativo: ${result.active.motorBuildId}.`
-        : `MOTOR REPROCESSADO — ${result.manifests.length} fonte(s) válida(s) foram reaproveitadas e o novo build foi ativado. Build ativo: ${result.active.motorBuildId}.`);
-      void onCanonicalActivated?.();
-    } catch (reason) {
-      setError(sourceError(reason));
-    } finally {
-      setProcessing(false);
-      setProgress(null);
-    }
+    });
   };
 
   return <PanelPage title="Bases" metricLabel="Fontes válidas" metricValue={`${validCount}/19`}>
