@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { BlueJacketShell } from './ui/BlueJacketShell'
 import { HoverSidebar } from './ui/navigation/HoverSidebar'
 import { TopTabs } from './ui/navigation/TopTabs'
-import { PanelEmptyState, PanelPage } from './ui/pattern/PanelVisual'
+import { PanelAlert, PanelEmptyState, PanelPage } from './ui/pattern/PanelVisual'
 import { EstoquePage, type EstoqueView } from './pages/EstoquePage'
 import { LancamentosPage } from './pages/LancamentosPage'
 import { ConfiguracoesPage } from './pages/ConfiguracoesPage'
@@ -43,6 +43,7 @@ function DeviceSyncBootstrap() {
 }
 
 function App() {
+  const { migrationError } = useData()
   const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.hash.replace(/^#/, '')).has('sync') ? 'configuracoes' : 'estoque')
   const [activeEstoqueTopTab, setActiveEstoqueTopTab] = useState('overview')
   const [activeSellOutTopTab, setActiveSellOutTopTab] = useState('resumo')
@@ -128,6 +129,7 @@ function App() {
 
   return (
     <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
+      {migrationError ? <PanelAlert tone="error">{migrationError}</PanelAlert> : null}
       {activeTab === 'estoque' ? (
         activeEstoqueTopTab === 'launches' ? <LancamentosPage /> : activeEstoqueTopTab === 'movements' ? <EntradasNotasPage /> : <EstoquePage view={estoqueView} />
       ) : activeTab === 'sellout' ? (

@@ -9,7 +9,7 @@ import { fillSellOutTemplateBytes, fillTopNetworksTemplateBytes } from '../src/c
 
 const base = { sources: [], generatedAt: '2026-08-25T00:00:00Z', competence: '2026-08', snapshotDate: '2026-08-25', warnings: [], errors: [] };
 const m1 = { ...base, id: 'M1_ITEM_ESTOQUE' as const, records: [{ item_canonical_id: 'ITEM:1', winthor_code: '1', category_master: 'Linha teste', physical_stock_units: 4, cost_unit_105: 10, pVenda1_region11: 15 }] };
-const m2 = { ...base, id: 'M2_CLIENTE_RCA' as const, records: [{ cnpj: '00123456000100', customer_name: 'Cliente Teste', trade_name: 'Loja Teste', city: 'Campo Grande', winthor_customer_code: '99', top_network: 'REDE TESTE', manager_cnpj: '00123456000100', top_target: 40, network_resolution_status: 'SOURCE_PRESERVED' }] };
+const m2 = { ...base, id: 'M2_CLIENTE_RCA' as const, records: [{ cnpj: '00123456000100', customer_name: 'Cliente Teste', trade_name: 'Loja Teste', city: 'Campo Grande', winthor_customer_code: '99', top_network: 'REDE TESTE', top_route_competence: '2026-08', manager_cnpj: '00123456000100', top_target: 40, network_resolution_status: 'SOURCE_PRESERVED' }] };
 const m3 = { ...base, id: 'M3_MOVIMENTO_VENDAS' as const, records: [
   { fact_type: 'SALE', source: '8022', order_status: 'FATURADO', value: 100, event_date: '2026-08-01', cnpj: '00123456000100', transaction_rca_code: '10', item_canonical_id: 'ITEM:1' },
   { fact_type: 'SALE', source: '8022', order_status: 'A FATURAR', value: 20, event_date: '2026-08-02', cnpj: '00123456000100', transaction_rca_code: '10', item_canonical_id: 'ITEM:1' },

@@ -1,4 +1,5 @@
 import { SELL_OUT_COMMERCIAL_LINES, classifySellOutCommercialLine, type SellOutCommercialLine } from './commercialLines';
+import { createCanonicalProductResolver } from './productResolver';
 import { parseRangeAssortmentPresence, type AssortmentPresence } from './assortment';
 import type { CanonicalList } from './types';
 
@@ -217,6 +218,14 @@ const dateValue = (value: string) => Date.parse(`${value}T12:00:00Z`);
 const isoDate = (value: number) => new Date(value).toISOString().slice(0, 10);
 const LOW_COVERAGE_DAYS = 30;
 const MAX_ANALYSIS_DAYS = 90;
+export const STOCK_OPERATION_TIME_ZONE = 'America/Campo_Grande';
+
+/** Hoje operacional em data civil, independente da virada antecipada do UTC. */
+export function stockOperationalCivilDate(now: Date = new Date(), timeZone = STOCK_OPERATION_TIME_ZONE) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(value => value.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
 
 function optionalAmount(value: unknown) {
   if (value === null || value === undefined || value === '') return null;
@@ -262,50 +271,12 @@ function itemLine(item: RecordValue) {
   );
 }
 
-function addUniqueIndex(map: Map<string, RecordValue>, ambiguous: Set<string>, key: string | null, item: RecordValue) {
-  if (!key || ambiguous.has(key)) return;
-  const existing = map.get(key);
-  if (existing && existing !== item) {
-    map.delete(key);
-    ambiguous.add(key);
-    return;
-  }
-  map.set(key, item);
-}
-
 function buildItemIndexes(m1: CanonicalList) {
-  const byWinthor = new Map<string, RecordValue>();
-  const byWinthorComparable = new Map<string, RecordValue>();
-  const byEan = new Map<string, RecordValue>();
-  const bySku = new Map<string, RecordValue>();
-  const bySkuComparable = new Map<string, RecordValue>();
-  const ambiguousWinthor = new Set<string>();
-  const ambiguousWinthorExact = new Set<string>();
-  const ambiguousEan = new Set<string>();
-  const ambiguousSku = new Set<string>();
-  const ambiguousSkuComparable = new Set<string>();
-
-  for (const item of m1.records as RecordValue[]) {
-    const winthor = firstText(item, ['winthor_code']);
-    const ean = firstText(item, ['internal_ean', 'industry_ean']);
-    const skus = [firstText(item, ['manufacturer_code']), firstText(item, ['industry_sku']), firstText(item, ['manufacturer_code_286'])].filter(Boolean) as string[];
-    addUniqueIndex(byWinthor, ambiguousWinthorExact, winthor, item);
-    addUniqueIndex(byEan, ambiguousEan, ean, item);
-    addUniqueIndex(byWinthorComparable, ambiguousWinthor, comparableCode(winthor), item);
-    for (const sku of skus) {
-      addUniqueIndex(bySku, ambiguousSku, sku, item);
-      addUniqueIndex(bySkuComparable, ambiguousSkuComparable, comparableCode(sku), item);
-    }
-  }
-  const ambiguousExamples = [...new Set([...ambiguousWinthorExact, ...ambiguousWinthor, ...ambiguousEan, ...ambiguousSku, ...ambiguousSkuComparable])].slice(0, 5);
-  const ambiguousIdentifierKeys = ambiguousWinthorExact.size + ambiguousWinthor.size + ambiguousEan.size + ambiguousSku.size + ambiguousSkuComparable.size;
-  return { byWinthor, byWinthorComparable, byEan, bySku, bySkuComparable, ambiguousSku, ambiguousSkuComparable, ambiguousIdentifierKeys, ambiguousExamples };
+  return createCanonicalProductResolver(m1);
 }
 
 function itemByWinthor(code: unknown, indexes: ReturnType<typeof buildItemIndexes>) {
-  const raw = firstText({ code }, ['code']);
-  return (raw ? indexes.byWinthor.get(raw) : undefined)
-    ?? (raw ? indexes.byWinthorComparable.get(comparableCode(raw) ?? '') : undefined);
+  return indexes.resolveIdentifiers({ winthor: [code] }).item;
 }
 
 function augmentSkuAliasesFromSales(sales: RecordValue[], indexes: ReturnType<typeof buildItemIndexes>) {
@@ -313,20 +284,12 @@ function augmentSkuAliasesFromSales(sales: RecordValue[], indexes: ReturnType<ty
     const item = itemByWinthor(sale.winthor_product_code, indexes);
     const sku = firstText(sale, ['industry_sku']);
     if (!item || !sku) continue;
-    addUniqueIndex(indexes.bySku, indexes.ambiguousSku, sku, item);
-    addUniqueIndex(indexes.bySkuComparable, indexes.ambiguousSkuComparable, comparableCode(sku), item);
+    indexes.addSkuAlias(sku, item);
   }
 }
 
 function currentItemForFact(fact: RecordValue, indexes: ReturnType<typeof buildItemIndexes>) {
-  const winthor = firstText(fact, ['winthor_product_code']);
-  const sku = firstText(fact, ['industry_sku', 'industry_material']);
-  const ean = firstText(fact, ['ean_product', 'internal_ean', 'industry_ean']);
-  return (winthor ? indexes.byWinthor.get(winthor) : undefined)
-    ?? (winthor ? indexes.byWinthorComparable.get(comparableCode(winthor) ?? '') : undefined)
-    ?? (sku ? indexes.bySku.get(sku) : undefined)
-    ?? (sku ? indexes.bySkuComparable.get(comparableCode(sku) ?? '') : undefined)
-    ?? (ean ? indexes.byEan.get(ean) : undefined);
+  return indexes.resolve(fact).item;
 }
 
 /** O 218 traz o campo físico "Código + Produto". O primeiro número é o
@@ -345,11 +308,11 @@ function receiptItemLabel(fact: RecordValue, item: RecordValue | undefined) {
 }
 
 function historicalItemForFact(fact: RecordValue, indexes: ReturnType<typeof buildItemIndexes>) {
-  const ean = firstText(fact, ['historical_gtin', 'ean_commercial', 'ean_tax']);
-  const legacyCode = firstText(fact, ['legacy_product_code']);
-  return (ean ? indexes.byEan.get(ean) : undefined)
-    ?? (legacyCode ? indexes.byWinthor.get(legacyCode) : undefined)
-    ?? (legacyCode ? indexes.byWinthorComparable.get(comparableCode(legacyCode) ?? '') : undefined);
+  return indexes.resolveIdentifiers({
+    eans: ['historical_gtin', 'ean_commercial', 'ean_tax'].map(field => fact[field]),
+    winthor: [fact.legacy_product_code],
+    eanFirst: true,
+  }).item;
 }
 
 function itemKey(item: RecordValue) {

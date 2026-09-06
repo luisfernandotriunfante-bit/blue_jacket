@@ -7,7 +7,7 @@ import { createSellOutWorkbook, createTopNetworksWorkbook, sellOutExportPayload,
 import * as XLSX from 'xlsx';
 
 const base={sources:[],generatedAt:'2026-08-25T00:00:00Z',competence:'2026-08',snapshotDate:'2026-08-25',warnings:[],errors:[]};
-const m2={...base,id:'M2_CLIENTE_RCA',records:[{cnpj:'00123456000100',top_network:'REDE TESTE',manager_cnpj:'00123456000100',top_target:40,network_resolution_status:'SOURCE_PRESERVED',rca_canonical_id:'RCA:10',rca_current_code:'10',rca_legacy_code:'900',rca_name:'VENDEDOR TESTE',coordinator_code:'77',coordinator_name:'SUPERVISOR TESTE'}]};
+const m2={...base,id:'M2_CLIENTE_RCA',records:[{cnpj:'00123456000100',top_network:'REDE TESTE',top_route_competence:'2026-08',manager_cnpj:'00123456000100',top_target:40,network_resolution_status:'SOURCE_PRESERVED',rca_canonical_id:'RCA:10',rca_current_code:'10',rca_legacy_code:'900',rca_name:'VENDEDOR TESTE',coordinator_code:'77',coordinator_name:'SUPERVISOR TESTE'}]};
 const m3={...base,id:'M3_MOVIMENTO_VENDAS',records:[{fact_type:'SALE',source:'8022',order_status:'FATURADO',value:100,event_date:'2026-08-01',cnpj:'00123456000100',transaction_rca_code:'10'},{fact_type:'SALE',source:'8022',order_status:'A FATURAR',value:20,event_date:'2026-08-02',cnpj:'00123456000100',transaction_rca_code:'10'},{fact_type:'TARGET',source:'BUSSOLA',rca_canonical_id:'RCA:10',transaction_rca_code:'900',sales_target:200,positivity_target:2}]};
 
 test('Sell Out view is built solely from canonical M2/M3 and reconciles its visual universes', () => {

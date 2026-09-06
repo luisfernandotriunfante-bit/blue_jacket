@@ -2,6 +2,7 @@ import contract from './contracts/blueJacketContractV1.json' with { type: 'json'
 import { createRcaResolver, type RcaResolution } from './rcaResolver';
 import type { CanonicalAudit, CanonicalBundle, CanonicalList, ParsedSource, RawTyped } from './types';
 import { ASSORTMENT_CHANNELS } from './assortment';
+import { competenceFromParsedSource } from './competence';
 
 type Id = CanonicalList['id'];
 type Schema = { field: string; type: string }[];
@@ -17,14 +18,6 @@ const value = (row: Record<string, RawTyped>, ...names: string[]) => {
 };
 const rows = (sources: ParsedSource[], name: string) => sources.find(item => item.source === name)?.rows ?? [];
 const now = () => new Date().toISOString();
-const monthNames: Record<string, string> = { JAN: '01', FEV: '02', FEB: '02', MAR: '03', ABR: '04', APR: '04', MAI: '05', MAY: '05', JUN: '06', JUL: '07', AGO: '08', AUG: '08', SET: '09', SEP: '09', OUT: '10', OCT: '10', NOV: '11', DEZ: '12', DEC: '12' };
-const fileCompetence = (source?: ParsedSource) => {
-  if (!source) return null;
-  const name = source.fileName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
-  const year = name.match(/20\d{2}/)?.[0];
-  const month = Object.entries(monthNames).find(([token]) => new RegExp(`(^|[^A-Z])${token}([^A-Z]|$)`).test(name))?.[1];
-  return year && month ? `${year}-${month}` : null;
-};
 const sourceCompetence = (sources: ParsedSource[]) => {
   const months = new Set(rows(sources, 'vendas-8022.xls').flatMap(row => {
     const date = String(value(row, 'movement_date') ?? '');
@@ -32,7 +25,7 @@ const sourceCompetence = (sources: ParsedSource[]) => {
   }));
   if (months.size === 1) return [...months][0];
   if (months.size > 1) return 'MIXED';
-  for (const source of sources) { const found = fileCompetence(source); if (found) return found; }
+  for (const source of sources) { const found = competenceFromParsedSource(source); if (found) return found; }
   return 'UNRESOLVED';
 };
 const blank = (id: Id) => Object.fromEntries(schemas[id].map(field => [field.field, null])) as Record<string, unknown>;
@@ -253,7 +246,7 @@ export function buildM2(sources: ParsedSource[]) {
 
 export function buildM3(sources: ParsedSource[]) {
   const comp = sourceCompetence(sources);
-  const targetComp = fileCompetence(sources.find(source => source.source === 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) ?? comp;
+  const targetComp = competenceFromParsedSource(sources.find(source => source.source === 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) ?? comp;
   const resolver = createRcaResolver(sources);
   const rcaAudits = new Map<string, RcaAuditBucket>();
   const records: Array<Record<string, unknown>> = [];
@@ -329,7 +322,7 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   const bundle = buildCanonicalBundle(parsedSources);
   const snapshot = new Date().toISOString().slice(0, 10);
   const comp = sourceCompetence(parsedSources);
-  const targetComp = fileCompetence(parsedSources.find(source => source.source === 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) ?? comp;
+  const targetComp = competenceFromParsedSource(parsedSources.find(source => source.source === 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) ?? comp;
   const fieldOnly = (id: Id, record: Record<string, unknown>) => Object.fromEntries(schemas[id].map(schema => [schema.field, record[schema.field] ?? null]));
   const resolver = createRcaResolver(parsedSources);
 

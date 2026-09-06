@@ -3,7 +3,7 @@ import { APPROVED_CANONICAL_BUILD } from './runtime';
 import { canonicalCustomerKey, canonicalSellOutCompetence, classifySellOutStatus, isQualifyingPositiveSale, sellOutAmount, validSellOutDate } from './sellOutRules';
 
 type RecordValue = Record<string, unknown>;
-export type ViewAuditCode = 'UNRESOLVED_RCA_IN_VIEW' | 'MISSING_TARGET' | 'VIEW_RECONCILIATION_FAILED' | 'UNKNOWN_SALE_STATUS' | 'INVALID_SALE_DATE' | 'MIXED_COMPETENCE' | 'TARGET_COMPETENCE_MISMATCH' | 'M2_COMPETENCE_MISMATCH';
+export type ViewAuditCode = 'UNRESOLVED_RCA_IN_VIEW' | 'MISSING_TARGET' | 'VIEW_RECONCILIATION_FAILED' | 'UNKNOWN_SALE_STATUS' | 'INVALID_SALE_DATE' | 'MIXED_COMPETENCE' | 'TARGET_COMPETENCE_MISMATCH' | 'M2_COMPETENCE_MISMATCH' | 'TOP_ROUTE_COMPETENCE_UNRESOLVED' | 'TOP_ROUTE_COMPETENCE_MIXED' | 'TOP_ROUTE_COMPETENCE_MISMATCH';
 export type ViewAudit = { code: ViewAuditCode; message: string; action: string; count: number };
 
 export type SellOutRow = {

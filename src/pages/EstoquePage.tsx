@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
-import { buildStockForecastBuckets, buildStockOverviewModel, stockTreemapLineValue, stockTreemapTileValue, type StockOverviewModel, type StockTreemapMode } from '../canonical/stockOverviewModel';
+import { buildStockForecastBuckets, buildStockOverviewModel, stockOperationalCivilDate, stockTreemapLineValue, stockTreemapTileValue, type StockOverviewModel, type StockTreemapMode } from '../canonical/stockOverviewModel';
 import type { CanonicalList } from '../canonical/types';
 import { inboundForecasts } from '../canonical/reportSettings';
 import { useData } from '../store/DataContext';
@@ -127,7 +127,7 @@ export function HealthPanel({ model }: { model: StockOverviewModel }) {
 }
 
 function InboundForecastPanel({ model }: { model: StockOverviewModel }) {
-  const grouped = buildStockForecastBuckets(model.inboundForecasts, new Date().toISOString().slice(0, 10));
+  const grouped = buildStockForecastBuckets(model.inboundForecasts, stockOperationalCivilDate());
   return <PanelCard>
     <PanelSectionHeader eyebrow="ENTRADAS PREVISTAS" title="Próximas entradas previstas" description="Resumo completo da Carteira em aberto. As previsões e o detalhamento de cada NF ficam em Entradas e Saídas." />
     <div className="stock-forecast-grid">

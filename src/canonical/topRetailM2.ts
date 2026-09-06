@@ -1,6 +1,7 @@
 import contract from './contracts/blueJacketContractV1.json' with { type: 'json' };
 import { createRcaResolver } from './rcaResolver';
 import type { CanonicalAudit, CanonicalList, ParsedSource, RawTyped } from './types';
+import { competenceFromParsedSource } from './competence';
 
 type RecordValue = Record<string, unknown>;
 type ParsedRow = Record<string, RawTyped>;
@@ -25,6 +26,8 @@ const lineage = (current: unknown) => {
 };
 
 export function materializeTopRetailRouteInM2(m2: CanonicalList, sources: ParsedSource[]): CanonicalList {
+  const routeSource = sources.find(item => item.source === ROUTE_SOURCE);
+  const routeCompetence = competenceFromParsedSource(routeSource);
   const resolver = createRcaResolver(sources);
   const portfolio = new Map(sourceRows(sources, 'relatorio_carteira_clientes.xls').map(row => [cnpjOf(row), row]));
   const routeRows = sourceRows(sources, ROUTE_SOURCE).filter(row => cnpjOf(row).length === 14 && text(typed(row, 'top_network')));
@@ -93,6 +96,7 @@ export function materializeTopRetailRouteInM2(m2: CanonicalList, sources: Parsed
       top_group_code: typed(route, 'group_code'),
       top_category: typed(route, 'top_category'),
       top_target: typed(route, 'top_target'),
+      top_route_competence: routeCompetence,
       network_resolution_status: 'SOURCE_PRESERVED',
       source_lineage: lineage(base.source_lineage),
     });

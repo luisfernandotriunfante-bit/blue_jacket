@@ -4,8 +4,8 @@ import { buildTopRetailNetworksViewModel } from '../src/canonical/topRetailNetwo
 
 const base = { sources: [], generatedAt: '2026-08-25T00:00:00Z', competence: '2026-08', snapshotDate: '2026-08-25', warnings: [], errors: [] };
 const m2 = { ...base, id: 'M2_CLIENTE_RCA' as const, records: [
-  { cnpj: '00111111000100', top_network: 'REDE A', manager_cnpj: '00111111000100', top_group_code: 'GRUPO A', top_target: 500, premise_network: 'OUTRA TAXONOMIA' },
-  { cnpj: '00222222000100', top_network: 'Rede A', manager_cnpj: '00111111000100', top_group_code: 'GRUPO A', top_target: 300 },
+  { cnpj: '00111111000100', top_network: 'REDE A', top_route_competence: '2026-08', manager_cnpj: '00111111000100', top_group_code: 'GRUPO A', top_target: 500, premise_network: 'OUTRA TAXONOMIA' },
+  { cnpj: '00222222000100', top_network: 'Rede A', top_route_competence: '2026-08', manager_cnpj: '00111111000100', top_group_code: 'GRUPO A', top_target: 300 },
   { cnpj: '00333333000100', premise_network: 'REDE FORA DO ROTEIRO' },
 ] };
 const m3 = { ...base, id: 'M3_MOVIMENTO_VENDAS' as const, records: [
@@ -30,8 +30,8 @@ test('Redes usa somente CNPJs do Roteiro Ativo e agrupa pelo gestor, não pelo t
 
 test('Meta da rede preserva Meta Redes Geral e usa representatividade do Roteiro referenciada por Meta T&C / Meta Indústria', () => {
   const multiM2 = { ...m2, records: [
-    { cnpj: '00111111000100', top_network: 'REDE A', manager_cnpj: '00111111000100', top_group_code: 'GRUPO A', top_target: 500 },
-    { cnpj: '00222222000100', top_network: 'REDE B', manager_cnpj: '00222222000100', top_group_code: 'GRUPO B', top_target: 300 },
+    { cnpj: '00111111000100', top_network: 'REDE A', top_route_competence: '2026-08', manager_cnpj: '00111111000100', top_group_code: 'GRUPO A', top_target: 500 },
+    { cnpj: '00222222000100', top_network: 'REDE B', top_route_competence: '2026-08', manager_cnpj: '00222222000100', top_group_code: 'GRUPO B', top_target: 300 },
   ] };
   const view = buildTopRetailNetworksViewModel({ m2: multiM2, m3, sellOutTarget: 1000, networkTargetTotal: 400, generatedAt: '2026-08-25T12:00:00Z' });
   const a = view.rows.find(row => row.network === 'REDE A')!;
@@ -58,9 +58,9 @@ test('Meta Top Varejista e seus atingimentos permanecem separados da Meta Redes'
 
 test('duas grafias de Gauchão com o mesmo CNPJ gestor viram um único grupo e somam metas e vendas', () => {
   const gauchaoM2 = { ...base, id: 'M2_CLIENTE_RCA' as const, records: [
-    { cnpj: '35831943000140', top_network: 'GAUCHÃO', manager_cnpj: '35831943000140', top_group_code: 'GAUCHAO', top_target: 50039 },
-    { cnpj: '35831943000302', top_network: 'GAUCHÃO', manager_cnpj: '35831943000140', top_group_code: 'GAUCHAO', top_target: 0 },
-    { cnpj: '35831943000221', top_network: 'Gauchão', manager_cnpj: '35831943000140', top_group_code: 'GAUCHAO', top_target: 0 },
+    { cnpj: '35831943000140', top_network: 'GAUCHÃO', top_route_competence: '2026-08', manager_cnpj: '35831943000140', top_group_code: 'GAUCHAO', top_target: 50039 },
+    { cnpj: '35831943000302', top_network: 'GAUCHÃO', top_route_competence: '2026-08', manager_cnpj: '35831943000140', top_group_code: 'GAUCHAO', top_target: 0 },
+    { cnpj: '35831943000221', top_network: 'Gauchão', top_route_competence: '2026-08', manager_cnpj: '35831943000140', top_group_code: 'GAUCHAO', top_target: 0 },
   ] };
   const gauchaoM3 = { ...base, id: 'M3_MOVIMENTO_VENDAS' as const, records: [
     { fact_type: 'SALE', cnpj: '35831943000302', value: 31666.36, order_status: 'FATURADO' },

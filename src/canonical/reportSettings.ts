@@ -110,6 +110,32 @@ export function setSellOutTargetsFor(competence: string, sellOutTarget: number |
   return persist(settings);
 }
 
+export function legacyTargetsPendingFor(competence: string) {
+  const settings = loadReportSettings();
+  return {
+    sellOutTarget: settings.sellOutTargetByCompetence[competence] === undefined ? settings.legacySellOutTarget : null,
+    positivityTarget: settings.positivityTargetByCompetence[competence] === undefined ? settings.legacyPositivityTarget : null,
+  };
+}
+
+/** Migra apenas por ação explícita e confirma a nova gravação antes de limpar o legado. */
+export function migrateLegacyTargetsToCompetence(competence: string) {
+  if (!/^\d{4}-\d{2}$/.test(competence)) throw new Error('Competência inválida para migração de metas legadas.');
+  const settings = loadReportSettings();
+  const migrateSales = settings.sellOutTargetByCompetence[competence] === undefined && settings.legacySellOutTarget !== null;
+  const migratePositivity = settings.positivityTargetByCompetence[competence] === undefined && settings.legacyPositivityTarget !== null;
+  if (!migrateSales && !migratePositivity) return settings;
+  if (migrateSales) settings.sellOutTargetByCompetence[competence] = settings.legacySellOutTarget!;
+  if (migratePositivity) settings.positivityTargetByCompetence[competence] = settings.legacyPositivityTarget!;
+  persist(settings);
+  const verified = loadReportSettings();
+  if (migrateSales && verified.sellOutTargetByCompetence[competence] !== settings.legacySellOutTarget) throw new Error('Falha ao validar a migração da Meta T&C legada.');
+  if (migratePositivity && verified.positivityTargetByCompetence[competence] !== settings.legacyPositivityTarget) throw new Error('Falha ao validar a migração da Meta Positivação legada.');
+  if (migrateSales) verified.legacySellOutTarget = null;
+  if (migratePositivity) verified.legacyPositivityTarget = null;
+  return persist(verified);
+}
+
 export function reportSettingsCompetences() {
   const settings = loadReportSettings();
   return [...new Set([...Object.keys(settings.sellOutTargetByCompetence), ...Object.keys(settings.positivityTargetByCompetence), ...Object.keys(settings.networkTargetByCompetence)])].sort().reverse();

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
-import { networkTargetFor, reportSettingsCompetences, sellOutTargetsFor, setNetworkTargetFor, setSellOutTargetsFor } from '../canonical/reportSettings';
+import { legacyTargetsPendingFor, migrateLegacyTargetsToCompetence, networkTargetFor, reportSettingsCompetences, sellOutTargetsFor, setNetworkTargetFor, setSellOutTargetsFor } from '../canonical/reportSettings';
 import { canonicalSellOutCompetence } from '../canonical/sellOutRules';
 import { useData } from '../store/DataContext';
-import { PanelCard, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
+import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../ui/pattern/PanelVisual';
 
 const numberValue = (value: string) => {
   if (!value.trim()) return null;
@@ -19,6 +19,8 @@ export function MetasPage() {
   const [positivityTarget, setPositivityTarget] = useState('');
   const [networkTarget, setNetworkTarget] = useState('');
   const [saved, setSaved] = useState(false);
+  const [, setLegacyVersion] = useState(0);
+  const [migrationError, setMigrationError] = useState('');
 
   useEffect(() => {
     if (!activeCanonical) return;
@@ -47,11 +49,24 @@ export function MetasPage() {
     setNetworkTargetFor(competence, numberValue(networkTarget));
     setSaved(true);
   };
+  const pendingLegacy = /^\d{4}-\d{2}$/.test(competence) ? legacyTargetsPendingFor(competence) : { sellOutTarget: null, positivityTarget: null };
+  const hasPendingLegacy = pendingLegacy.sellOutTarget !== null || pendingLegacy.positivityTarget !== null;
+  const migrateLegacy = () => {
+    try {
+      migrateLegacyTargetsToCompetence(competence);
+      const targets = sellOutTargetsFor(competence);
+      setSellOutTarget(targets.sellOutTarget?.toString() ?? '');
+      setPositivityTarget(targets.positivityTarget?.toString() ?? '');
+      setMigrationError(''); setSaved(true); setLegacyVersion(version => version + 1);
+    } catch (reason) { setMigrationError(String(reason)); }
+  };
 
   return <PanelPage title="Metas">
     <PanelCard>
       <PanelSectionHeader eyebrow="SELL OUT" title="Metas manuais" description="Defina aqui as metas gerais controladas pelo usuário. Os valores realizados continuam vindo das tabelas canônicas. A Meta Redes é um total separado da Meta T&C e sua distribuição por rede usa a representatividade dos clientes do Roteiro Ativo." />
       <label className="panel-field" style={{ maxWidth: 320, marginBottom: 16 }}><span className="panel-mini-label">Competência editada</span><select value={competence} onChange={event => setCompetence(event.target.value)}><option value="">Selecione uma competência</option>{knownCompetences.map(value => <option key={value} value={value}>{value.slice(5, 7)}/{value.slice(0, 4)}</option>)}</select></label>
+      {hasPendingLegacy ? <PanelAlert tone="warning"><strong>Existe uma meta anterior ainda não vinculada a uma competência.</strong><br />{pendingLegacy.sellOutTarget !== null ? `Meta T&C legada: ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(pendingLegacy.sellOutTarget)}. ` : ''}{pendingLegacy.positivityTarget !== null ? `Meta Positivação legada: ${new Intl.NumberFormat('pt-BR').format(pendingLegacy.positivityTarget)}. ` : ''}<button type="button" className="panel-secondary-button" onClick={migrateLegacy}>Migrar para {competence.slice(5, 7)}/{competence.slice(0, 4)}</button></PanelAlert> : null}
+      {migrationError ? <PanelAlert tone="error">Não foi possível migrar a meta legada: {migrationError}</PanelAlert> : null}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
         <label className="panel-field">
           <span className="panel-mini-label">Meta T&C (R$)</span>

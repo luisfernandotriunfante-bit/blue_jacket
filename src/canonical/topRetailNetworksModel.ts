@@ -15,6 +15,7 @@ export type TopRetailNetworkRow = NetworkRow & {
 };
 
 export type TopRetailNetworksViewModel = Omit<TopNetworksViewModel, 'rows' | 'totals'> & {
+  routeCompetence: string;
   rows: TopRetailNetworkRow[];
   totals: TopNetworksViewModel['totals'] & {
     customersWithSales: number;
@@ -49,6 +50,18 @@ export function buildTopRetailNetworksViewModel({
   networkTargetTotal: number | null;
   generatedAt?: string;
 }): TopRetailNetworksViewModel {
+  const competence = canonicalSellOutCompetence(m3.records as RecordValue[], m3.competence);
+  const routeRecords = (m2.records as RecordValue[]).filter(customer => text(customer.top_network));
+  const declaredRouteCompetences = new Set(routeRecords.flatMap(customer => {
+    const value = text(customer.top_route_competence);
+    return value ? [value] : [];
+  }));
+  const routeHasUndeterminedCompetence = routeRecords.some(customer => !text(customer.top_route_competence));
+  const routeCompetence = routeHasUndeterminedCompetence || declaredRouteCompetences.size === 0
+    ? 'UNRESOLVED'
+    : declaredRouteCompetences.size === 1 ? [...declaredRouteCompetences][0] : 'MIXED';
+  const routeCompetenceMismatch = /^\d{4}-\d{2}$/.test(competence) && routeCompetence !== competence;
+  const routeBlocked = routeCompetence === 'UNRESOLVED' || routeCompetence === 'MIXED' || routeCompetenceMismatch;
   const routeCustomers = new Map<string, {
     groupKey: string;
     managerCnpj: string | null;
@@ -66,9 +79,7 @@ export function buildTopRetailNetworksViewModel({
   const groupDisplayName = new Map<string, string>();
   const groupManager = new Map<string, string | null>();
   const groupCodeByKey = new Map<string, string | null>();
-  const m2Mismatch = /^\d{4}-\d{2}$/.test(m2.competence) && m2.competence !== canonicalSellOutCompetence(m3.records as RecordValue[], m3.competence);
-
-  for (const customer of m2Mismatch ? [] : m2.records as RecordValue[]) {
+  for (const customer of routeBlocked ? [] : routeRecords) {
     const cnpj = text(customer.cnpj);
     const sourceNetwork = text(customer.top_network);
     if (!cnpj || !sourceNetwork || routeCustomers.has(cnpj)) continue;
@@ -102,7 +113,6 @@ export function buildTopRetailNetworksViewModel({
     }
   }
 
-  const competence = canonicalSellOutCompetence(m3.records as RecordValue[], m3.competence);
   const allSales = (m3.records as RecordValue[]).filter(fact => fact.fact_type === 'SALE');
   const unknownStatuses = allSales.filter(fact => classifySellOutStatus(fact.order_status) === 'UNKNOWN');
   const sales = allSales.filter(fact => classifySellOutStatus(fact.order_status) !== 'UNKNOWN' && competence !== 'MIXED' && (!fact.competence || fact.competence === competence || fact.competence === m3.competence));
@@ -222,10 +232,13 @@ export function buildTopRetailNetworksViewModel({
     stagingManifestHash: APPROVED_CANONICAL_BUILD.stagingManifestHash,
     generatedAt,
     competence,
+    routeCompetence,
     audits: [
       ...(competence === 'MIXED' ? [{ code: 'MIXED_COMPETENCE' as const, count: allSales.length, message: 'O 8022 contém mais de uma competência.', action: 'Atualizar o 8022 com um relatório mensal coerente.' }] : []),
       ...(unknownStatuses.length ? [{ code: 'UNKNOWN_SALE_STATUS' as const, count: unknownStatuses.length, message: `${unknownStatuses.length} linha(s) possuem status vazio ou desconhecido.`, action: 'Corrigir o status no 8022; essas linhas não foram classificadas como faturadas.' }] : []),
-      ...(m2Mismatch ? [{ code: 'M2_COMPETENCE_MISMATCH' as const, count: 1, message: `Roteiro Top ${m2.competence} diverge do Sell Out ${competence}.`, action: 'Atualizar o Roteiro Top da competência ativa; Redes foi bloqueado para evitar universo mensal incorreto.' }] : []),
+      ...(routeCompetence === 'UNRESOLVED' ? [{ code: 'TOP_ROUTE_COMPETENCE_UNRESOLVED' as const, count: routeRecords.length, message: 'A competência do Roteiro Top não pôde ser determinada pelo próprio arquivo.', action: 'Atualizar o Roteiro Top com o arquivo mensal nomeado conforme o padrão homologado; Redes foi bloqueado.' }] : []),
+      ...(routeCompetence === 'MIXED' ? [{ code: 'TOP_ROUTE_COMPETENCE_MIXED' as const, count: routeRecords.length, message: 'O M2 contém vínculos de Roteiro Top de mais de uma competência.', action: 'Reprocessar o Roteiro Top da competência ativa; Redes foi bloqueado.' }] : []),
+      ...(routeCompetenceMismatch && /^\d{4}-\d{2}$/.test(routeCompetence) ? [{ code: 'TOP_ROUTE_COMPETENCE_MISMATCH' as const, count: routeRecords.length, message: `Roteiro Top ${routeCompetence} diverge do Sell Out ${competence}.`, action: 'Atualizar o Roteiro Top da competência ativa; Redes foi bloqueado para evitar universo mensal incorreto.' }] : []),
     ],
     rows,
     storeRows,
