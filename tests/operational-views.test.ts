@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildSellOutViewModel, buildTopNetworksViewModel } from '../src/canonical/operationalViewModels.ts';
+import { buildSellOutViewModel } from '../src/canonical/operationalViewModels.ts';
+import { buildTopRetailNetworksViewModel } from '../src/canonical/topRetailNetworksModel.ts';
 import { createSellOutWorkbook, createTopNetworksWorkbook, sellOutExportPayload, sellOutExportRows, topNetworksExportPayload, topNetworksExportRows } from '../src/canonical/operationalExporters.ts';
 import * as XLSX from 'xlsx';
 
 const base={sources:[],generatedAt:'2026-08-25T00:00:00Z',competence:'2026-08',snapshotDate:'2026-08-25',warnings:[],errors:[]};
-const m2={...base,id:'M2_CLIENTE_RCA',records:[{cnpj:'00123456000100',premise_network:'REDE TESTE',network_resolution_status:'SOURCE_PRESERVED',rca_canonical_id:'RCA:10',rca_current_code:'10',rca_legacy_code:'900',rca_name:'VENDEDOR TESTE',coordinator_code:'77',coordinator_name:'SUPERVISOR TESTE'}]};
+const m2={...base,id:'M2_CLIENTE_RCA',records:[{cnpj:'00123456000100',top_network:'REDE TESTE',manager_cnpj:'00123456000100',top_target:40,network_resolution_status:'SOURCE_PRESERVED',rca_canonical_id:'RCA:10',rca_current_code:'10',rca_legacy_code:'900',rca_name:'VENDEDOR TESTE',coordinator_code:'77',coordinator_name:'SUPERVISOR TESTE'}]};
 const m3={...base,id:'M3_MOVIMENTO_VENDAS',records:[{fact_type:'SALE',source:'8022',order_status:'FATURADO',value:100,event_date:'2026-08-01',cnpj:'00123456000100',transaction_rca_code:'10'},{fact_type:'SALE',source:'8022',order_status:'A FATURAR',value:20,event_date:'2026-08-02',cnpj:'00123456000100',transaction_rca_code:'10'},{fact_type:'TARGET',source:'BUSSOLA',rca_canonical_id:'RCA:10',transaction_rca_code:'900',sales_target:200,positivity_target:2}]};
 
 test('Sell Out view is built solely from canonical M2/M3 and reconciles its visual universes', () => {
@@ -37,7 +38,7 @@ test('customer without network is a normal non-network customer, not an audit er
 });
 
 test('Top Networks uses only M2 network relations and never allocates a customer twice', () => {
-  const view = buildTopNetworksViewModel({ m2, m3, generatedAt: '2026-08-25T12:00:00.000Z' });
+  const view = buildTopRetailNetworksViewModel({ m2, m3, sellOutTarget: null, networkTargetTotal: null, generatedAt: '2026-08-25T12:00:00.000Z' });
   assert.equal(view.rows.length, 1);
   assert.equal(view.reconciliation.rowsEqualTotal, true);
   assert.equal(view.totals.realized, view.reconciliation.mappedUniverseValue);
@@ -46,7 +47,7 @@ test('Top Networks uses only M2 network relations and never allocates a customer
 
 test('screen models and operational export payloads use the exact same rows and totals', () => {
   const sellOut = buildSellOutViewModel({ m2, m3, generatedAt: '2026-08-25T12:00:00.000Z' });
-  const networks = buildTopNetworksViewModel({ m2, m3, generatedAt: '2026-08-25T12:00:00.000Z' });
+  const networks = buildTopRetailNetworksViewModel({ m2, m3, sellOutTarget: null, networkTargetTotal: null, generatedAt: '2026-08-25T12:00:00.000Z' });
   const sellOutPayload = sellOutExportPayload(sellOut);
   const networksPayload = topNetworksExportPayload(networks);
   assert.deepEqual(sellOutPayload.records, sellOutExportRows(sellOut));
@@ -71,7 +72,7 @@ test('operational UI and export modules never import parsers or motors', () => {
 
 test('operational Excel exports reopen with the same view-model rows, numeric money and traceable metadata', () => {
   const sellOut = buildSellOutViewModel({ m2, m3, generatedAt: '2026-08-25T12:00:00.000Z' });
-  const networks = buildTopNetworksViewModel({ m2, m3, generatedAt: '2026-08-25T12:00:00.000Z' });
+  const networks = buildTopRetailNetworksViewModel({ m2, m3, sellOutTarget: null, networkTargetTotal: null, generatedAt: '2026-08-25T12:00:00.000Z' });
   for (const [workbook, expectedRows, sheetName] of [[createSellOutWorkbook(sellOut), sellOut.vendorRows.length, 'Sell Out'], [createTopNetworksWorkbook(networks), networks.rows.length, 'Top Redes']] as const) {
     const reopened = XLSX.read(XLSX.write(workbook, { bookType: 'xlsx', type: 'array', cellDates: true }), { type: 'array', cellDates: true });
     const sheet = reopened.Sheets[sheetName]!;

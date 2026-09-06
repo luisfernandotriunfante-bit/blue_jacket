@@ -1,6 +1,7 @@
 import type { CanonicalList } from './types';
 import { APPROVED_CANONICAL_BUILD } from './runtime';
 import type { NetworkRow, TopNetworksViewModel } from './operationalViewModels';
+import { canonicalCustomerKey, canonicalSellOutCompetence, classifySellOutStatus, isQualifyingPositiveSale, sellOutAmount } from './sellOutRules';
 
 type RecordValue = Record<string, unknown>;
 export type TopRetailNetworkRow = NetworkRow & {
@@ -32,10 +33,8 @@ export type TopRetailNetworksViewModel = Omit<TopNetworksViewModel, 'rows' | 'to
 };
 
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
-const amount = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : Number(value ?? 0) || 0;
+const amount = sellOutAmount;
 const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
-const normalized = (value: unknown) => text(value)?.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase() ?? '';
-const invoiced = (sale: RecordValue) => normalized(sale.order_status) !== 'A FATURAR';
 
 export function buildTopRetailNetworksViewModel({
   m2,
@@ -67,8 +66,9 @@ export function buildTopRetailNetworksViewModel({
   const groupDisplayName = new Map<string, string>();
   const groupManager = new Map<string, string | null>();
   const groupCodeByKey = new Map<string, string | null>();
+  const m2Mismatch = /^\d{4}-\d{2}$/.test(m2.competence) && m2.competence !== canonicalSellOutCompetence(m3.records as RecordValue[], m3.competence);
 
-  for (const customer of m2.records as RecordValue[]) {
+  for (const customer of m2Mismatch ? [] : m2.records as RecordValue[]) {
     const cnpj = text(customer.cnpj);
     const sourceNetwork = text(customer.top_network);
     if (!cnpj || !sourceNetwork || routeCustomers.has(cnpj)) continue;
@@ -102,8 +102,11 @@ export function buildTopRetailNetworksViewModel({
     }
   }
 
-  const sales = (m3.records as RecordValue[]).filter(fact => fact.fact_type === 'SALE');
-  const targets = (m3.records as RecordValue[]).filter(fact => fact.fact_type === 'TARGET');
+  const competence = canonicalSellOutCompetence(m3.records as RecordValue[], m3.competence);
+  const allSales = (m3.records as RecordValue[]).filter(fact => fact.fact_type === 'SALE');
+  const unknownStatuses = allSales.filter(fact => classifySellOutStatus(fact.order_status) === 'UNKNOWN');
+  const sales = allSales.filter(fact => classifySellOutStatus(fact.order_status) !== 'UNKNOWN' && competence !== 'MIXED' && (!fact.competence || fact.competence === competence || fact.competence === m3.competence));
+  const targets = (m3.records as RecordValue[]).filter(fact => fact.fact_type === 'TARGET' && (!fact.competence || fact.competence === competence));
   const industryTarget = round(targets.reduce((sum, fact) => sum + amount(fact.sales_target), 0));
   const overallSellOut = round(sales.reduce((sum, sale) => sum + amount(sale.value), 0));
 
@@ -124,9 +127,10 @@ export function buildTopRetailNetworksViewModel({
     const aggregate = aggregates.get(route.groupKey)!;
     const value = amount(sale.value);
     aggregate.realized += value;
-    if (invoiced(sale)) aggregate.invoiced += value;
+    if (classifySellOutStatus(sale.order_status) === 'INVOICED') aggregate.invoiced += value;
     else aggregate.toInvoice += value;
-    aggregate.positive.add(cnpj);
+    const customerKey = canonicalCustomerKey(sale);
+    if (customerKey && isQualifyingPositiveSale(sale)) aggregate.positive.add(customerKey);
   }
 
   const rows: TopRetailNetworkRow[] = [...groupCustomers.entries()].map(([groupKey, customers]) => {
@@ -178,8 +182,8 @@ export function buildTopRetailNetworksViewModel({
   const storeRows = [...routeCustomers.entries()].flatMap(([cnpj, route]) => {
     const customerSales = sales.filter(sale => text(sale.cnpj) === cnpj);
     if (!customerSales.length) return [];
-    const invoicedValue = round(customerSales.filter(invoiced).reduce((sum, sale) => sum + amount(sale.value), 0));
-    const toInvoiceValue = round(customerSales.filter(sale => !invoiced(sale)).reduce((sum, sale) => sum + amount(sale.value), 0));
+    const invoicedValue = round(customerSales.filter(sale => classifySellOutStatus(sale.order_status) === 'INVOICED').reduce((sum, sale) => sum + amount(sale.value), 0));
+    const toInvoiceValue = round(customerSales.filter(sale => classifySellOutStatus(sale.order_status) === 'TO_INVOICE').reduce((sum, sale) => sum + amount(sale.value), 0));
     const realized = round(invoicedValue + toInvoiceValue);
     return [{
       cnpj,
@@ -204,7 +208,9 @@ export function buildTopRetailNetworksViewModel({
   const calculatedNetworkTargetTotal = networkTargetTotal !== null && referenceTotal > 0
     ? round(rows.reduce((sum, row) => sum + (row.networkTarget ?? 0), 0))
     : null;
-  const customersWithSales = new Set(storeRows.map(row => row.cnpj).filter(Boolean)).size;
+  const customersWithSales = new Set(sales.flatMap(sale => {
+    const cnpj = text(sale.cnpj); return cnpj && routeCustomers.has(cnpj) && isQualifyingPositiveSale(sale) ? [canonicalCustomerKey(sale)!] : [];
+  })).size;
   const gap = calculatedNetworkTargetTotal === null ? null : round(calculatedNetworkTargetTotal - realized);
   const networkAchievement = calculatedNetworkTargetTotal && calculatedNetworkTargetTotal > 0 ? realized / calculatedNetworkTargetTotal : null;
   const customerCoverage = routeCustomers.size > 0 ? customersWithSales / routeCustomers.size : null;
@@ -215,8 +221,12 @@ export function buildTopRetailNetworksViewModel({
     motorBuildId: APPROVED_CANONICAL_BUILD.motorBuildId,
     stagingManifestHash: APPROVED_CANONICAL_BUILD.stagingManifestHash,
     generatedAt,
-    competence: m3.competence,
-    audits: [],
+    competence,
+    audits: [
+      ...(competence === 'MIXED' ? [{ code: 'MIXED_COMPETENCE' as const, count: allSales.length, message: 'O 8022 contém mais de uma competência.', action: 'Atualizar o 8022 com um relatório mensal coerente.' }] : []),
+      ...(unknownStatuses.length ? [{ code: 'UNKNOWN_SALE_STATUS' as const, count: unknownStatuses.length, message: `${unknownStatuses.length} linha(s) possuem status vazio ou desconhecido.`, action: 'Corrigir o status no 8022; essas linhas não foram classificadas como faturadas.' }] : []),
+      ...(m2Mismatch ? [{ code: 'M2_COMPETENCE_MISMATCH' as const, count: 1, message: `Roteiro Top ${m2.competence} diverge do Sell Out ${competence}.`, action: 'Atualizar o Roteiro Top da competência ativa; Redes foi bloqueado para evitar universo mensal incorreto.' }] : []),
+    ],
     rows,
     storeRows,
     teamRows: [],

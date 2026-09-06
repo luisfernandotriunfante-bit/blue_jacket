@@ -10,8 +10,8 @@ test('aba Redes é roteada para a visão oficial Top Varejistas e lê somente M2
   assert.ok(main.includes("activeSellOutTopTab === 'redes' ? <TopRetailNetworksPage />"));
   assert.ok(page.includes("loadCandidateList('M2_CLIENTE_RCA')"));
   assert.ok(page.includes("loadCandidateList('M3_MOVIMENTO_VENDAS')"));
-  assert.ok(page.includes('sellOutTargets()'));
-  assert.ok(page.includes('networkTargetFor(lists.m3.competence)'));
+  assert.ok(page.includes('sellOutTargetsFor(competence)'));
+  assert.ok(page.includes('networkTargetFor(competence)'));
   assert.doesNotMatch(page, /from ['"].*\/(parsers|motors)['"]/);
 });
 

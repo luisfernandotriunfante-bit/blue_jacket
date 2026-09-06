@@ -17,7 +17,24 @@ const value = (row: Record<string, RawTyped>, ...names: string[]) => {
 };
 const rows = (sources: ParsedSource[], name: string) => sources.find(item => item.source === name)?.rows ?? [];
 const now = () => new Date().toISOString();
-const competence = () => new Date().toISOString().slice(0, 7);
+const monthNames: Record<string, string> = { JAN: '01', FEV: '02', FEB: '02', MAR: '03', ABR: '04', APR: '04', MAI: '05', MAY: '05', JUN: '06', JUL: '07', AGO: '08', AUG: '08', SET: '09', SEP: '09', OUT: '10', OCT: '10', NOV: '11', DEZ: '12', DEC: '12' };
+const fileCompetence = (source?: ParsedSource) => {
+  if (!source) return null;
+  const name = source.fileName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  const year = name.match(/20\d{2}/)?.[0];
+  const month = Object.entries(monthNames).find(([token]) => new RegExp(`(^|[^A-Z])${token}([^A-Z]|$)`).test(name))?.[1];
+  return year && month ? `${year}-${month}` : null;
+};
+const sourceCompetence = (sources: ParsedSource[]) => {
+  const months = new Set(rows(sources, 'vendas-8022.xls').flatMap(row => {
+    const date = String(value(row, 'movement_date') ?? '');
+    return /^\d{4}-\d{2}-\d{2}/.test(date) ? [date.slice(0, 7)] : [];
+  }));
+  if (months.size === 1) return [...months][0];
+  if (months.size > 1) return 'MIXED';
+  for (const source of sources) { const found = fileCompetence(source); if (found) return found; }
+  return 'UNRESOLVED';
+};
 const blank = (id: Id) => Object.fromEntries(schemas[id].map(field => [field.field, null])) as Record<string, unknown>;
 const codeKey = (input: unknown) => {
   const raw = String(input ?? '').trim().replace(/\.0$/, '').replace(/\s+/g, '');
@@ -109,13 +126,13 @@ const issue = (code: string, message: string, source = 'motor', severity: Canoni
   message,
   action: 'Revisar a fonte e resolver o vínculo antes de utilizar o registro dependente.',
 });
-function list(id: Id, records: Array<Record<string, unknown>>, sources: string[], audits: CanonicalAudit[]): CanonicalList {
+function list(id: Id, records: Array<Record<string, unknown>>, sources: string[], audits: CanonicalAudit[], competenceValue = 'UNRESOLVED'): CanonicalList {
   return {
     id,
     records,
     sources,
     generatedAt: now(),
-    competence: competence(),
+    competence: competenceValue,
     snapshotDate: new Date().toISOString().slice(0, 10),
     warnings: audits.filter(audit => audit.severity === 'WARNING' || audit.severity === 'INFO'),
     errors: audits.filter(audit => audit.severity === 'BLOCKED' || audit.severity === 'BLOCKED_DEPENDENT_CALC'),
@@ -142,6 +159,7 @@ function materializeRcaAudits(buckets: Map<string, RcaAuditBucket>) {
 }
 
 export function buildM1(sources: ParsedSource[]) {
+  const comp = sourceCompetence(sources);
   const audits: CanonicalAudit[] = [];
   const base = [...rows(sources, 'cadastro-itens-286.xls'), ...rows(sources, 'posicao-estoque-105.xls')];
   const seen = new Set<string>();
@@ -171,7 +189,7 @@ export function buildM1(sources: ParsedSource[]) {
     seen.add(id);
     const out = blank('M1_ITEM_ESTOQUE');
     Object.assign(out, {
-      snapshot_date: new Date().toISOString().slice(0, 10), competence: competence(), item_canonical_id: `ITEM:${id}`,
+      snapshot_date: new Date().toISOString().slice(0, 10), competence: comp, item_canonical_id: `ITEM:${id}`,
       winthor_code: winthor || null, manufacturer_code: manufacturer, internal_ean: ean || null,
       industry_sku: industry ? value(industry, 'sku') : null, industry_ean: industry ? value(industry, 'ean') : ean || null,
       dun14: (industry ? value(industry, 'dun_14') : null) ?? (source8013 ? value(source8013, 'dun14') : null), description_internal: value(row, 'description', 'product_description', 'description_internal'),
@@ -201,10 +219,11 @@ export function buildM1(sources: ParsedSource[]) {
     record.pVenda = priceRow ? value(priceRow, 'pvenda') : null;
     record.vlSt = priceRow ? value(priceRow, 'vlst') : null;
   }
-  return list('M1_ITEM_ESTOQUE', records, ['cadastro-itens-286.xls', 'posicao-estoque-105.xls', 'estoque-8013.xls', 'pctabpr 13.xlsx', 'Lista_de_Preco (8).xlsx', 'lançamentos.xlsx', "Sortimento Recomendado - Q3'26.xlsx"], audits);
+  return list('M1_ITEM_ESTOQUE', records, ['cadastro-itens-286.xls', 'posicao-estoque-105.xls', 'estoque-8013.xls', 'pctabpr 13.xlsx', 'Lista_de_Preco (8).xlsx', 'lançamentos.xlsx', "Sortimento Recomendado - Q3'26.xlsx"], audits, comp);
 }
 
 export function buildM2(sources: ParsedSource[]) {
+  const comp = sourceCompetence(sources);
   const audits: CanonicalAudit[] = [];
   const rcaAudits = new Map<string, RcaAuditBucket>();
   const resolver = createRcaResolver(sources);
@@ -217,7 +236,7 @@ export function buildM2(sources: ParsedSource[]) {
     if (rca) registerRcaAudit(rcaAudits, rca, 'M2/Carteira Clientes');
     const out = blank('M2_CLIENTE_RCA');
     Object.assign(out, {
-      competence: competence(), snapshot_date: new Date().toISOString().slice(0, 10),
+      competence: comp, snapshot_date: new Date().toISOString().slice(0, 10),
       customer_canonical_id: cnpj.length === 14 ? `CUSTOMER:${cnpj}` : null, cnpj: cnpj.length === 14 ? cnpj : null,
       customer_name: value(portfolioRow ?? row, 'customer_name', 'customer_name_premise', 'name'), city: value(portfolioRow ?? row, 'city'), state: value(row, 'state', 'uf'),
       environment: value(row, 'environment'), profile: value(row, 'profile'), representative_code_snapshot: representative,
@@ -229,10 +248,12 @@ export function buildM2(sources: ParsedSource[]) {
     return out;
   });
   audits.push(...materializeRcaAudits(rcaAudits));
-  return list('M2_CLIENTE_RCA', records, ['Nova Base de Premissas - Q3.xlsx', 'NOVOS RCAS.xlsx', 'relatorio_carteira_clientes.xls', "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"], audits);
+  return list('M2_CLIENTE_RCA', records, ['Nova Base de Premissas - Q3.xlsx', 'NOVOS RCAS.xlsx', 'relatorio_carteira_clientes.xls', "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"], audits, comp);
 }
 
 export function buildM3(sources: ParsedSource[]) {
+  const comp = sourceCompetence(sources);
+  const targetComp = fileCompetence(sources.find(source => source.source === 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) ?? comp;
   const resolver = createRcaResolver(sources);
   const rcaAudits = new Map<string, RcaAuditBucket>();
   const records: Array<Record<string, unknown>> = [];
@@ -243,7 +264,7 @@ export function buildM3(sources: ParsedSource[]) {
     const cnpj = String(value(row, 'customer_document') ?? '');
     const out = blank('M3_MOVIMENTO_VENDAS');
     Object.assign(out, {
-      fact_type: 'SALE', competence: competence(), event_date: value(row, 'movement_date'), invoice_issue_date: value(row, 'invoice_issue_date'),
+      fact_type: 'SALE', competence: comp, event_date: value(row, 'movement_date'), invoice_issue_date: value(row, 'invoice_issue_date'),
       customer_canonical_id: cnpj.length === 14 ? `CUSTOMER:${cnpj}` : null, cnpj: cnpj.length === 14 ? cnpj : null, customer_winthor_code: value(row, 'customer_winthor_code'), customer_name: value(row, 'customer_name'), seller_name: value(row, 'seller_name'),
       rca_canonical_id: rca.canonicalId, transaction_rca_code: code, winthor_product_code: value(row, 'winthor_product_code'),
       industry_sku: value(row, 'manufacturer_code'), ean_product: value(row, 'ean_product'), product_description: value(row, 'product_description'), order_winthor: value(row, 'order_winthor'), order_rca: value(row, 'order_rca'),
@@ -256,12 +277,12 @@ export function buildM3(sources: ParsedSource[]) {
   }
   for (const row of rows(sources, 'CARTEIRA 24.08.xlsx')) {
     const out = blank('M3_MOVIMENTO_VENDAS');
-    Object.assign(out, { fact_type: 'INBOUND_ORDER', competence: competence(), order_date: value(row, 'order_date'), billing_date: value(row, 'billing_date'), industry_material: value(row, 'industry_material'), industry_order_number: value(row, 'industry_order_number'), invoice_number: value(row, 'invoice_raw'), order_qty: value(row, 'order_qty'), bill_qty: value(row, 'bill_qty'), inbound_net_value: value(row, 'net_value'), billing_type: value(row, 'billing_type'), source_lineage: 'Carteira Colgate' });
+    Object.assign(out, { fact_type: 'INBOUND_ORDER', competence: comp, order_date: value(row, 'order_date'), billing_date: value(row, 'billing_date'), industry_material: value(row, 'industry_material'), industry_order_number: value(row, 'industry_order_number'), invoice_number: value(row, 'invoice_raw'), order_qty: value(row, 'order_qty'), bill_qty: value(row, 'bill_qty'), inbound_net_value: value(row, 'net_value'), billing_type: value(row, 'billing_type'), source_lineage: 'Carteira Colgate' });
     records.push(out);
   }
   for (const row of rows(sources, 'entrada-notas-218.xls')) {
     const out = blank('M3_MOVIMENTO_VENDAS');
-    Object.assign(out, { fact_type: 'RECEIPT', competence: competence(), receipt_date: value(row, 'receipt_date'), invoice_issue_date: value(row, 'invoice_issue_date'), invoice_number: value(row, 'invoice_raw'), invoice_series: value(row, 'invoice_series'), winthor_product_code: value(row, 'receipt_item_code + description'), received_units: value(row, 'received_units'), receipt_unit_price: value(row, 'receipt_unit_price'), receipt_invoice_value: value(row, 'invoice_total'), current_financial_cost: value(row, 'current_financial_cost'), fiscal_code: value(row, 'fiscal_code'), operation_code: value(row, 'operation_code'), receipt_scope: value(row, '__receipt_scope') ?? 'ITEM', source_lineage: value(row, '__receipt_scope') === 'INVOICE' ? '218:NF' : '218:ITEM' });
+    Object.assign(out, { fact_type: 'RECEIPT', competence: comp, receipt_date: value(row, 'receipt_date'), invoice_issue_date: value(row, 'invoice_issue_date'), invoice_number: value(row, 'invoice_raw'), invoice_series: value(row, 'invoice_series'), winthor_product_code: value(row, 'receipt_item_code + description'), received_units: value(row, 'received_units'), receipt_unit_price: value(row, 'receipt_unit_price'), receipt_invoice_value: value(row, 'invoice_total'), current_financial_cost: value(row, 'current_financial_cost'), fiscal_code: value(row, 'fiscal_code'), operation_code: value(row, 'operation_code'), receipt_scope: value(row, '__receipt_scope') ?? 'ITEM', source_lineage: value(row, '__receipt_scope') === 'INVOICE' ? '218:NF' : '218:ITEM' });
     records.push(out);
   }
   for (const row of rows(sources, 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) {
@@ -270,13 +291,14 @@ export function buildM3(sources: ParsedSource[]) {
     const rca = resolver.resolveLegacy(code, value(row, 'target_rca_name'));
     registerRcaAudit(rcaAudits, rca, 'Bússola');
     const out = blank('M3_MOVIMENTO_VENDAS');
-    Object.assign(out, { fact_type: 'TARGET', competence: competence(), transaction_rca_code: code, rca_canonical_id: rca.canonicalId, sales_target: value(row, 'sales_target_pna'), positivity_target: value(row, 'positivity_target'), target_assignment_status: rca.status, source_lineage: 'Bússola: Metas | MCD + COLGATE | NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status });
+    Object.assign(out, { fact_type: 'TARGET', competence: targetComp, transaction_rca_code: code, rca_canonical_id: rca.canonicalId, sales_target: value(row, 'sales_target_pna'), positivity_target: value(row, 'positivity_target'), target_assignment_status: rca.status, source_lineage: 'Bússola: Metas | MCD + COLGATE | NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status });
     records.push(out);
   }
-  return list('M3_MOVIMENTO_VENDAS', records, ['vendas-8022.xls', 'CARTEIRA 24.08.xlsx', 'entrada-notas-218.xls', 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'], materializeRcaAudits(rcaAudits));
+  return list('M3_MOVIMENTO_VENDAS', records, ['vendas-8022.xls', 'CARTEIRA 24.08.xlsx', 'entrada-notas-218.xls', 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'], materializeRcaAudits(rcaAudits), comp);
 }
 
 export function buildM4(sources: ParsedSource[]) {
+  const comp = sourceCompetence(sources);
   const audits: CanonicalAudit[] = [];
   const resolver = createRcaResolver(sources);
   const rcaAudits = new Map<string, RcaAuditBucket>();
@@ -287,12 +309,12 @@ export function buildM4(sources: ParsedSource[]) {
     const rca = resolver.resolveLegacy(code);
     registerRcaAudit(rcaAudits, rca, '379');
     const out = blank('M4_HISTORICO_TRANSICAO');
-    Object.assign(out, { competence: competence(), movement_date: value(row, 'movement_date'), invoice_number: value(row, 'invoice_number'), invoice_series: value(row, 'invoice_series'), legacy_product_code: value(row, 'legacy_product_code'), customer_document_raw: value(row, 'customer_document'), legacy_rca_code: code, rca_canonical_id: rca.canonicalId, operation_code: value(row, 'operation_code'), cfop: value(row, 'cfop'), quantity_raw: value(row, 'quantity_raw'), value_raw: value(row, 'value_raw'), discount_raw: value(row, 'discount_raw'), net_weight: value(row, 'net_weight'), gross_weight: value(row, 'gross_weight'), movement_class: kind, mapping_status: rca.canonicalId ? rca.status : rca.status, source_lineage: '379|NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status });
+    Object.assign(out, { competence: comp, movement_date: value(row, 'movement_date'), invoice_number: value(row, 'invoice_number'), invoice_series: value(row, 'invoice_series'), legacy_product_code: value(row, 'legacy_product_code'), customer_document_raw: value(row, 'customer_document'), legacy_rca_code: code, rca_canonical_id: rca.canonicalId, operation_code: value(row, 'operation_code'), cfop: value(row, 'cfop'), quantity_raw: value(row, 'quantity_raw'), value_raw: value(row, 'value_raw'), discount_raw: value(row, 'discount_raw'), net_weight: value(row, 'net_weight'), gross_weight: value(row, 'gross_weight'), movement_class: kind, mapping_status: rca.canonicalId ? rca.status : rca.status, source_lineage: '379|NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status });
     if (kind === 'OTHER') audits.push(issue('UNKNOWN_OPERATION_CFOP', `Par ${value(row, 'operation_code')}/${value(row, 'cfop')} preservado como OTHER/PENDING.`));
     return out;
   });
   audits.push(...materializeRcaAudits(rcaAudits));
-  return list('M4_HISTORICO_TRANSICAO', records, ['379 25.txt', '379 26.txt', '310 total 2026.txt', '12.322.txt'], audits);
+  return list('M4_HISTORICO_TRANSICAO', records, ['379 25.txt', '379 26.txt', '310 total 2026.txt', '12.322.txt'], audits, comp);
 }
 
 export function buildCanonicalBundle(parsedSources: ParsedSource[]): CanonicalBundle {
@@ -306,7 +328,8 @@ export function buildCanonicalBundle(parsedSources: ParsedSource[]): CanonicalBu
 export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): CanonicalBundle {
   const bundle = buildCanonicalBundle(parsedSources);
   const snapshot = new Date().toISOString().slice(0, 10);
-  const comp = competence();
+  const comp = sourceCompetence(parsedSources);
+  const targetComp = fileCompetence(parsedSources.find(source => source.source === 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) ?? comp;
   const fieldOnly = (id: Id, record: Record<string, unknown>) => Object.fromEntries(schemas[id].map(schema => [schema.field, record[schema.field] ?? null]));
   const resolver = createRcaResolver(parsedSources);
 
@@ -378,7 +401,7 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
       mapping_status: 'LAUNCH_PENDING_CATALOG', source_lineage: 'Lançamentos',
     }));
   }
-  bundle.lists.M1_ITEM_ESTOQUE = list('M1_ITEM_ESTOQUE', [...items.values()], ['cadastro-itens-286.xls', 'posicao-estoque-105.xls', 'estoque-8013.xls', 'pctabpr 13.xlsx', 'Lista_de_Preco (8).xlsx', 'lançamentos.xlsx', "Sortimento Recomendado - Q3'26.xlsx"], []);
+  bundle.lists.M1_ITEM_ESTOQUE = list('M1_ITEM_ESTOQUE', [...items.values()], ['cadastro-itens-286.xls', 'posicao-estoque-105.xls', 'estoque-8013.xls', 'pctabpr 13.xlsx', 'Lista_de_Preco (8).xlsx', 'lançamentos.xlsx', "Sortimento Recomendado - Q3'26.xlsx"], [], comp);
 
   // M2 — CNPJ é a chave; Carteira fornece representante atual e NOVOS RCAS resolve identidade canônica.
   const m2RcaAudits = new Map<string, RcaAuditBucket>();
@@ -399,7 +422,7 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
       visit_frequency: value(portfolioRow ?? row, 'visit_frequency'), visit_day: value(portfolioRow ?? row, 'visit_day'), days_without_purchase: value(portfolioRow ?? row, 'days_without_purchase'), network_resolution_status: 'SOURCE_PRESERVED', source_lineage: 'Premissas|Carteira Clientes|NOVOS RCAS', audit_flags: rca && !rca.canonicalId ? rca.status : null,
     }));
   }
-  bundle.lists.M2_CLIENTE_RCA = list('M2_CLIENTE_RCA', [...m2.values()], ['Nova Base de Premissas - Q3.xlsx', 'NOVOS RCAS.xlsx', 'relatorio_carteira_clientes.xls', "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"], materializeRcaAudits(m2RcaAudits));
+  bundle.lists.M2_CLIENTE_RCA = list('M2_CLIENTE_RCA', [...m2.values()], ['Nova Base de Premissas - Q3.xlsx', 'NOVOS RCAS.xlsx', 'relatorio_carteira_clientes.xls', "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"], materializeRcaAudits(m2RcaAudits), comp);
 
   // M3 — 8022 é contexto ATUAL; Bússola homologada é contexto LEGADO com nome para desambiguar.
   const m3RcaAudits = new Map<string, RcaAuditBucket>();
@@ -414,9 +437,9 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   for (const row of rows(parsedSources, 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) {
     if (String(value(row, 'pasta_type') ?? '').trim().toUpperCase() !== 'MCD' || String(value(row, 'industry_name') ?? '').trim().toUpperCase() !== 'COLGATE') continue;
     const code = value(row, 'target_rca_code'); const rca = resolver.resolveLegacy(code, value(row, 'target_rca_name')); registerRcaAudit(m3RcaAudits, rca, 'Bússola');
-    m3.push(fieldOnly('M3_MOVIMENTO_VENDAS', { fact_id: `BUSSOLA:${value(row, '__source_row')}`, fact_type: 'TARGET', source: 'BUSSOLA', competence: comp, transaction_rca_code: code, rca_canonical_id: rca.canonicalId, sales_target: value(row, 'sales_target_pna'), positivity_target: value(row, 'positivity_target'), target_assignment_status: rca.status, source_lineage: 'Bússola: Metas | MCD + COLGATE | NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status }));
+    m3.push(fieldOnly('M3_MOVIMENTO_VENDAS', { fact_id: `BUSSOLA:${value(row, '__source_row')}`, fact_type: 'TARGET', source: 'BUSSOLA', competence: targetComp, transaction_rca_code: code, rca_canonical_id: rca.canonicalId, sales_target: value(row, 'sales_target_pna'), positivity_target: value(row, 'positivity_target'), target_assignment_status: rca.status, source_lineage: 'Bússola: Metas | MCD + COLGATE | NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status }));
   }
-  bundle.lists.M3_MOVIMENTO_VENDAS = list('M3_MOVIMENTO_VENDAS', m3, ['vendas-8022.xls', 'CARTEIRA 24.08.xlsx', 'entrada-notas-218.xls', 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'], materializeRcaAudits(m3RcaAudits));
+  bundle.lists.M3_MOVIMENTO_VENDAS = list('M3_MOVIMENTO_VENDAS', m3, ['vendas-8022.xls', 'CARTEIRA 24.08.xlsx', 'entrada-notas-218.xls', 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'], materializeRcaAudits(m3RcaAudits), comp);
 
   // M4 — 379 e 310 usam exclusivamente o contexto LEGADO do mesmo RCA master.
   const m4Audits: CanonicalAudit[] = [];
@@ -434,6 +457,6 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   });
   const receipts = rows(parsedSources, '12.322.txt').map(row => { const out = blank('M4_HISTORICO_TRANSICAO'); Object.assign(out, { historical_fact_id: `12.322:${value(row, '__source_row') ?? ''}`, row_type: 'RECEIPT_12322', source: '12.322.txt', source_year: '2026', competence: null, movement_date: value(row, 'invoice_issue_date'), invoice_number: value(row, 'invoice_raw'), accounting_date: value(row, 'accounting_date'), supplier_document: value(row, 'supplier_document'), supplier_name: value(row, 'supplier_name'), invoice_value: value(row, 'invoice_value'), discount_raw: value(row, 'discount'), receipt_class: value(row, 'operation_code') === '212.01' ? 'MERCHANDISE' : value(row, 'operation_code') === '299.40' ? 'SUPPLIES' : 'UNCLASSIFIED', mapping_status: 'INVOICE_GRAIN_ONLY', source_lineage: '12.322.txt' }); return out; });
   m4Audits.push(...materializeRcaAudits(m4RcaAudits));
-  bundle.lists.M4_HISTORICO_TRANSICAO = list('M4_HISTORICO_TRANSICAO', [...historical379('379 25.txt', '2025'), ...historical379('379 26.txt', '2026'), ...aggregates, ...receipts], ['379 25.txt', '379 26.txt', '310 total 2026.txt', '12.322.txt'], m4Audits);
+  bundle.lists.M4_HISTORICO_TRANSICAO = list('M4_HISTORICO_TRANSICAO', [...historical379('379 25.txt', '2025'), ...historical379('379 26.txt', '2026'), ...aggregates, ...receipts], ['379 25.txt', '379 26.txt', '310 total 2026.txt', '12.322.txt'], m4Audits, comp);
   return bundle;
 }

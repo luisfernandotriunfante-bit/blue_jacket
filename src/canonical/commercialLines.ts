@@ -1,12 +1,13 @@
 import type { SellOutLineRow } from './operationalViewModels';
 import type { CanonicalList } from './types';
+import { canonicalSellOutCompetence, classifySellOutStatus, sellOutAmount } from './sellOutRules';
 
 export const SELL_OUT_COMMERCIAL_LINES = ['Creme Dental', 'Esc + Enx + Fio', 'Sabonetes', 'Hair', 'Limpeza'] as const;
 export type SellOutCommercialLine = (typeof SELL_OUT_COMMERCIAL_LINES)[number];
 
 type RecordValue = Record<string, unknown>;
 const text = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
-const amount = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : Number(value ?? 0) || 0;
+const amount = sellOutAmount;
 const normalized = (value: unknown) => text(value)?.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase() ?? '';
 const round = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -43,24 +44,32 @@ function itemIndexes(m1: CanonicalList) {
   const byId = new Map<string, RecordValue>();
   const byWinthor = new Map<string, RecordValue>();
   const bySku = new Map<string, RecordValue>();
+  const byEan = new Map<string, RecordValue>();
+  const ambiguous = new Set<string>();
+  const setUnique = (map: Map<string, RecordValue>, namespace: string, key: string | null, item: RecordValue) => {
+    if (!key || ambiguous.has(`${namespace}:${key}`)) return;
+    if (map.has(key) && map.get(key) !== item) { map.delete(key); ambiguous.add(`${namespace}:${key}`); }
+    else map.set(key, item);
+  };
   for (const item of m1.records as RecordValue[]) {
     const id = firstText(item, ['item_canonical_id']);
     const winthor = firstText(item, ['winthor_code']);
     const sku = firstText(item, ['industry_sku', 'manufacturer_code', 'manufacturer_code_286']);
-    if (id) byId.set(id, item);
-    if (winthor) byWinthor.set(winthor, item);
-    if (sku) bySku.set(sku, item);
+    const ean = firstText(item, ['industry_ean', 'internal_ean', 'ean']);
+    setUnique(byId, 'id', id, item); setUnique(byWinthor, 'winthor', winthor, item); setUnique(bySku, 'sku', sku, item); setUnique(byEan, 'ean', ean?.replace(/\D/g, '') ?? null, item);
   }
-  return { byId, byWinthor, bySku };
+  return { byId, byWinthor, bySku, byEan };
 }
 
 function itemForSale(sale: RecordValue, indexes: ReturnType<typeof itemIndexes>) {
   const id = firstText(sale, ['item_canonical_id']);
   const winthor = firstText(sale, ['winthor_product_code']);
   const sku = firstText(sale, ['industry_sku', 'manufacturer_code']);
+  const ean = firstText(sale, ['ean_product', 'ean']);
   return (id ? indexes.byId.get(id) : undefined)
     ?? (winthor ? indexes.byWinthor.get(winthor) : undefined)
-    ?? (sku ? indexes.bySku.get(sku) : undefined);
+    ?? (sku ? indexes.bySku.get(sku) : undefined)
+    ?? (ean ? indexes.byEan.get(ean.replace(/\D/g, '')) : undefined);
 }
 
 function resolvedLine(sale: RecordValue, item: RecordValue | undefined) {
@@ -79,15 +88,20 @@ export function buildSellOutCommercialLineRows({ m1, m3, sellOutTotal }: { m1: C
     SELL_OUT_COMMERCIAL_LINES.map(line => [line, { invoiced: 0, toInvoice: 0, realized: 0 }] as const),
   );
   let unclassifiedValue = 0;
+  let unclassifiedRecords = 0;
+  const unclassifiedExamples: string[] = [];
+  const competence = canonicalSellOutCompetence(m3.records as RecordValue[], m3.competence);
 
   for (const sale of m3.records as RecordValue[]) {
-    if (sale.fact_type !== 'SALE') continue;
+    if (sale.fact_type !== 'SALE' || competence === 'MIXED' || (sale.competence && sale.competence !== competence && sale.competence !== m3.competence)) continue;
+    const status = classifySellOutStatus(sale.order_status);
+    if (status === 'UNKNOWN') continue;
     const value = amount(sale.value);
     const line = resolvedLine(sale, itemForSale(sale, indexes));
-    if (!line) { unclassifiedValue += value; continue; }
+    if (!line) { unclassifiedValue += value; unclassifiedRecords += 1; if (unclassifiedExamples.length < 5) unclassifiedExamples.push(firstText(sale, ['winthor_product_code', 'industry_sku', 'ean_product', 'product_description']) ?? 'Item sem identificador'); continue; }
     const bucket = buckets.get(line)!;
     bucket.realized += value;
-    if (normalized(sale.order_status) === 'A FATURAR') bucket.toInvoice += value;
+    if (status === 'TO_INVOICE') bucket.toInvoice += value;
     else bucket.invoiced += value;
   }
 
@@ -104,5 +118,5 @@ export function buildSellOutCommercialLineRows({ m1, m3, sellOutTotal }: { m1: C
     };
   });
 
-  return { rows, unclassifiedValue: round(unclassifiedValue) };
+  return { rows, unclassifiedValue: round(unclassifiedValue), unclassifiedRecords, unclassifiedExamples };
 }
