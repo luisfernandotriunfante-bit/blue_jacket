@@ -14,8 +14,8 @@ const tabs: Array<{ id: RegistryTab; label: string }> = [
 
 export function CadastrosPage() {
   const [tab, setTab] = useState<RegistryTab>('rcas');
-  return <PanelPage title="Cadastros" metricLabel="Uso canônico" metricValue="Fase 3B">
-    <PanelAlert tone="warning">Os cadastros internos estão sendo preparados e sincronizados, mas ainda não substituem as fontes utilizadas pelos motores canônicos. A ativação operacional ocorrerá na próxima etapa.</PanelAlert>
+  return <PanelPage title="Cadastros" metricLabel="Uso nos motores" metricValue="ATIVO">
+    <PanelAlert tone="success">Os Cadastros internos participam do build canônico v19. Precedência oficial: MANUAL ativo → SOURCE_SEED ativo → fonte física. Registros MANUAL inativos funcionam como supressão administrativa e conflitos de camada superior não caem silenciosamente para a fonte.</PanelAlert>
     <PanelTabs tabs={tabs} activeId={tab} onChange={setTab} ariaLabel="Cadastros internos" />
     {tab === 'rcas' ? <RcasRegistryPanel /> : tab === 'launches' ? <LaunchRegistryPanel /> : <TopRetailRegistryPanel />}
   </PanelPage>;
