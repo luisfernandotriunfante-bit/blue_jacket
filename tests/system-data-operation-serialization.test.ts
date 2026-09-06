@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { canonicalAdminRegistryHash, canonicalInputHash } from '../src/canonical/adminRegistryIdentity.ts';
 import {
   cloudSyncTestHelpers,
   type CloudUploadDependencies,
@@ -34,16 +35,21 @@ const identity: DeviceSyncIdentity = {
   secret: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
 };
 
-const build = (motorBuildId: string, stagingManifestHash = 'HASH') => ({
-  status: 'ACTIVE',
-  motorBuildId,
-  stagingManifestHash,
-  schemaVersion: 'v1',
-  engineVersion: CANONICAL_ENGINE_VERSION,
-  approvedAt: NOW,
-  rowCounts: {},
-  factTypeCounts: {},
-}) as any;
+const build = async (motorBuildId: string, stagingManifestHash = 'HASH') => {
+  const adminRegistryHash = await canonicalAdminRegistryHash(null);
+  return {
+    status: 'ACTIVE',
+    motorBuildId,
+    stagingManifestHash,
+    adminRegistryHash,
+    canonicalInputHash: await canonicalInputHash(stagingManifestHash, adminRegistryHash),
+    schemaVersion: 'v1',
+    engineVersion: CANONICAL_ENGINE_VERSION,
+    approvedAt: NOW,
+    rowCounts: {},
+    factTypeCounts: {},
+  } as any;
+};
 
 function makeSources(seed: string): SourceStorageSnapshot {
   return {
@@ -78,6 +84,8 @@ function uploadDependencies(options: {
     getActive: () => options.actives[Math.min(activeRead++, options.actives.length - 1)] ?? null,
     exportSources: async () => options.sources,
     sourceManifestHash: sourceStorageSnapshotManifestHash,
+    registryHash: canonicalAdminRegistryHash,
+    inputHash: canonicalInputHash,
     loadSettings: () => ({
       networkTargetByCompetence: {}, networkAllocationByCompetence: {}, sellOutTargetByCompetence: {}, positivityTargetByCompetence: {}, legacySellOutTarget: null, legacyPositivityTarget: null, inboundForecastByInvoice: {},
     }),
@@ -166,7 +174,7 @@ test('S4 — BASE_UPDATE sobrevive remount e mantém Send/Restore/Bundle bloquea
 
 test('S5 — auto-sync dentro de BASE_UPDATE não readquire gate nem deadlocka e faz um upload', async () => {
   const coordinator = createSystemDataOperationCoordinator();
-  const active = build('BUILD_S5');
+  const active = await build('BUILD_S5');
   let uploads = 0;
   const deps: BaseAutoSyncDependencies = {
     getIdentity: () => identity,
@@ -248,7 +256,7 @@ test('S9 — BASE_UPDATE pendente bloqueia Bundle antes de inspect/persist/recov
 test('S10 — source hash igual ao active permite exatamente um PUT', async () => {
   const sources = makeSources('A');
   const hash = await sourceStorageSnapshotManifestHash(sources);
-  const active = build('BUILD_A', hash);
+  const active = await build('BUILD_A', hash);
   let puts = 0;
   const result = await cloudSyncTestHelpers.uploadCurrentDeviceSnapshotWithDependencies(
     identity,
@@ -265,7 +273,7 @@ test('S11 — sources em transição abortam antes do PUT mesmo com active BUILD
   const sourcesA = makeSources('A');
   const sourcesB = makeSources('B');
   const hashA = await sourceStorageSnapshotManifestHash(sourcesA);
-  const activeA = build('BUILD_A', hashA);
+  const activeA = await build('BUILD_A', hashA);
   let puts = 0;
   await assert.rejects(
     () => cloudSyncTestHelpers.uploadCurrentDeviceSnapshotWithDependencies(
@@ -280,8 +288,8 @@ test('S11 — sources em transição abortam antes do PUT mesmo com active BUILD
 test('S12 — active mudando durante a captura aborta antes do PUT', async () => {
   const sources = makeSources('A');
   const hash = await sourceStorageSnapshotManifestHash(sources);
-  const activeA = build('BUILD_A', hash);
-  const activeB = build('BUILD_B', hash);
+  const activeA = await build('BUILD_A', hash);
+  const activeB = await build('BUILD_B', hash);
   let puts = 0;
   await assert.rejects(
     () => cloudSyncTestHelpers.uploadCurrentDeviceSnapshotWithDependencies(
