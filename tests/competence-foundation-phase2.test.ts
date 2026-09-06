@@ -1,0 +1,290 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import { cloudSyncTestHelpers, type CloudRestoreDependencies, type CloudSnapshot, type DeviceSyncIdentity } from '../src/canonical/cloudSync.ts';
+import { compareOfficialCompetence, isValidCompetenceId } from '../src/canonical/competence.ts';
+import {
+  bootstrapCompetenceState,
+  createManualCompetence,
+  loadCompetenceState,
+  restoreCompetenceState,
+  setCurrentCompetence,
+  type CompetenceState,
+} from '../src/canonical/competenceStore.ts';
+
+function memoryStorage() {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+    removeItem: (key: string) => { values.delete(key); },
+  };
+}
+
+const NOW = '2026-09-06T14:00:00.000Z';
+const LATER = '2026-09-06T15:00:00.000Z';
+const source = (relative: string) => readFileSync(new URL(relative, import.meta.url), 'utf8');
+
+const state = (currentCompetence: string | null, records: CompetenceState['records']): CompetenceState => ({
+  schemaVersion: 'v1', initializedAt: NOW, updatedAt: NOW, currentCompetence, records,
+});
+const openRecord = (id: string, origin: CompetenceState['records'][number]['origin'] = 'MANUAL') => ({ id, status: 'OPEN' as const, createdAt: NOW, updatedAt: NOW, origin });
+const closedRecord = (id: string) => ({ id, status: 'CLOSED' as const, createdAt: NOW, updatedAt: NOW, origin: 'SYNC' as const });
+
+// T1
+test('T1 — valida competência YYYY-MM com mês real 01–12', () => {
+  for (const value of ['2026-01', '2026-09', '2026-12']) assert.equal(isValidCompetenceId(value), true);
+  for (const value of ['2026-00', '2026-13', '2026-99', '26-09', '202609', 'texto']) assert.equal(isValidCompetenceId(value), false);
+});
+
+// T2
+test('T2 — registro manual nasce OPEN/MANUAL e duplicata não cria segundo registro', () => {
+  const target = memoryStorage();
+  const first = createManualCompetence('2026-09', { target, now: NOW });
+  assert.equal(first.created, true);
+  assert.deepEqual(first.state.records.map(item => [item.id, item.status, item.origin]), [['2026-09', 'OPEN', 'MANUAL']]);
+  assert.ok(Number.isFinite(Date.parse(first.state.records[0].createdAt)));
+  assert.ok(Number.isFinite(Date.parse(first.state.records[0].updatedAt)));
+  const duplicate = createManualCompetence('2026-09', { target, now: LATER });
+  assert.equal(duplicate.created, false);
+  assert.equal(duplicate.state.records.length, 1);
+});
+
+// T3
+test('T3 — current sempre referencia registro existente OPEN e CLOSED é rejeitada', () => {
+  const target = memoryStorage();
+  restoreCompetenceState(state(null, [openRecord('2026-09'), closedRecord('2026-08')]), target);
+  assert.equal(setCurrentCompetence('2026-09', { target, now: LATER }).currentCompetence, '2026-09');
+  assert.throws(() => setCurrentCompetence('2026-08', { target, now: LATER }), /COMPETENCE_CURRENT_NOT_OPEN/);
+  assert.throws(() => setCurrentCompetence('2026-10', { target, now: LATER }), /COMPETENCE_RECORD_NOT_FOUND/);
+  assert.throws(() => restoreCompetenceState(state('2026-08', [closedRecord('2026-08')]), target), /COMPETENCE_CURRENT_NOT_OPEN/);
+});
+
+// T4
+test('T4 — trocar current não fecha automaticamente a competência anterior', () => {
+  const target = memoryStorage();
+  restoreCompetenceState(state('2026-08', [openRecord('2026-08'), openRecord('2026-09')]), target);
+  const changed = setCurrentCompetence('2026-09', { target, now: LATER });
+  assert.equal(changed.currentCompetence, '2026-09');
+  assert.equal(changed.records.find(item => item.id === '2026-08')?.status, 'OPEN');
+  assert.equal(changed.records.find(item => item.id === '2026-09')?.status, 'OPEN');
+});
+
+// T5
+test('T5 — primeiro bootstrap une M3 único e metas, tornando somente M3 current', () => {
+  const target = memoryStorage();
+  const boot = bootstrapCompetenceState('2026-09', ['2026-08'], { target, now: NOW });
+  assert.deepEqual(boot.records.map(item => item.id).sort(), ['2026-08', '2026-09']);
+  assert.equal(boot.currentCompetence, '2026-09');
+  assert.equal(boot.records.find(item => item.id === '2026-09')?.origin, 'MIGRATION_M3');
+  assert.equal(boot.records.find(item => item.id === '2026-08')?.origin, 'MIGRATION_REPORT_SETTINGS');
+});
+
+// T6
+test('T6 — bootstrap posterior nunca sobrescreve estado oficial existente', () => {
+  const target = memoryStorage();
+  restoreCompetenceState(state('2026-08', [openRecord('2026-08')]), target);
+  const refreshed = bootstrapCompetenceState('2026-09', ['2026-09'], { target, now: LATER });
+  assert.equal(refreshed.currentCompetence, '2026-08');
+  assert.deepEqual(refreshed.records.map(item => item.id), ['2026-08']);
+});
+
+// T7/T8/T9
+test('T7 — MIXED no primeiro bootstrap não seleciona current', () => {
+  const target = memoryStorage();
+  assert.equal(bootstrapCompetenceState('MIXED', [], { target, now: NOW }).currentCompetence, null);
+});
+test('T8 — UNRESOLVED no primeiro bootstrap não seleciona current', () => {
+  const target = memoryStorage();
+  assert.equal(bootstrapCompetenceState('UNRESOLVED', [], { target, now: NOW }).currentCompetence, null);
+});
+test('T9 — somente competências de metas são registradas, sem seleção automática', () => {
+  const target = memoryStorage();
+  const boot = bootstrapCompetenceState(null, ['2026-08'], { target, now: NOW });
+  assert.deepEqual(boot.records.map(item => item.id), ['2026-08']);
+  assert.equal(boot.currentCompetence, null);
+});
+
+// T10/T11/T12/T13 structural + behavioral authority
+test('T10 — MetasPage usa CompetenceState e não deriva seleção de M3', () => {
+  const metas = source('../src/pages/MetasPage.tsx');
+  assert.match(metas, /subscribeCompetenceState/);
+  assert.match(metas, /currentCompetence/);
+  assert.doesNotMatch(metas, /canonicalSellOutCompetence|M3_MOVIMENTO_VENDAS|loadCandidateList/);
+});
+test('T11 — outra competência OPEN registrada permanece selecionável/editável em Metas', () => {
+  const metas = source('../src/pages/MetasPage.tsx');
+  assert.match(metas, /competenceState\.records/);
+  assert.match(metas, /selectedRecord\.status === 'OPEN'/);
+  const target = memoryStorage();
+  const stored = restoreCompetenceState(state('2026-08', [openRecord('2026-08'), openRecord('2026-09')]), target);
+  assert.equal(stored.records.find(item => item.id === '2026-09')?.status, 'OPEN');
+});
+test('T12 — CLOSED é somente leitura em Metas e não pode ser current', () => {
+  const metas = source('../src/pages/MetasPage.tsx');
+  assert.match(metas, /selectedRecord\?\.status === 'CLOSED'/);
+  assert.match(metas, /disabled=\{!editable\}/);
+  const target = memoryStorage();
+  restoreCompetenceState(state(null, [closedRecord('2026-08')]), target);
+  assert.throws(() => setCurrentCompetence('2026-08', { target, now: LATER }), /COMPETENCE_CURRENT_NOT_OPEN/);
+});
+test('T13 — bootstrap de competências não altera os valores de metas existentes', () => {
+  const target = memoryStorage();
+  const settings = {
+    sellOutTargetByCompetence: { '2026-08': 972997.26 },
+    positivityTargetByCompetence: { '2026-08': 902 },
+    networkTargetByCompetence: { '2026-08': 500000 },
+  };
+  const before = structuredClone(settings);
+  bootstrapCompetenceState('2026-09', Object.keys(settings.sellOutTargetByCompetence), { target, now: NOW });
+  assert.deepEqual(settings, before);
+  const metas = source('../src/pages/MetasPage.tsx');
+  assert.match(metas, /sellOutTargetsFor\(competence\)/);
+  assert.match(metas, /networkTargetFor\(competence\)/);
+  assert.match(metas, /legacyTargetsPendingFor/);
+  assert.match(metas, /migrateLegacyTargetsToCompetence/);
+});
+
+// T14–T17
+test('T14 — official 2026-09 vs M3 2026-09 é MATCH', () => assert.equal(compareOfficialCompetence('2026-09', '2026-09'), 'MATCH'));
+test('T15 — official 2026-09 vs M3 2026-08 é MISMATCH sem reescrever valores', () => {
+  const official = '2026-09'; const observed = '2026-08';
+  assert.equal(compareOfficialCompetence(official, observed), 'MISMATCH');
+  assert.equal(official, '2026-09'); assert.equal(observed, '2026-08');
+});
+test('T16 — M3 válido sem official produz bloqueio NO_OFFICIAL_COMPETENCE', () => assert.equal(compareOfficialCompetence(null, '2026-09'), 'NO_OFFICIAL_COMPETENCE'));
+test('T17 — M3 MIXED com official produz bloqueio OBSERVED_MIXED', () => assert.equal(compareOfficialCompetence('2026-09', 'MIXED'), 'OBSERVED_MIXED'));
+
+// T18
+test('T18 — Redes compõe official → M3 e preserva gate M3 → Roteiro mismatch', () => {
+  assert.equal(compareOfficialCompetence('2026-09', '2026-09'), 'MATCH');
+  assert.equal(compareOfficialCompetence('2026-09', '2026-08'), 'MISMATCH');
+  const page = source('../src/pages/TopRetailNetworksPage.tsx');
+  const model = source('../src/canonical/topRetailNetworksModel.ts');
+  assert.ok(page.indexOf('compareOfficialCompetence') < page.indexOf('buildTopRetailNetworksViewModel'));
+  assert.match(model, /TOP_ROUTE_COMPETENCE_MISMATCH/);
+  assert.match(model, /routeBlocked/);
+});
+
+// T19
+test('T19 — novo M3 não muda current já inicializado e gera mismatch controlado', () => {
+  const target = memoryStorage();
+  restoreCompetenceState(state('2026-08', [openRecord('2026-08')]), target);
+  const afterNewBuild = bootstrapCompetenceState('2026-09', [], { target, now: LATER });
+  assert.equal(afterNewBuild.currentCompetence, '2026-08');
+  assert.equal(compareOfficialCompetence(afterNewBuild.currentCompetence, '2026-09'), 'MISMATCH');
+  assert.equal(loadCompetenceState(target)?.currentCompetence, '2026-08');
+});
+
+const identity: DeviceSyncIdentity = {
+  workspaceId: '7a7a7a7a-7a7a-4a7a-8a7a-7a7a7a7a7a7a',
+  secret: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+};
+const sources = { format: 'blue-jacket-source-storage/v1' as const, exportedAt: NOW, staging: [] };
+const settings = {
+  networkTargetByCompetence: {}, networkAllocationByCompetence: {}, sellOutTargetByCompetence: {}, positivityTargetByCompetence: {},
+  legacySellOutTarget: null, legacyPositivityTarget: null, inboundForecastByInvoice: {},
+};
+const active = { status: 'ACTIVE', motorBuildId: 'BUILD_PHASE2', stagingManifestHash: 'hash', schemaVersion: 'v1', engineVersion: 'browser-stage4-product-assortment-v18-sellout-closure', approvedAt: NOW, rowCounts: {}, factTypeCounts: {} } as any;
+const stateA = state('2026-08', [openRecord('2026-08')]);
+const stateB = state('2026-09', [openRecord('2026-08'), openRecord('2026-09', 'SYNC')]);
+
+// T20
+test('T20 — snapshot novo v1 criptografado transporta competenceState validado', async () => {
+  const snapshot = cloudSyncTestHelpers.buildCloudSnapshot(active, sources, settings, stateB, NOW);
+  assert.deepEqual(snapshot.competenceState, stateB);
+  const encrypted = await cloudSyncTestHelpers.encrypt(identity, snapshot);
+  const restored = await cloudSyncTestHelpers.decrypt(identity, encrypted);
+  assert.deepEqual(restored.competenceState, stateB);
+  assert.equal(restored.format, 'blue-jacket-device-sync/v1');
+});
+
+function restoreHarness(initialCompetence: CompetenceState | null, failFirstBuild = false) {
+  let currentSources = structuredClone(sources);
+  let currentSettings = structuredClone(settings);
+  let currentCompetence = initialCompetence ? structuredClone(initialCompetence) : null;
+  let builds = 0;
+  let competenceReplacements = 0;
+  const deps: CloudRestoreDependencies = {
+    exportSources: async () => structuredClone(currentSources),
+    loadSettings: () => structuredClone(currentSettings),
+    loadCompetence: () => currentCompetence ? structuredClone(currentCompetence) : null,
+    restoreSources: async next => { currentSources = structuredClone(next); },
+    restoreSettings: next => { currentSettings = structuredClone(next as typeof settings); return currentSettings; },
+    replaceCompetence: next => {
+      competenceReplacements += 1;
+      currentCompetence = next ? structuredClone(next as CompetenceState) : null;
+      return currentCompetence;
+    },
+    build: async () => {
+      builds += 1;
+      if (failFirstBuild && builds === 1) throw new Error('REBUILD_FAILED_AFTER_REMOTE_APPLY');
+      return active;
+    },
+  };
+  return { deps, read: () => ({ currentSources, currentSettings, currentCompetence, builds, competenceReplacements }) };
+}
+
+// T21
+test('T21 — restore de snapshot com competenceState restaura current e records', async () => {
+  const harness = restoreHarness(stateA);
+  const snapshot: CloudSnapshot = { format: 'blue-jacket-device-sync/v1', createdAt: NOW, active, sources, settings, competenceState: stateB };
+  await cloudSyncTestHelpers.applyCloudSnapshot(snapshot, harness.deps);
+  assert.deepEqual(harness.read().currentCompetence, stateB);
+});
+
+// T22
+test('T22 — snapshot legado v1 sem competenceState continua aceito pelo decrypt', async () => {
+  const legacy: CloudSnapshot = { format: 'blue-jacket-device-sync/v1', createdAt: NOW, active, sources, settings };
+  const encrypted = await cloudSyncTestHelpers.encrypt(identity, legacy);
+  const decrypted = await cloudSyncTestHelpers.decrypt(identity, encrypted);
+  assert.equal('competenceState' in decrypted, false);
+  assert.equal(decrypted.format, 'blue-jacket-device-sync/v1');
+});
+
+// T23
+test('T23 — snapshot legado sem competência preserva state local existente', async () => {
+  const harness = restoreHarness(stateA);
+  const legacy: CloudSnapshot = { format: 'blue-jacket-device-sync/v1', createdAt: NOW, active, sources, settings };
+  await cloudSyncTestHelpers.applyCloudSnapshot(legacy, harness.deps);
+  assert.deepEqual(harness.read().currentCompetence, stateA);
+  assert.equal(harness.read().competenceReplacements, 0);
+});
+
+// T24
+test('T24 — falha posterior no rebuild restaura competenceState anterior junto do rollback', async () => {
+  const harness = restoreHarness(stateA, true);
+  const remote: CloudSnapshot = { format: 'blue-jacket-device-sync/v1', createdAt: NOW, active, sources: { ...sources, exportedAt: LATER }, settings: { ...settings, networkTargetByCompetence: { '2026-09': 123 } }, competenceState: stateB };
+  await assert.rejects(() => cloudSyncTestHelpers.applyCloudSnapshot(remote, harness.deps), /REBUILD_FAILED_AFTER_REMOTE_APPLY/);
+  assert.deepEqual(harness.read().currentCompetence, stateA);
+  assert.deepEqual(harness.read().currentSources, sources);
+  assert.deepEqual(harness.read().currentSettings, settings);
+  assert.equal(harness.read().builds, 2);
+});
+
+// Structural guarantees beyond T1–T24
+test('Fase 2 — CompetenciasPage é funcional e não oferece fechamento/reabertura', () => {
+  const page = source('../src/pages/admin/CompetenciasPage.tsx');
+  assert.match(page, /createManualCompetence/);
+  assert.match(page, /setCurrentCompetence/);
+  assert.match(page, /canonicalSellOutCompetence/);
+  assert.match(page, /competenceFromFileName/);
+  assert.match(page, /reportSettingsCompetences/);
+  assert.doesNotMatch(page, /Fechar mês|Reabrir|closeCompetence|reopenCompetence/);
+});
+
+test('Fase 2 — Sell Out adiciona somente gate temporal antes do view-model canônico', () => {
+  const page = source('../src/pages/SellOutPage.tsx');
+  assert.match(page, /canonicalSellOutCompetence\(lists\.m3\.records, lists\.m3\.competence\)/);
+  assert.match(page, /compareOfficialCompetence/);
+  assert.ok(page.indexOf('compatibility !== \'MATCH\'') < page.indexOf('buildSellOutViewModel(lists)'));
+});
+
+test('Fase 2 — Cloud Snapshot mantém v1, BJ1 e AES-GCM sem backend novo', () => {
+  const cloud = source('../src/canonical/cloudSync.ts');
+  assert.match(cloud, /format: 'blue-jacket-device-sync\/v1'/);
+  assert.match(cloud, /competenceState\?: CompetenceState/);
+  assert.match(cloud, /AES-GCM/);
+  assert.match(cloud, /`BJ1\.\$\{identity\.workspaceId\}\.\$\{identity\.secret\}`/);
+  assert.match(cloud, /blue-jacket-sync/);
+});
