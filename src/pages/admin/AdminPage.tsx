@@ -5,7 +5,8 @@ import { AuditoriaPage } from '../AuditoriaPage';
 import { ListasCanonicasPage } from '../ListasCanonicasPage';
 import { MetasPage } from '../MetasPage';
 import { BasesPage } from './BasesPage';
-import { SincronizacaoPage, syncActiveBuildIfPaired, syncErrorMessage } from './SincronizacaoPage';
+import { syncActiveBuildIfPaired } from './baseAutoSync';
+import { SincronizacaoPage, syncErrorMessage } from './SincronizacaoPage';
 
 type AdminPageProps = {
   view: AdminTabId;
