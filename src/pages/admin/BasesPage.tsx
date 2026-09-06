@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { loadCandidateList } from '../../canonical/candidateLists';
 import type { ActiveCanonicalBundle } from '../../canonical/runtime';
 import {
@@ -10,15 +10,15 @@ import {
   REQUIRED_SOURCE_IDS,
   SOURCE_LABELS,
   type SourceStageManifest,
-  type SourceUpdateProgress,
 } from '../../canonical/sourceImport';
 import { useData } from '../../store/DataContext';
 import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../../ui/pattern/PanelVisual';
 import {
   activateBuildAndWaitForAutoSync,
   baseUpdateCompletionStatus,
-  createBaseUpdateSerialGate,
+  baseUpdateCoordinator,
   type BaseAutoSyncResult,
+  type BaseUpdateCoordinatorState,
 } from './baseUpdateFlow';
 
 const statusLabel = (manifest: SourceStageManifest | undefined, file: File | undefined) => file
@@ -38,23 +38,34 @@ function sourceError(reason: unknown) {
   return reason instanceof Error ? reason.message : code;
 }
 
+function updatePhaseMessage(state: BaseUpdateCoordinatorState) {
+  if (state.phase === 'SYNCING') return 'Sincronizando o build recém-ativado entre aparelhos…';
+  if (state.phase === 'ACTIVATING') return 'Ativando o novo build canônico…';
+  if (state.progress) return `${state.progress.phase} — ${state.progress.message}`;
+  return 'Processando atualização das bases…';
+}
+
 type BasesPageProps = {
   onCanonicalActivated?: (active: ActiveCanonicalBundle) => Promise<BaseAutoSyncResult>;
 };
 
 export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   const { activeCanonical, activateCanonical } = useData();
-  const [status, setStatus] = useState('');
-  const [error, setError] = useState('');
+  const [updateState, setUpdateState] = useState(() => baseUpdateCoordinator.getState());
+  const [pageError, setPageError] = useState('');
   const [selected, setSelected] = useState<Partial<Record<string, File>>>({});
   const [manifests, setManifests] = useState<SourceStageManifest[]>([]);
-  const [progress, setProgress] = useState<SourceUpdateProgress | null>(null);
   const [unmatched, setUnmatched] = useState<string[]>([]);
-  const [processing, setProcessing] = useState(false);
-  const updateGate = useRef(createBaseUpdateSerialGate()).current;
-  const refresh = () => loadSourceStagingManifests().then(setManifests).catch(reason => setError(String(reason)));
 
+  const refresh = () => loadSourceStagingManifests()
+    .then(value => { setManifests(value); setPageError(''); })
+    .catch(reason => setPageError(String(reason)));
+
+  useEffect(() => baseUpdateCoordinator.subscribe(setUpdateState), []);
   useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    if (!updateState.busy && updateState.phase !== 'IDLE') void refresh();
+  }, [updateState.busy, updateState.phase]);
 
   const manifestBySource = useMemo(() => new Map(manifests.map(manifest => [manifest.source, manifest])), [manifests]);
   const validCount = REQUIRED_SOURCE_IDS.filter(source => isSourceStageCurrent(manifestBySource.get(source))).length;
@@ -71,7 +82,7 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
     }
     setSelected(next);
     setUnmatched(unknown);
-    setError('');
+    setPageError('');
   };
 
   const onMany = (event: ChangeEvent<HTMLInputElement>) => {
@@ -86,10 +97,8 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   };
 
   const process = async () => {
-    await updateGate.run(async () => {
-      setProcessing(true);
-      setError('');
-      setStatus('');
+    await baseUpdateCoordinator.run(async controls => {
+      controls.setPhase('PROCESSING');
       try {
         const storage = await requestPersistentSourceStorage();
         if (storage.quota && storage.usage && storage.quota - storage.usage < 200 * 1024 * 1024) {
@@ -100,15 +109,20 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
           lists: Object.fromEntries((await Promise.all((['M1_ITEM_ESTOQUE', 'M2_CLIENTE_RCA', 'M3_MOVIMENTO_VENDAS', 'M4_HISTORICO_TRANSICAO'] as const)
             .map(async id => [id, await loadCandidateList(id)]))) as [string, unknown][]) as any,
         } : undefined;
-        const result = await processSourceUpdates(selected, setProgress, base);
-        await refresh();
+        const result = await processSourceUpdates(selected, progress => controls.setProgress(progress), base);
         if (result.rejected.length) {
-          setError(`Fonte rejeitada; o build anterior foi preservado. ${result.rejected.map(item => `${SOURCE_LABELS[item.source] ?? item.source}: ${item.errors.join(' | ')}`).join(' · ')}`);
-          return;
+          return {
+            phase: 'FAILED' as const,
+            status: '',
+            error: `Fonte rejeitada; o build anterior foi preservado. ${result.rejected.map(item => `${SOURCE_LABELS[item.source] ?? item.source}: ${item.errors.join(' | ')}`).join(' · ')}`,
+          };
         }
         if (result.missing.length) {
-          setStatus(`Stagings salvos. Ainda faltam ${result.missing.length} fonte(s): ${result.missing.map(source => SOURCE_LABELS[source] ?? source).join(', ')}.`);
-          return;
+          return {
+            phase: 'SUCCESS' as const,
+            status: `Stagings salvos. Ainda faltam ${result.missing.length} fonte(s): ${result.missing.map(source => SOURCE_LABELS[source] ?? source).join(', ')}.`,
+            error: '',
+          };
         }
         if (!result.active) throw new Error('CANONICAL_BUILD_NOT_CREATED');
 
@@ -116,18 +130,35 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
           ? `ATUALIZAÇÃO CONCLUÍDA — ${result.updated.length} fonte(s) atualizada(s), ${result.unchanged.length} reutilizada(s). Build ativo: ${result.active.motorBuildId}.`
           : `MOTOR REPROCESSADO — ${result.manifests.length} fonte(s) válida(s) foram reaproveitadas e o novo build foi ativado. Build ativo: ${result.active.motorBuildId}.`;
 
-        const syncResult = await activateBuildAndWaitForAutoSync(result.active, activateCanonical, onCanonicalActivated);
+        controls.setPhase('ACTIVATING');
+        const syncResult = await activateBuildAndWaitForAutoSync(
+          result.active,
+          activateCanonical,
+          async active => {
+            controls.setPhase('SYNCING');
+            return onCanonicalActivated ? onCanonicalActivated(active) : { status: 'NOT_PAIRED' };
+          },
+        );
         setSelected({});
-        setStatus(baseUpdateCompletionStatus(localStatus, syncResult));
-        if (syncResult.status === 'SYNC_FAILED') setError(sourceError(syncResult.error));
+        const status = baseUpdateCompletionStatus(localStatus, syncResult);
+        if (syncResult.status === 'SYNC_FAILED') {
+          return {
+            phase: 'LOCAL_SUCCESS_SYNC_FAILED' as const,
+            status,
+            error: sourceError(syncResult.error),
+          };
+        }
+        return { phase: 'SUCCESS' as const, status, error: '' };
       } catch (reason) {
-        setError(sourceError(reason));
-      } finally {
-        setProcessing(false);
-        setProgress(null);
+        return { phase: 'FAILED' as const, status: '', error: sourceError(reason) };
       }
     });
   };
+
+  const processing = updateState.busy;
+  const processLabel = processing
+    ? updateState.phase === 'SYNCING' ? 'Sincronizando…' : updateState.phase === 'ACTIVATING' ? 'Ativando…' : 'Processando…'
+    : selectedCount ? 'PROCESSAR E ATUALIZAR SISTEMA' : 'REPROCESSAR MOTOR ATUAL';
 
   return <PanelPage title="Bases" metricLabel="Fontes válidas" metricValue={`${validCount}/19`}>
     {activeCanonical
@@ -136,17 +167,18 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
 
     <PanelCard>
       <PanelSectionHeader eyebrow="IMPORTAÇÃO REAL" title="Arquivos originais → Blue Jacket" description="O motor processa as fontes no navegador: parser → staging → M1–M4 → novo build ativo." />
-      <label className="panel-button" style={{ display: 'inline-block', cursor: 'pointer' }}>
+      <label className="panel-button" style={{ display: 'inline-block', cursor: processing ? 'not-allowed' : 'pointer' }} aria-disabled={processing}>
         Selecionar vários arquivos
-        <input type="file" multiple accept=".xls,.xlsx,.txt" onChange={onMany} style={{ display: 'none' }} />
+        <input type="file" multiple disabled={processing} accept=".xls,.xlsx,.txt" onChange={onMany} style={{ display: 'none' }} />
       </label>{' '}
       <button className="panel-button" disabled={processing || (!selectedCount && !canReprocess)} onClick={() => void process()}>
-        {processing ? 'Processando…' : selectedCount ? 'PROCESSAR E ATUALIZAR SISTEMA' : 'REPROCESSAR MOTOR ATUAL'}
+        {processLabel}
       </button>
-      {progress ? <p className="panel-muted">{progress.phase} — {progress.message}</p> : null}
+      {processing ? <PanelAlert tone="info">{updatePhaseMessage(updateState)}</PanelAlert> : null}
       {unmatched.length ? <PanelAlert tone="warning">Não identifiquei automaticamente: {unmatched.join(', ')}. Use o botão da fonte correta na tabela abaixo.</PanelAlert> : null}
-      {status ? <PanelAlert tone="success">{status}</PanelAlert> : null}
-      {error ? <PanelAlert tone="error">{error}</PanelAlert> : null}
+      {updateState.status ? <PanelAlert tone="success">{updateState.status}</PanelAlert> : null}
+      {updateState.error ? <PanelAlert tone="error">{updateState.error}</PanelAlert> : null}
+      {pageError ? <PanelAlert tone="error">{pageError}</PanelAlert> : null}
       <div className="panel-table-wrap" style={{ marginTop: 12 }}>
         <table className="panel-table">
           <thead><tr><th>Fonte</th><th>Status</th><th>Arquivo atual</th><th>Linhas</th><th>Hash</th><th>Substituir</th></tr></thead>
@@ -159,7 +191,7 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
               <td>{file?.name ?? manifest?.fileName ?? '—'}</td>
               <td>{manifest?.parsedRows ?? '—'}</td>
               <td>{manifest ? shortHash(manifest.fileHash) : '—'}</td>
-              <td><label className="panel-button" style={{ display: 'inline-block', cursor: 'pointer' }}>Selecionar<input type="file" accept=".xls,.xlsx,.txt" onChange={event => onSource(source, event)} style={{ display: 'none' }} /></label></td>
+              <td><label className="panel-button" style={{ display: 'inline-block', cursor: processing ? 'not-allowed' : 'pointer' }} aria-disabled={processing}>Selecionar<input type="file" disabled={processing} accept=".xls,.xlsx,.txt" onChange={event => onSource(source, event)} style={{ display: 'none' }} /></label></td>
             </tr>;
           })}</tbody>
         </table>
