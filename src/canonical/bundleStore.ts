@@ -1,5 +1,6 @@
 import { inflateSync } from 'fflate';
 import { canonicalInputHash } from './adminRegistryIdentity';
+import { canonicalInputHashV3 } from './sourceReplacementIdentity';
 import { canonicalInputHashV2 } from './targetIdentity';
 import { APPROVED_CANONICAL_BUILD, resolveActiveCanonicalBundle, type ActiveCanonicalBundle } from './runtime';
 import {
@@ -13,12 +14,17 @@ import type { CanonicalList } from './types';
 type ListId = CanonicalList['id'];
 const V19_ENGINE = 'browser-stage4-product-assortment-v19-admin-registry-authority';
 const V20_ENGINE = 'browser-stage4-product-assortment-v20-targets-by-competence';
+const V21_ENGINE = 'browser-stage4-product-assortment-v21-source-replacement';
+
 export type BundleManifest = {
   bundleFormat: 'blue-jacket-canonical-bundle/v1';
   motorBuildId: string;
   stagingManifestHash: string;
   adminRegistryHash?: string;
   rcaTargetRegistryHash?: string;
+  sourceContractVersion?: 'v2';
+  sourceReplacementProofHash?: string;
+  sourceReplacements?: Array<{ source: string; scope: string }>;
   canonicalInputHash?: string;
   schemaVersion: string;
   engineVersion: string;
@@ -26,12 +32,16 @@ export type BundleManifest = {
   files: Record<string, { path: string; sha256: string; bytes: number }>;
   createdAt: string;
 };
+
 export type StoredCanonicalBundle = { id: string; manifest: BundleManifest; zip: Blob; importedAt: string };
 export type BundleImportResult = {
   motorBuildId: string;
   stagingManifestHash: string;
   adminRegistryHash?: string;
   rcaTargetRegistryHash?: string;
+  sourceContractVersion?: 'v2';
+  sourceReplacementProofHash?: string;
+  sourceReplacements?: Array<{ source: string; scope: string }>;
   canonicalInputHash?: string;
   schemaVersion: string;
   engineVersion: string;
@@ -44,15 +54,19 @@ export type CanonicalBundleRepository = {
   get: (id: string) => Promise<StoredCanonicalBundle | undefined>;
   delete: (id: string) => Promise<void>;
 };
-const DB_NAME = 'blue-jacket-v3-canonical-bundles'; const STORE_NAME = 'bundles';
+
+const DB_NAME = 'blue-jacket-v3-canonical-bundles';
+const STORE_NAME = 'bundles';
 const ids: ListId[] = ['M1_ITEM_ESTOQUE', 'M2_CLIENTE_RCA', 'M3_MOVIMENTO_VENDAS', 'M4_HISTORICO_TRANSICAO'];
-const encoder = new TextEncoder(); const decoder = new TextDecoder();
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
 function db() { return new Promise<IDBDatabase>((resolve, reject) => { const request = indexedDB.open(DB_NAME, 1); request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(STORE_NAME)) request.result.createObjectStore(STORE_NAME, { keyPath: 'id' }); }; request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error ?? new Error('CANONICAL_STORAGE_UNAVAILABLE')); }); }
 async function put(bundle: StoredCanonicalBundle) { const database = await db(); await new Promise<void>((resolve, reject) => { const transaction = database.transaction(STORE_NAME, 'readwrite'); transaction.objectStore(STORE_NAME).put(bundle); transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error ?? new Error('CANONICAL_STORAGE_WRITE_FAILED')); }); database.close(); }
 async function get(id: string) { const database = await db(); const bundle = await new Promise<StoredCanonicalBundle | undefined>((resolve, reject) => { const request = database.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(id); request.onsuccess = () => resolve(request.result as StoredCanonicalBundle | undefined); request.onerror = () => reject(request.error ?? new Error('CANONICAL_STORAGE_READ_FAILED')); }); database.close(); return bundle; }
 async function remove(id: string) { const database = await db(); await new Promise<void>((resolve, reject) => { const transaction = database.transaction(STORE_NAME, 'readwrite'); transaction.objectStore(STORE_NAME).delete(id); transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error ?? new Error('CANONICAL_STORAGE_DELETE_FAILED')); }); database.close(); }
 export const indexedDbCanonicalBundleRepository: CanonicalBundleRepository = { put, get, delete: remove };
+
 async function sha256(bytes: Uint8Array) { const copy = new Uint8Array(bytes.byteLength); copy.set(bytes); const digest = await crypto.subtle.digest('SHA-256', copy.buffer); return Array.from(new Uint8Array(digest)).map(value => value.toString(16).padStart(2, '0')).join(''); }
 
 type ZipEntry = { method: number; compressedSize: number; uncompressedSize: number; localOffset: number };
@@ -66,6 +80,10 @@ function entries(bytes: Uint8Array) {
 }
 function extract(bytes: Uint8Array, map: Map<string, ZipEntry>, path: string) { const entry = map.get(path); if (!entry) throw new Error(`BUNDLE_FILE_MISSING:${path}`); const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength); if (view.getUint32(entry.localOffset, true) !== 0x04034b50) throw new Error('BUNDLE_ZIP_INVALID'); const nameLength = view.getUint16(entry.localOffset + 26, true); const extraLength = view.getUint16(entry.localOffset + 28, true); const start = entry.localOffset + 30 + nameLength + extraLength; const compressed = bytes.slice(start, start + entry.compressedSize); const output = entry.method === 0 ? compressed : entry.method === 8 ? inflateSync(compressed) : (() => { throw new Error('BUNDLE_COMPRESSION_UNSUPPORTED'); })(); if (output.byteLength !== entry.uncompressedSize) throw new Error(`BUNDLE_FILE_SIZE_INVALID:${path}`); return output; }
 
+function sameReplacements(a: Array<{ source: string; scope: string }> | undefined, b: Array<{ source: string; scope: string }> | undefined) {
+  return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
 function manifestIdentityMatchesActive(manifest: BundleManifest, active: ActiveCanonicalBundle) {
   return manifest.motorBuildId === active.motorBuildId
     && manifest.stagingManifestHash === active.stagingManifestHash
@@ -73,10 +91,20 @@ function manifestIdentityMatchesActive(manifest: BundleManifest, active: ActiveC
     && manifest.engineVersion === active.engineVersion
     && manifest.adminRegistryHash === active.adminRegistryHash
     && manifest.rcaTargetRegistryHash === active.rcaTargetRegistryHash
+    && manifest.sourceContractVersion === active.sourceContractVersion
+    && manifest.sourceReplacementProofHash === active.sourceReplacementProofHash
+    && sameReplacements(manifest.sourceReplacements, active.sourceReplacements)
     && manifest.canonicalInputHash === active.canonicalInputHash;
 }
 
 async function validateManifestInputIdentity(manifest: BundleManifest) {
+  if (manifest.engineVersion === V21_ENGINE) {
+    if (!manifest.adminRegistryHash || !manifest.rcaTargetRegistryHash || manifest.sourceContractVersion !== 'v2' || !manifest.sourceReplacementProofHash || !Array.isArray(manifest.sourceReplacements) || !manifest.canonicalInputHash) throw new Error('BUNDLE_MANIFEST_REJECTED:V21_IDENTITY_REQUIRED');
+    const sorted = [...manifest.sourceReplacements].sort((a, b) => `${a.source}|${a.scope}`.localeCompare(`${b.source}|${b.scope}`));
+    if (!sameReplacements(sorted, manifest.sourceReplacements)) throw new Error('BUNDLE_MANIFEST_REJECTED:V21_REPLACEMENTS_NOT_DETERMINISTIC');
+    if (await canonicalInputHashV3(manifest.stagingManifestHash, manifest.adminRegistryHash, manifest.rcaTargetRegistryHash, manifest.sourceReplacementProofHash) !== manifest.canonicalInputHash) throw new Error('BUNDLE_CANONICAL_INPUT_HASH_MISMATCH');
+    return;
+  }
   if (manifest.engineVersion === V20_ENGINE) {
     if (!manifest.adminRegistryHash || !manifest.rcaTargetRegistryHash || !manifest.canonicalInputHash) throw new Error('BUNDLE_MANIFEST_REJECTED:V20_IDENTITY_REQUIRED');
     if (await canonicalInputHashV2(manifest.stagingManifestHash, manifest.adminRegistryHash, manifest.rcaTargetRegistryHash) !== manifest.canonicalInputHash) throw new Error('BUNDLE_CANONICAL_INPUT_HASH_MISMATCH');
@@ -88,7 +116,7 @@ async function validateManifestInputIdentity(manifest: BundleManifest) {
   }
 }
 
-type ExpectedBuild = Pick<typeof APPROVED_CANONICAL_BUILD, 'motorBuildId' | 'stagingManifestHash' | 'schemaVersion' | 'rowCounts'> & Partial<Pick<ActiveCanonicalBundle, 'adminRegistryHash' | 'rcaTargetRegistryHash' | 'canonicalInputHash' | 'engineVersion'>>;
+type ExpectedBuild = Pick<typeof APPROVED_CANONICAL_BUILD, 'motorBuildId' | 'stagingManifestHash' | 'schemaVersion' | 'rowCounts'> & Partial<Pick<ActiveCanonicalBundle, 'adminRegistryHash' | 'rcaTargetRegistryHash' | 'sourceContractVersion' | 'sourceReplacementProofHash' | 'sourceReplacements' | 'canonicalInputHash' | 'engineVersion'>>;
 export async function validateCanonicalBundleBytes(bytes: Uint8Array, expectedBuild?: ExpectedBuild): Promise<{ manifest: BundleManifest; zipEntries: Map<string, ZipEntry> }> {
   const zipEntries = entries(bytes); const manifest = JSON.parse(decoder.decode(extract(bytes, zipEntries, 'manifest.json'))) as BundleManifest;
   if (manifest.bundleFormat !== 'blue-jacket-canonical-bundle/v1' || !manifest.motorBuildId || !manifest.stagingManifestHash || !manifest.engineVersion || manifest.schemaVersion !== 'v1') throw new Error('BUNDLE_MANIFEST_REJECTED');
@@ -100,6 +128,9 @@ export async function validateCanonicalBundleBytes(bytes: Uint8Array, expectedBu
     || (expectedBuild.engineVersion !== undefined && manifest.engineVersion !== expectedBuild.engineVersion)
     || (expectedBuild.adminRegistryHash !== undefined && manifest.adminRegistryHash !== expectedBuild.adminRegistryHash)
     || (expectedBuild.rcaTargetRegistryHash !== undefined && manifest.rcaTargetRegistryHash !== expectedBuild.rcaTargetRegistryHash)
+    || (expectedBuild.sourceContractVersion !== undefined && manifest.sourceContractVersion !== expectedBuild.sourceContractVersion)
+    || (expectedBuild.sourceReplacementProofHash !== undefined && manifest.sourceReplacementProofHash !== expectedBuild.sourceReplacementProofHash)
+    || (expectedBuild.sourceReplacements !== undefined && !sameReplacements(manifest.sourceReplacements, expectedBuild.sourceReplacements))
     || (expectedBuild.canonicalInputHash !== undefined && manifest.canonicalInputHash !== expectedBuild.canonicalInputHash)
   )) throw new Error('BUNDLE_MANIFEST_REJECTED');
   for (const id of ids) {
@@ -120,6 +151,9 @@ export async function inspectCanonicalBundle(file: File): Promise<PreparedCanoni
     status: 'ACTIVE', motorBuildId: manifest.motorBuildId, stagingManifestHash: manifest.stagingManifestHash,
     ...(manifest.adminRegistryHash ? { adminRegistryHash: manifest.adminRegistryHash } : {}),
     ...(manifest.rcaTargetRegistryHash ? { rcaTargetRegistryHash: manifest.rcaTargetRegistryHash } : {}),
+    ...(manifest.sourceContractVersion ? { sourceContractVersion: manifest.sourceContractVersion } : {}),
+    ...(manifest.sourceReplacementProofHash ? { sourceReplacementProofHash: manifest.sourceReplacementProofHash } : {}),
+    ...(manifest.sourceReplacements ? { sourceReplacements: manifest.sourceReplacements } : {}),
     ...(manifest.canonicalInputHash ? { canonicalInputHash: manifest.canonicalInputHash } : {}),
     schemaVersion: manifest.schemaVersion, engineVersion: manifest.engineVersion,
     approvedAt: manifest.createdAt || new Date().toISOString(), rowCounts: manifest.rowCounts, factTypeCounts,
@@ -129,6 +163,9 @@ export async function inspectCanonicalBundle(file: File): Promise<PreparedCanoni
     stagingManifestHash: manifest.stagingManifestHash,
     ...(manifest.adminRegistryHash ? { adminRegistryHash: manifest.adminRegistryHash } : {}),
     ...(manifest.rcaTargetRegistryHash ? { rcaTargetRegistryHash: manifest.rcaTargetRegistryHash } : {}),
+    ...(manifest.sourceContractVersion ? { sourceContractVersion: manifest.sourceContractVersion } : {}),
+    ...(manifest.sourceReplacementProofHash ? { sourceReplacementProofHash: manifest.sourceReplacementProofHash } : {}),
+    ...(manifest.sourceReplacements ? { sourceReplacements: manifest.sourceReplacements } : {}),
     ...(manifest.canonicalInputHash ? { canonicalInputHash: manifest.canonicalInputHash } : {}),
     schemaVersion: manifest.schemaVersion, engineVersion: manifest.engineVersion, rowCounts: manifest.rowCounts, active, bytes, manifest,
   };
@@ -140,12 +177,14 @@ async function storedBundleFor(active: ActiveCanonicalBundle, repository: Canoni
   await validateManifestInputIdentity(bundle.manifest);
   return bundle;
 }
+
 export async function loadStoredCanonicalList(active: ActiveCanonicalBundle, id: ListId, repository: CanonicalBundleRepository = indexedDbCanonicalBundleRepository): Promise<CanonicalList> {
   const bundle = await storedBundleFor(active, repository); const bytes = new Uint8Array(await bundle.zip.arrayBuffer());
   const content = extract(bytes, entries(bytes), `${id}.json`); const list = JSON.parse(decoder.decode(content)) as CanonicalList;
   if (list.id !== id || !Array.isArray(list.records) || list.records.length !== bundle.manifest.rowCounts[id]) throw new Error(`CANONICAL_LIST_INVALID:${id}`);
   return list;
 }
+
 export async function persistCanonicalBundle(prepared: PreparedCanonicalBundle, repository: CanonicalBundleRepository = indexedDbCanonicalBundleRepository): Promise<BundleImportResult> {
   await validateManifestInputIdentity(prepared.manifest);
   if (!manifestIdentityMatchesActive(prepared.manifest, prepared.active)) throw new Error('BUNDLE_PREPARED_IDENTITY_MISMATCH');
@@ -189,6 +228,9 @@ export async function loadImportedBundleManifest(options: BundleLoadOptions = {}
     stagingManifestHash: bundle.manifest.stagingManifestHash,
     adminRegistryHash: bundle.manifest.adminRegistryHash ?? null,
     rcaTargetRegistryHash: bundle.manifest.rcaTargetRegistryHash ?? null,
+    sourceContractVersion: bundle.manifest.sourceContractVersion ?? null,
+    sourceReplacementProofHash: bundle.manifest.sourceReplacementProofHash ?? null,
+    sourceReplacements: bundle.manifest.sourceReplacements ?? [],
     canonicalInputHash: bundle.manifest.canonicalInputHash ?? null,
     schemaVersion: bundle.manifest.schemaVersion,
     engineVersion: bundle.manifest.engineVersion,
@@ -202,4 +244,4 @@ export async function loadImportedCanonicalList(id: ListId, options: BundleLoadO
   return loadStoredCanonicalList(active, id, options.repository ?? indexedDbCanonicalBundleRepository);
 }
 export async function hasImportedCanonicalBundle(motorBuildId: string) { return Boolean(await indexedDbCanonicalBundleRepository.get(motorBuildId)) || hasGeneratedCanonicalBuild(motorBuildId); }
-export const canonicalBundleTestHelpers = { entries, extract, sha256, encoder, manifestIdentityMatchesActive, validateManifestInputIdentity, shouldUseGenerated, V19_ENGINE, V20_ENGINE };
+export const canonicalBundleTestHelpers = { entries, extract, sha256, encoder, manifestIdentityMatchesActive, validateManifestInputIdentity, shouldUseGenerated, sameReplacements, V19_ENGINE, V20_ENGINE, V21_ENGINE };
