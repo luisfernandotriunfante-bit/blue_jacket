@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
-import { setRegistryRecordActive, upsertManualLaunch, type LaunchRegistryRecord } from '../../../canonical/adminRegistry';
-import { adminRegistryRepository } from '../../../canonical/adminRegistryIndexedDb';
+import { type LaunchRegistryRecord } from '../../../canonical/adminRegistry';
 import { PanelAlert, PanelCard, PanelSectionHeader } from '../../../ui/pattern/PanelVisual';
 import { RegistryMessages, RegistryStatus, SeedPreviewCard, useRegistryPanel } from './RegistryPanelShared';
 
@@ -44,14 +43,8 @@ export function LaunchRegistryPanel() {
   const edit = (record: LaunchRegistryRecord) => {
     setEditingId(record.id);
     setForm({
-      winthorCode: record.winthorCode ?? '',
-      ean: record.ean ?? '',
-      description: record.description ?? '',
-      type: record.type ?? '',
-      status: record.status ?? '',
-      validFromCompetence: record.validFromCompetence ?? '',
-      validToCompetence: record.validToCompetence ?? '',
-      note: record.note ?? '',
+      winthorCode: record.winthorCode ?? '', ean: record.ean ?? '', description: record.description ?? '', type: record.type ?? '', status: record.status ?? '',
+      validFromCompetence: record.validFromCompetence ?? '', validToCompetence: record.validToCompetence ?? '', note: record.note ?? '',
     });
     setMutationError('');
   };
@@ -59,7 +52,7 @@ export function LaunchRegistryPanel() {
   const save = async () => {
     setMutationError('');
     try {
-      await upsertManualLaunch(adminRegistryRepository, {
+      const ok = await panel.execute(() => panel.actions.upsertLaunch({
         winthorCode: form.winthorCode || null,
         ean: form.ean || null,
         description: form.description || null,
@@ -68,27 +61,24 @@ export function LaunchRegistryPanel() {
         validFromCompetence: form.validFromCompetence || null,
         validToCompetence: form.validToCompetence || null,
         note: form.note || null,
-      }, editingId ?? undefined);
-      setEditingId(null); setForm(EMPTY_FORM);
-      await panel.mutationSaved();
+      }, editingId ?? undefined));
+      if (ok) { setEditingId(null); setForm(EMPTY_FORM); }
     } catch (reason) { setMutationError(String(reason)); }
   };
 
   const toggleActive = async (record: LaunchRegistryRecord) => {
     setMutationError('');
-    try {
-      await setRegistryRecordActive(adminRegistryRepository, 'launches', record.id, !record.active);
-      await panel.mutationSaved();
-    } catch (reason) { setMutationError(String(reason)); }
+    try { await panel.execute(() => panel.actions.setActive('launches', record.id, !record.active)); }
+    catch (reason) { setMutationError(String(reason)); }
   };
 
   return <>
     <RegistryStatus kind="launches" records={records} lastSeed={panel.lastSeed} conflicts={panel.diagnostics.length} />
     <RegistryMessages notice={panel.notice} error={panel.error || mutationError} />
-    <SeedPreviewCard preview={panel.preview} busy={panel.busy} onPreview={() => void panel.previewSeed()} onApply={() => void panel.applySeed()} />
+    <SeedPreviewCard preview={panel.preview} previewBusy={panel.previewBusy} mutationBusy={panel.mutationBusy} onPreview={() => void panel.previewSeed()} onApply={() => void panel.applySeed()} />
 
     <PanelCard>
-      <PanelSectionHeader eyebrow="CADASTRO" title={editingId ? 'Editar lançamento' : 'Criar lançamento'} description="Exige EAN ou código Winthor. EAN é armazenado como texto GTIN; notação científica é rejeitada e zeros não são inventados." />
+      <PanelSectionHeader eyebrow="CADASTRO CANÔNICO" title={editingId ? 'Editar lançamento' : 'Criar lançamento'} description="Salvar executa Registry → full rebuild v19 → ativação → sincronização. EAN permanece texto GTIN; notação científica é rejeitada." />
       <div className="panel-form-grid">
         <input className="panel-input" placeholder="Código Winthor" value={form.winthorCode} onChange={event => setForm({ ...form, winthorCode: event.target.value })} />
         <input className="panel-input" placeholder="EAN" value={form.ean} onChange={event => setForm({ ...form, ean: event.target.value })} />
@@ -99,8 +89,8 @@ export function LaunchRegistryPanel() {
         <input className="panel-input" type="month" value={form.validToCompetence} onChange={event => setForm({ ...form, validToCompetence: event.target.value })} aria-label="Válido até" />
         <input className="panel-input" placeholder="Observação" value={form.note} onChange={event => setForm({ ...form, note: event.target.value })} />
       </div>
-      <button className="panel-button" onClick={() => void save()}>{editingId ? 'Salvar edição' : 'Criar lançamento'}</button>{' '}
-      {editingId ? <button className="panel-button" onClick={() => { setEditingId(null); setForm(EMPTY_FORM); }}>Cancelar</button> : null}
+      <button className="panel-button" disabled={panel.mutationBusy} onClick={() => void save()}>{panel.mutationBusy ? 'Operação em andamento…' : editingId ? 'Salvar edição' : 'Criar lançamento'}</button>{' '}
+      {editingId ? <button className="panel-button" disabled={panel.mutationBusy} onClick={() => { setEditingId(null); setForm(EMPTY_FORM); }}>Cancelar</button> : null}
     </PanelCard>
 
     <PanelCard>
@@ -112,7 +102,7 @@ export function LaunchRegistryPanel() {
       </div>
       {panel.diagnostics.length ? <PanelAlert tone="warning">{panel.diagnostics.map(item => item.message).join(' • ')}</PanelAlert> : null}
       <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Winthor</th><th>EAN</th><th>Descrição</th><th>Tipo</th><th>Status</th><th>Origem</th><th>Ativo</th><th>Ações</th></tr></thead><tbody>
-        {filtered.map(record => <tr key={record.id}><td>{record.winthorCode ?? '—'}</td><td>{record.ean ?? '—'}</td><td>{record.description ?? '—'}</td><td>{record.type ?? '—'}</td><td>{record.status ?? '—'}</td><td>{record.origin}</td><td>{record.active ? 'SIM' : 'NÃO'}</td><td><button className="panel-button" onClick={() => edit(record)}>Editar</button>{' '}<button className="panel-button" onClick={() => void toggleActive(record)}>{record.active ? 'Inativar' : 'Reativar'}</button></td></tr>)}
+        {filtered.map(record => <tr key={record.id}><td>{record.winthorCode ?? '—'}</td><td>{record.ean ?? '—'}</td><td>{record.description ?? '—'}</td><td>{record.type ?? '—'}</td><td>{record.status ?? '—'}</td><td>{record.origin}</td><td>{record.active ? 'SIM' : 'NÃO'}</td><td><button className="panel-button" disabled={panel.mutationBusy} onClick={() => edit(record)}>Editar</button>{' '}<button className="panel-button" disabled={panel.mutationBusy} onClick={() => void toggleActive(record)}>{record.active ? 'Inativar' : 'Reativar'}</button></td></tr>)}
       </tbody></table></div>
     </PanelCard>
   </>;
