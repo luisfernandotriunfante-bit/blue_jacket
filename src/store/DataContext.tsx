@@ -31,9 +31,10 @@ export function DataProvider({children}:{children:ReactNode}){
     if(!legacyToMigrate||operationState.busy)return;
     let cancelled=false;
     setMigrationError('');
-    // v19 and earlier references remain migration evidence only. They are never
-    // exposed as active while the v20 rebuild uses the 19 sources + current
-    // Admin Registry + current RCA Target Registry.
+    // v20 and earlier references remain migration evidence only. They are never
+    // exposed as active while the rebuild targets CANONICAL_ENGINE_VERSION.
+    // buildCanonicalFromStoredSources revalidates the persisted replacement
+    // state; no certificate is inferred or auto-created during migration.
     void systemDataOperationCoordinator.run('ENGINE_MIGRATION',async()=>rebuildForCanonicalEngine(legacyToMigrate,CANONICAL_ENGINE_VERSION,buildCanonicalFromStoredSources)).then(result=>{
       if(cancelled||result.status==='BUSY')return;
       const bundle=result.value;
@@ -81,7 +82,7 @@ export function DataProvider({children}:{children:ReactNode}){
 
   const activateCanonical=(bundle:ActiveCanonicalBundle)=>{setMigrationError('');setLegacyToMigrate(null);setActiveCanonical(activateCanonicalBundleReference(bundle))};
   const rollback=()=>{deactivateCanonicalBundle();setLegacyToMigrate(null);setActiveCanonical(null);setMigrationError('')};
-  const dataNotice=migrationError||(legacyToMigrate?'Build legado identificado. Migração canônica v20 em andamento.':activeCanonical?`Build canônico ativo: ${activeCanonical.motorBuildId}.`:RESET_NOTICE);
+  const dataNotice=migrationError||(legacyToMigrate?'Build legado identificado. Migração canônica para a engine atual em andamento.':activeCanonical?`Build canônico ativo: ${activeCanonical.motorBuildId}.`:RESET_NOTICE);
   return <DataContext.Provider value={{activeCanonical,activateCanonical,deactivateCanonical:rollback,dataNotice,migrationError}}>{children}</DataContext.Provider>
 }
 export const useData=()=>useContext(DataContext);
