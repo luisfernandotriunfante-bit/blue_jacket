@@ -1,4 +1,5 @@
 import { isValidCompetenceId } from './competence';
+import { competenceTargetRecord, loadTargetState } from './targetStore';
 
 export type ReportSettings = {
   networkTargetByCompetence: Record<string, number>;
@@ -84,11 +85,12 @@ function persist(settings: ReportSettings) {
 /** Restores only validated manual settings received from an encrypted paired device. */
 export function restoreReportSettings(value: unknown) { return persist(normalizedSettings(value)); }
 
+/** v20 compatibility selector: TargetState is the operational authority. */
 export function networkTargetFor(competence: string) {
-  const value = loadReportSettings().networkTargetByCompetence[competence];
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+  return competenceTargetRecord(loadTargetState(), competence)?.networkTarget ?? null;
 }
 
+/** Legacy compatibility writer retained only for old snapshots/tests; Administração → Metas no v20 does not call this. */
 export function setNetworkTargetFor(competence: string, value: number | null) {
   if (!isValidCompetenceId(competence)) throw new Error('Competência inválida para Meta Redes.');
   const settings = loadReportSettings();
@@ -98,11 +100,13 @@ export function setNetworkTargetFor(competence: string, value: number | null) {
   return persist(settings);
 }
 
+/** v20 compatibility selector: TargetState is the operational authority. */
 export function sellOutTargetsFor(competence: string) {
-  const settings = loadReportSettings();
-  return { sellOutTarget: settings.sellOutTargetByCompetence[competence] ?? null, positivityTarget: settings.positivityTargetByCompetence[competence] ?? null };
+  const target = competenceTargetRecord(loadTargetState(), competence);
+  return { sellOutTarget: target?.sellOutTarget ?? null, positivityTarget: target?.positivityTarget ?? null };
 }
 
+/** Legacy compatibility writer retained only for old snapshots/tests; Administração → Metas no v20 does not call this. */
 export function setSellOutTargetsFor(competence: string, sellOutTarget: number | null, positivityTarget: number | null) {
   if (!isValidCompetenceId(competence)) throw new Error('Competência inválida para metas de Sell Out.');
   const settings = loadReportSettings();
@@ -114,13 +118,14 @@ export function setSellOutTargetsFor(competence: string, sellOutTarget: number |
 
 export function legacyTargetsPendingFor(competence: string) {
   const settings = loadReportSettings();
+  const target = competenceTargetRecord(loadTargetState(), competence);
   return {
-    sellOutTarget: settings.sellOutTargetByCompetence[competence] === undefined ? settings.legacySellOutTarget : null,
-    positivityTarget: settings.positivityTargetByCompetence[competence] === undefined ? settings.legacyPositivityTarget : null,
+    sellOutTarget: target?.sellOutTarget == null ? settings.legacySellOutTarget : null,
+    positivityTarget: target?.positivityTarget == null ? settings.legacyPositivityTarget : null,
   };
 }
 
-/** Migra apenas por ação explícita e confirma a nova gravação antes de limpar o legado. */
+/** Historical v2/v3 migration helper. v20 Administração → Metas uses targetUpdateFlow instead. */
 export function migrateLegacyTargetsToCompetence(competence: string) {
   if (!isValidCompetenceId(competence)) throw new Error('Competência inválida para migração de metas legadas.');
   const settings = loadReportSettings();
