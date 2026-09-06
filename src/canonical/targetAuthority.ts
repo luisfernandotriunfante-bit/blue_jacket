@@ -1,0 +1,155 @@
+import type { AdminRegistryState } from './adminRegistry';
+import { competenceFromParsedSource } from './competence';
+import { createRcaResolver, type RcaResolution } from './rcaResolver';
+import type { TargetState, RcaTargetRecord } from './targetStore';
+import type { CanonicalAudit, ParsedSource, RawTyped } from './types';
+
+export const BUSSOLA_SOURCE_ID = 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx';
+
+type TargetFact = Record<string, unknown>;
+type TargetResolution = {
+  record: RcaTargetRecord | null;
+  authority: 'MANUAL' | 'SOURCE_SEED' | 'BUSSOLA' | 'NONE';
+  tombstone: boolean;
+  ambiguous: boolean;
+};
+
+const value = (row: Record<string, RawTyped>, field: string) => row[field]?.typed ?? null;
+const semantic = (record: RcaTargetRecord) => JSON.stringify({
+  competence: record.competence,
+  rcaCanonicalId: record.rcaCanonicalId,
+  sourceRcaCode: record.sourceRcaCode,
+  salesTarget: record.salesTarget,
+  positivityTarget: record.positivityTarget,
+  active: record.active,
+  origin: record.origin,
+});
+const issue = (code: string, message: string, source = 'AdminTargetRegistry'): CanonicalAudit => ({
+  code, severity: 'WARNING', source, file: '', message,
+  action: 'Resolver a divergência em Administração → Metas antes de depender deste TARGET.',
+});
+
+function targetRecords(state: TargetState | null, competence: string, rcaCanonicalId: string) {
+  return state?.records.find(record => record.competence === competence)?.rcaTargets.filter(record => record.rcaCanonicalId === rcaCanonicalId) ?? [];
+}
+
+export function resolveTargetAuthority(state: TargetState | null, competence: string, rcaCanonicalId: string): TargetResolution {
+  const matching = targetRecords(state, competence, rcaCanonicalId);
+  const manualActive = matching.filter(record => record.origin === 'MANUAL' && record.active);
+  if (manualActive.length) {
+    if (new Set(manualActive.map(semantic)).size > 1) return { record: null, authority: 'MANUAL', tombstone: false, ambiguous: true };
+    return { record: manualActive[0], authority: 'MANUAL', tombstone: false, ambiguous: false };
+  }
+  const manualTombstone = matching.find(record => record.origin === 'MANUAL' && !record.active);
+  if (manualTombstone) return { record: null, authority: 'MANUAL', tombstone: true, ambiguous: false };
+
+  const seededActive = matching.filter(record => record.origin === 'SOURCE_SEED' && record.active);
+  if (seededActive.length) {
+    if (new Set(seededActive.map(semantic)).size > 1) return { record: null, authority: 'SOURCE_SEED', tombstone: false, ambiguous: true };
+    return { record: seededActive[0], authority: 'SOURCE_SEED', tombstone: false, ambiguous: false };
+  }
+  return { record: null, authority: 'NONE', tombstone: false, ambiguous: false };
+}
+
+function physicalTargetRows(sources: ParsedSource[], registry: AdminRegistryState | null) {
+  const source = sources.find(item => item.source === BUSSOLA_SOURCE_ID);
+  const competence = source ? competenceFromParsedSource(source) : null;
+  const resolver = createRcaResolver(sources, registry);
+  const rows = (source?.rows ?? [])
+    .filter(row => String(value(row, 'pasta_type') ?? '').trim().toUpperCase() === 'MCD' && String(value(row, 'industry_name') ?? '').trim().toUpperCase() === 'COLGATE')
+    .map(row => {
+      const code = value(row, 'target_rca_code');
+      const resolution = resolver.resolveLegacy(code, value(row, 'target_rca_name'), competence);
+      return { row, code, competence, resolution };
+    });
+  return { competence, rows };
+}
+
+function registryFact(record: RcaTargetRecord): TargetFact {
+  return {
+    fact_id: `TARGET_REGISTRY:${record.competence}:${record.rcaCanonicalId}:${record.id}`,
+    fact_type: 'TARGET',
+    source: 'ADMIN_TARGET_REGISTRY',
+    competence: record.competence,
+    transaction_rca_code: record.sourceRcaCode ?? record.rcaCanonicalId.replace(/^RCA:/, ''),
+    rca_canonical_id: record.rcaCanonicalId,
+    sales_target: record.salesTarget,
+    positivity_target: record.positivityTarget,
+    target_assignment_status: 'RESOLVED',
+    source_lineage: `AdminTargetRegistry:${record.origin}`,
+    audit_flags: null,
+  };
+}
+
+function bussolaFact(row: Record<string, RawTyped>, code: unknown, competence: string | null, resolution: RcaResolution): TargetFact {
+  return {
+    fact_id: `BUSSOLA:${value(row, '__source_row') ?? ''}`,
+    fact_type: 'TARGET',
+    source: 'BUSSOLA',
+    competence,
+    transaction_rca_code: code,
+    rca_canonical_id: resolution.canonicalId,
+    sales_target: value(row, 'sales_target_pna'),
+    positivity_target: value(row, 'positivity_target'),
+    target_assignment_status: resolution.status,
+    source_lineage: 'Bússola: Metas | MCD + COLGATE | NOVOS RCAS:LEGACY',
+    audit_flags: resolution.canonicalId ? null : resolution.status,
+  };
+}
+
+/**
+ * Single TARGET materializer shared by both canonical motor entry points.
+ * It is deterministic and reads no storage or CompetenceState.
+ */
+export function materializeEffectiveTargetFacts(sources: ParsedSource[], targetState: TargetState | null = null, registry: AdminRegistryState | null = null) {
+  const physical = physicalTargetRows(sources, registry);
+  const facts: TargetFact[] = [];
+  const audits: CanonicalAudit[] = [];
+  const handled = new Set<string>();
+
+  // Every registry target is considered even when the Bússola does not contain that RCA.
+  for (const competenceRecord of targetState?.records ?? []) {
+    const identities = [...new Set(competenceRecord.rcaTargets.map(record => record.rcaCanonicalId))];
+    for (const rcaCanonicalId of identities) {
+      const key = `${competenceRecord.competence}|${rcaCanonicalId}`;
+      const resolution = resolveTargetAuthority(targetState, competenceRecord.competence, rcaCanonicalId);
+      if (resolution.ambiguous) {
+        audits.push(issue('AMBIGUOUS_TARGET', `Há metas divergentes na camada ${resolution.authority} para ${rcaCanonicalId} em ${competenceRecord.competence}; a Bússola inferior não será usada.`));
+        handled.add(key);
+        continue;
+      }
+      if (resolution.tombstone) { handled.add(key); continue; }
+      if (resolution.record) {
+        facts.push(registryFact(resolution.record));
+        handled.add(key);
+      }
+    }
+  }
+
+  // Physical Bússola remains the exact lower-authority fallback for the same explicit competence.
+  for (const item of physical.rows) {
+    const competence = item.competence;
+    const canonicalId = item.resolution.canonicalId;
+    if (!competence || !canonicalId) {
+      facts.push(bussolaFact(item.row, item.code, competence, item.resolution));
+      if (!canonicalId) audits.push(issue(item.resolution.status, `RCA ${String(item.code ?? '')} da Bússola não foi resolvido de forma única.`, 'Bússola'));
+      continue;
+    }
+    const key = `${competence}|${canonicalId}`;
+    if (handled.has(key)) continue;
+    const resolution = resolveTargetAuthority(targetState, competence, canonicalId);
+    if (resolution.ambiguous) {
+      audits.push(issue('AMBIGUOUS_TARGET', `Há metas divergentes na camada ${resolution.authority} para ${canonicalId} em ${competence}; a Bússola inferior não será usada.`));
+      handled.add(key);
+      continue;
+    }
+    if (resolution.tombstone) { handled.add(key); continue; }
+    if (resolution.record) facts.push(registryFact(resolution.record));
+    else facts.push(bussolaFact(item.row, item.code, competence, item.resolution));
+    handled.add(key);
+  }
+
+  return { facts, audits, bussolaCompetence: physical.competence };
+}
+
+export const targetAuthorityTestHelpers = { semantic, physicalTargetRows, registryFact, bussolaFact };
