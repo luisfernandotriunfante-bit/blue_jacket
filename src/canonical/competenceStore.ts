@@ -28,6 +28,7 @@ export const COMPETENCE_CHANGED_EVENT = 'blue-jacket-competence-changed';
 const listeners = new Set<Listener>();
 
 const storage = (): StorageLike => localStorage;
+const isBrowserStorage = (target: StorageLike) => typeof localStorage !== 'undefined' && target === localStorage;
 const validTimestamp = (value: unknown): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value));
 const nowIso = () => new Date().toISOString();
 
@@ -79,7 +80,7 @@ function notify(state: CompetenceState | null) {
 function persist(state: CompetenceState, target: StorageLike = storage()) {
   const validated = validateCompetenceState(state);
   target.setItem(COMPETENCE_STORAGE_KEY, JSON.stringify(validated));
-  if (target === storage()) notify(validated);
+  if (isBrowserStorage(target)) notify(validated);
   return validated;
 }
 
@@ -96,7 +97,7 @@ export function restoreCompetenceState(value: unknown, target: StorageLike = sto
 
 export function clearCompetenceState(target: StorageLike = storage()) {
   target.removeItem(COMPETENCE_STORAGE_KEY);
-  if (target === storage()) notify(null);
+  if (isBrowserStorage(target)) notify(null);
 }
 
 export function replaceCompetenceState(value: unknown | null, target: StorageLike = storage()) {
