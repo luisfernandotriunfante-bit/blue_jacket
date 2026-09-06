@@ -10,11 +10,13 @@ import {
   type RcaManualInput,
   type TopManualInput,
 } from '../../canonical/adminRegistry';
-import { canonicalAdminRegistryHash, canonicalInputHash } from '../../canonical/adminRegistryIdentity';
+import { canonicalAdminRegistryHash } from '../../canonical/adminRegistryIdentity';
 import { adminRegistryRepository } from '../../canonical/adminRegistryIndexedDb';
 import { loadAdminRegistrySeedParsedSource } from '../../canonical/adminRegistrySeed';
 import { buildCanonicalFromStoredSources, CANONICAL_ENGINE_VERSION } from '../../canonical/sourceImport';
 import { systemDataOperationCoordinator } from '../../canonical/systemDataOperationCoordinator';
+import { canonicalInputHashV2, rcaTargetRegistryHash } from '../../canonical/targetIdentity';
+import { loadTargetState, type TargetState } from '../../canonical/targetStore';
 import type { ActiveCanonicalBundle } from '../../canonical/runtime';
 import { syncActiveBuildIfPaired } from './baseAutoSync';
 import type { BaseAutoSyncResult } from './baseUpdateFlow';
@@ -112,9 +114,11 @@ export type RegistryUpdateRuntime = {
 export type RegistryTransactionDependencies = {
   loadRegistry: () => Promise<AdminRegistryState | null>;
   replaceRegistry: (state: AdminRegistryState | null) => Promise<AdminRegistryState | null>;
+  loadTargetState: () => TargetState | null;
   build: (registry: AdminRegistryState | null) => Promise<ActiveCanonicalBundle>;
   registryHash: (state: AdminRegistryState | null) => Promise<string>;
-  inputHash: (sourceHash: string, registryHash: string) => Promise<string>;
+  targetHash: (state: TargetState | null) => Promise<string>;
+  inputHash: (sourceHash: string, registryHash: string, targetHash: string) => Promise<string>;
   sync: (active: ActiveCanonicalBundle) => Promise<BaseAutoSyncResult>;
   engineVersion: string;
 };
@@ -122,14 +126,16 @@ export type RegistryTransactionDependencies = {
 const defaultTransactionDependencies: RegistryTransactionDependencies = {
   loadRegistry: () => adminRegistryRepository.load(),
   replaceRegistry: state => adminRegistryRepository.replace(state),
+  loadTargetState,
   build: registry => buildCanonicalFromStoredSources(undefined, registry),
   registryHash: canonicalAdminRegistryHash,
-  inputHash: canonicalInputHash,
+  targetHash: rcaTargetRegistryHash,
+  inputHash: canonicalInputHashV2,
   sync: active => syncActiveBuildIfPaired(active.motorBuildId),
   engineVersion: CANONICAL_ENGINE_VERSION,
 };
 
-/** Core transaction, browser-independent and fully injectable for C28-C30. */
+/** Core transaction. Cadastros changes always rebuild against the unchanged current TargetState. */
 export async function executeRegistryUpdateTransaction<T>(
   mutation: () => Promise<T>,
   runtime: RegistryUpdateRuntime,
@@ -143,13 +149,16 @@ export async function executeRegistryUpdateTransaction<T>(
     controls.setPhase('MUTATING');
     await mutation();
     const nextRegistry = await dependencies.loadRegistry();
+    const targetState = dependencies.loadTargetState();
     const expectedRegistryHash = await dependencies.registryHash(nextRegistry);
+    const expectedTargetHash = await dependencies.targetHash(targetState);
 
     controls.setPhase('BUILDING');
     const nextActive = await dependencies.build(nextRegistry);
-    const expectedInputHash = await dependencies.inputHash(nextActive.stagingManifestHash, expectedRegistryHash);
+    const expectedInputHash = await dependencies.inputHash(nextActive.stagingManifestHash, expectedRegistryHash, expectedTargetHash);
     if (nextActive.engineVersion !== dependencies.engineVersion
       || nextActive.adminRegistryHash !== expectedRegistryHash
+      || nextActive.rcaTargetRegistryHash !== expectedTargetHash
       || nextActive.canonicalInputHash !== expectedInputHash) throw new Error('ADMIN_REGISTRY_BUILD_IDENTITY_MISMATCH');
 
     controls.setPhase('ACTIVATING');
