@@ -1,5 +1,6 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { validateAdminRegistryState, type AdminRegistryState } from './adminRegistry';
+import { canonicalAdminRegistryHash, canonicalInputHash } from './adminRegistryIdentity';
 import { loadAdminRegistryState, replaceAdminRegistryState } from './adminRegistryIndexedDb';
 import {
   loadCompetenceState,
@@ -47,6 +48,8 @@ export type CloudUploadDependencies = {
   getActive: () => ActiveCanonicalBundle | null;
   exportSources: () => Promise<SourceStorageSnapshot>;
   sourceManifestHash: (snapshot: SourceStorageSnapshot) => Promise<string>;
+  registryHash: (state: AdminRegistryState | null) => Promise<string>;
+  inputHash: (sourceHash: string, registryHash: string) => Promise<string>;
   loadSettings: () => ReportSettings;
   loadCompetence: () => CompetenceState | null;
   loadAdminRegistry: () => Promise<AdminRegistryState | null>;
@@ -59,7 +62,7 @@ export type CloudUploadDependencies = {
 function isIdentity(value: unknown): value is DeviceSyncIdentity {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<DeviceSyncIdentity>;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate.workspaceId ?? '') && /^[A-Za-z0-9_-]{40,100}$/.test(candidate.secret ?? '');
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i.test(candidate.workspaceId ?? '') && /^[A-Za-z0-9_-]{40,100}$/.test(candidate.secret ?? '');
 }
 
 function isSyncState(value: unknown): value is DeviceSyncState {
@@ -204,7 +207,13 @@ async function applyCloudSnapshot(snapshot: CloudSnapshot, dependencies: CloudRe
       await dependencies.replaceAdminRegistry(snapshot.adminRegistryState);
       registryTouched = true;
     }
-    return await dependencies.build();
+    const rebuilt = await dependencies.build();
+    if (snapshot.adminRegistryState !== undefined && snapshot.active?.adminRegistryHash && snapshot.active?.canonicalInputHash) {
+      if (rebuilt.stagingManifestHash !== snapshot.active.stagingManifestHash
+        || rebuilt.adminRegistryHash !== snapshot.active.adminRegistryHash
+        || rebuilt.canonicalInputHash !== snapshot.active.canonicalInputHash) throw new Error('SYNC_RESTORED_INPUT_IDENTITY_MISMATCH');
+    }
+    return rebuilt;
   } catch (reason) {
     try {
       if (previousSources) await dependencies.restoreSources(previousSources);
@@ -309,6 +318,8 @@ const defaultUploadDependencies: CloudUploadDependencies = {
   getActive: resolveActiveCanonicalBundle,
   exportSources: exportSourceStorageSnapshot,
   sourceManifestHash: sourceStorageSnapshotManifestHash,
+  registryHash: canonicalAdminRegistryHash,
+  inputHash: canonicalInputHash,
   loadSettings: loadReportSettings,
   loadCompetence: loadCompetenceState,
   loadAdminRegistry: loadAdminRegistryState,
@@ -328,13 +339,21 @@ async function uploadCurrentDeviceSnapshotWithDependencies(identity: DeviceSyncI
     dependencies.loadAdminRegistry(),
   ]);
   const exportedSourcesManifestHash = await dependencies.sourceManifestHash(sources);
+  const exportedAdminRegistryHash = await dependencies.registryHash(adminRegistryState);
+  const exportedCanonicalInputHash = await dependencies.inputHash(exportedSourcesManifestHash, exportedAdminRegistryHash);
   const activeAfter = dependencies.getActive();
 
   if (
     !activeAfter ||
+    !activeBefore.adminRegistryHash ||
+    !activeBefore.canonicalInputHash ||
     activeBefore.motorBuildId !== activeAfter.motorBuildId ||
     activeBefore.stagingManifestHash !== activeAfter.stagingManifestHash ||
-    exportedSourcesManifestHash !== activeBefore.stagingManifestHash
+    activeBefore.adminRegistryHash !== activeAfter.adminRegistryHash ||
+    activeBefore.canonicalInputHash !== activeAfter.canonicalInputHash ||
+    exportedSourcesManifestHash !== activeBefore.stagingManifestHash ||
+    exportedAdminRegistryHash !== activeBefore.adminRegistryHash ||
+    exportedCanonicalInputHash !== activeBefore.canonicalInputHash
   ) {
     throw new Error('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE');
   }
