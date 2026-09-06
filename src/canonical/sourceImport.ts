@@ -1,6 +1,10 @@
 import { SOURCE_IDS, parseSource } from './parsers';
 import { buildCanonicalBundleFromStaging } from './motors';
 import { materializeTopRetailRouteInM2 } from './topRetailM2';
+import { applyAdminRegistryCanonicalAuthority } from './adminRegistryCanonicalAuthority';
+import { canonicalAdminRegistryHash, canonicalInputHash } from './adminRegistryIdentity';
+import { loadAdminRegistryState } from './adminRegistryIndexedDb';
+import type { AdminRegistryState } from './adminRegistry';
 import type { ActiveCanonicalBundle } from './runtime';
 import type { CanonicalList, ParsedSource } from './types';
 
@@ -27,7 +31,7 @@ const SCHEMA_VERSION = 'v1';
  * navegador. Quando ela muda, os dados originais já presentes no staging são
  * remontados antes de qualquer tela os consumir.
  */
-export const CANONICAL_ENGINE_VERSION = 'browser-stage4-product-assortment-v18-sellout-closure';
+export const CANONICAL_ENGINE_VERSION = 'browser-stage4-product-assortment-v19-admin-registry-authority';
 const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
 export const isSourceStageCurrent = (manifest: SourceStageManifest | undefined) => Boolean(manifest && manifest.parserVersion === parserVersionFor(manifest.source) && manifest.schemaVersion === SCHEMA_VERSION);
 
@@ -70,7 +74,15 @@ export type SourceStageManifest = {
 };
 
 type StoredStage = { source: string; manifest: SourceStageManifest; parsed: ParsedSource };
-type StoredBuild = { id: string; active: ActiveCanonicalBundle; generatedAt: string; sourceHashes: Record<string, string> };
+type StoredBuild = {
+  id: string;
+  active: ActiveCanonicalBundle;
+  generatedAt: string;
+  sourceHashes: Record<string, string>;
+  stagingManifestHash?: string;
+  adminRegistryHash?: string;
+  canonicalInputHash?: string;
+};
 type StoredList = { id: string; buildId: string; listId: CanonicalList['id']; list: CanonicalList };
 
 type PortfolioContinuitySnapshot = {
@@ -342,7 +354,6 @@ async function stageOne(source: string, file: File, onProgress?: (progress: Sour
     // Logo, datas e pedidos de uma carga anterior não podem retirar linhas desta
     // nova fotografia. A baixa das NFs acontece depois, nos motores M3/M4.
     const continuity = acceptCurrentPortfolioAsBaseline(parsed, file.name, hash);
-
     parsed = continuity.parsed;
     portfolioSnapshot = continuity.snapshot;
   }
@@ -365,6 +376,7 @@ async function stageOne(source: string, file: File, onProgress?: (progress: Sour
   return { status: 'VALID' as const, manifest };
 }
 
+/** Physical-source identity. This algorithm is intentionally unchanged from v18. */
 async function stagingManifestHash(stages: StoredStage[]) {
   const compact = REQUIRED_SOURCE_IDS.map(source => {
     const stage = stages.find(candidate => candidate.source === source);
@@ -382,28 +394,69 @@ function factTypeCounts(m3: CanonicalList) {
   return counts;
 }
 
+function completeIdentityMatches(a: ActiveCanonicalBundle, b: ActiveCanonicalBundle) {
+  return a.motorBuildId === b.motorBuildId
+    && a.stagingManifestHash === b.stagingManifestHash
+    && a.adminRegistryHash === b.adminRegistryHash
+    && a.canonicalInputHash === b.canonicalInputHash
+    && a.engineVersion === b.engineVersion
+    && a.schemaVersion === b.schemaVersion;
+}
+
 async function saveGeneratedBuild(active: ActiveCanonicalBundle, lists: Record<CanonicalList['id'], CanonicalList>, sourceHashes: Record<string, string>) {
-  const build: StoredBuild = { id: active.motorBuildId, active, generatedAt: new Date().toISOString(), sourceHashes };
+  if (!active.adminRegistryHash || !active.canonicalInputHash || active.engineVersion !== CANONICAL_ENGINE_VERSION) throw new Error('CANONICAL_BUILD_IDENTITY_INCOMPLETE');
+  const build: StoredBuild = {
+    id: active.motorBuildId,
+    active,
+    generatedAt: new Date().toISOString(),
+    sourceHashes,
+    stagingManifestHash: active.stagingManifestHash,
+    adminRegistryHash: active.adminRegistryHash,
+    canonicalInputHash: active.canonicalInputHash,
+  };
   await idbPut(BUILDS_STORE, build);
   for (const [listId, list] of Object.entries(lists) as Array<[CanonicalList['id'], CanonicalList]>) {
     await idbPut<StoredList>(LISTS_STORE, { id: `${active.motorBuildId}:${listId}`, buildId: active.motorBuildId, listId, list });
   }
   const verified = await idbGet<StoredBuild>(BUILDS_STORE, active.motorBuildId);
-  if (!verified || verified.active.stagingManifestHash !== active.stagingManifestHash) throw new Error('CANONICAL_BUILD_STORAGE_VERIFY_FAILED');
+  if (!verified || !completeIdentityMatches(verified.active, active)
+    || verified.stagingManifestHash !== active.stagingManifestHash
+    || verified.adminRegistryHash !== active.adminRegistryHash
+    || verified.canonicalInputHash !== active.canonicalInputHash) throw new Error('CANONICAL_BUILD_STORAGE_VERIFY_FAILED');
 }
 
-function activeFromLists(lists: Record<CanonicalList['id'], CanonicalList>, stagingManifestHash: string) {
-  const motorBuildId = `motor-browser-${Date.now()}-${stagingManifestHash.slice(0, 10)}`;
+function activeFromLists(lists: Record<CanonicalList['id'], CanonicalList>, sourceHash: string, registryHash: string, inputHash: string) {
+  const motorBuildId = `motor-browser-${Date.now()}-${inputHash.slice(0, 10)}`;
   const rowCounts = Object.fromEntries(Object.entries(lists).map(([id, list]) => [id, list.records.length])) as ActiveCanonicalBundle['rowCounts'];
   return {
-    status: 'ACTIVE', motorBuildId, stagingManifestHash, schemaVersion: SCHEMA_VERSION, engineVersion: CANONICAL_ENGINE_VERSION,
+    status: 'ACTIVE', motorBuildId, stagingManifestHash: sourceHash, adminRegistryHash: registryHash, canonicalInputHash: inputHash,
+    schemaVersion: SCHEMA_VERSION, engineVersion: CANONICAL_ENGINE_VERSION,
     approvedAt: new Date().toISOString(), rowCounts, factTypeCounts: factTypeCounts(lists.M3_MOVIMENTO_VENDAS),
   } satisfies ActiveCanonicalBundle;
 }
 
-async function buildIncrementalPortfolioUpdate(base: IncrementalBase, stages: StoredStage[]) {
-  const changed = new Set(stages.map(stage => stage.source));
-  const patch = buildCanonicalBundleFromStaging(stages.map(stage => stage.parsed)).lists;
+async function currentStages() {
+  const stages: StoredStage[] = [];
+  const outdated: string[] = [];
+  for (const source of REQUIRED_SOURCE_IDS) {
+    const stage = await loadSourceStaging(source);
+    if (stage?.manifest.status === 'VALID') {
+      if (stage.manifest.parserVersion !== parserVersionFor(source) || stage.manifest.schemaVersion !== SCHEMA_VERSION) outdated.push(source);
+      else stages.push(stage);
+    }
+  }
+  const missing = REQUIRED_SOURCE_IDS.filter(source => !stages.some(stage => stage.source === source) && !outdated.includes(source));
+  return { stages, outdated, missing };
+}
+
+async function registryForBuild(override?: AdminRegistryState | null) {
+  return override === undefined ? loadAdminRegistryState() : override;
+}
+
+async function buildIncrementalPortfolioUpdate(base: IncrementalBase, changedStages: StoredStage[], allStages: StoredStage[], registry: AdminRegistryState | null, registryHash: string) {
+  if (base.active.engineVersion !== CANONICAL_ENGINE_VERSION || base.active.adminRegistryHash !== registryHash || !base.active.canonicalInputHash) throw new Error('INCREMENTAL_BASE_IDENTITY_MISMATCH');
+  const changed = new Set(changedStages.map(stage => stage.source));
+  const patch = buildCanonicalBundleFromStaging(changedStages.map(stage => stage.parsed)).lists;
   const m3 = base.lists.M3_MOVIMENTO_VENDAS;
   const m4 = base.lists.M4_HISTORICO_TRANSICAO;
   let m3Records = [...m3.records];
@@ -426,49 +479,29 @@ async function buildIncrementalPortfolioUpdate(base: IncrementalBase, stages: St
     M3_MOVIMENTO_VENDAS: { ...m3, records: m3Records, generatedAt },
     M4_HISTORICO_TRANSICAO: { ...m4, records: m4Records, generatedAt },
   };
-  const manifestHash = await sha256Bytes(new TextEncoder().encode(JSON.stringify([
-    'incremental-portfolio-v1', base.active.motorBuildId,
-    ...stages.map(stage => [stage.source, stage.manifest.fileHash]).sort((a, b) => a[0].localeCompare(b[0])),
-  ])));
-  const active = activeFromLists(lists, manifestHash);
-  await saveGeneratedBuild(active, lists, {
-    __base_build__: base.active.motorBuildId,
-    ...Object.fromEntries(stages.map(stage => [stage.source, stage.manifest.fileHash])),
-  });
+  const sourceHash = await stagingManifestHash(allStages);
+  const inputHash = await canonicalInputHash(sourceHash, registryHash);
+  const active = activeFromLists(lists, sourceHash, registryHash, inputHash);
+  await saveGeneratedBuild(active, lists, Object.fromEntries(allStages.map(stage => [stage.source, stage.manifest.fileHash])));
   return active;
 }
 
-export async function buildCanonicalFromStoredSources(onProgress?: (progress: SourceUpdateProgress) => void) {
-  const stages: StoredStage[] = [];
-  const outdated: string[] = [];
-  for (const source of REQUIRED_SOURCE_IDS) {
-    const stage = await loadSourceStaging(source);
-    if (stage?.manifest.status === 'VALID') {
-      if (stage.manifest.parserVersion !== parserVersionFor(source) || stage.manifest.schemaVersion !== SCHEMA_VERSION) outdated.push(source);
-      else stages.push(stage);
-    }
-  }
-  const missing = REQUIRED_SOURCE_IDS.filter(source => !stages.some(stage => stage.source === source) && !outdated.includes(source));
+export async function buildCanonicalFromStoredSources(onProgress?: (progress: SourceUpdateProgress) => void, registryOverride?: AdminRegistryState | null) {
+  const { stages, outdated, missing } = await currentStages();
   if (outdated.length) throw new Error(`SOURCES_OUTDATED:${outdated.join('|')}`);
   if (missing.length) throw new Error(`SOURCES_MISSING:${missing.join('|')}`);
-  onProgress?.({ source: 'ALL', label: 'Motores canônicos', index: REQUIRED_SOURCE_IDS.length, total: REQUIRED_SOURCE_IDS.length, phase: 'BUILDING', message: 'Gerando M1, M2, M3 e M4 exclusivamente dos stagings persistidos' });
-  const manifestHash = await stagingManifestHash(stages);
+  onProgress?.({ source: 'ALL', label: 'Motores canônicos', index: REQUIRED_SOURCE_IDS.length, total: REQUIRED_SOURCE_IDS.length, phase: 'BUILDING', message: 'Gerando M1, M2, M3 e M4 das 19 fontes + Admin Registry validado' });
+
+  const registry = await registryForBuild(registryOverride);
+  const sourceHash = await stagingManifestHash(stages);
+  const registryHash = await canonicalAdminRegistryHash(registry);
+  const inputHash = await canonicalInputHash(sourceHash, registryHash);
   const parsedSources = stages.map(stage => stage.parsed);
   const bundle = buildCanonicalBundleFromStaging(parsedSources);
-  bundle.lists.M2_CLIENTE_RCA = materializeTopRetailRouteInM2(bundle.lists.M2_CLIENTE_RCA, parsedSources);
+  applyAdminRegistryCanonicalAuthority(bundle, parsedSources, registry);
+  bundle.lists.M2_CLIENTE_RCA = materializeTopRetailRouteInM2(bundle.lists.M2_CLIENTE_RCA, parsedSources, registry);
   const lists = bundle.lists;
-  const motorBuildId = `motor-browser-${Date.now()}-${manifestHash.slice(0, 10)}`;
-  const rowCounts = Object.fromEntries(Object.entries(lists).map(([id, list]) => [id, list.records.length])) as ActiveCanonicalBundle['rowCounts'];
-  const active: ActiveCanonicalBundle = {
-    status: 'ACTIVE',
-    motorBuildId,
-    stagingManifestHash: manifestHash,
-    schemaVersion: SCHEMA_VERSION,
-    engineVersion: CANONICAL_ENGINE_VERSION,
-    approvedAt: new Date().toISOString(),
-    rowCounts,
-    factTypeCounts: factTypeCounts(lists.M3_MOVIMENTO_VENDAS),
-  };
+  const active = activeFromLists(lists, sourceHash, registryHash, inputHash);
   await saveGeneratedBuild(active, lists, Object.fromEntries(stages.map(stage => [stage.source, stage.manifest.fileHash])));
   return active;
 }
@@ -485,28 +518,47 @@ export async function processSourceUpdates(filesBySource: Partial<Record<string,
   }
   const manifests = await loadSourceStagingManifests();
   const missing = REQUIRED_SOURCE_IDS.filter(source => !manifests.some(manifest => manifest.source === source && manifest.status === 'VALID'));
-  const canPatchActivePortfolio = Boolean(incrementalBase) && selected.length > 0 && selected.every(([source]) => INCREMENTAL_PORTFOLIO_SOURCES.has(source));
-  if (!rejected.length && missing.length && canPatchActivePortfolio) {
-    onProgress?.({ source: 'ALL', label: 'Carteira', index: selected.length, total: selected.length, phase: 'BUILDING', message: 'Atualizando Carteira, 218 e 12.322 sobre o build ativo' });
-    const stages = await Promise.all(selected.map(([source]) => loadSourceStaging(source))) as StoredStage[];
-    const active = await buildIncrementalPortfolioUpdate(incrementalBase!, stages);
-    onProgress?.({ source: 'ALL', label: 'Atualização', index: selected.length, total: selected.length, phase: 'DONE', message: `Novo build ${active.motorBuildId} pronto para ativação` });
-    return { active, updated, unchanged, rejected, missing: [], manifests };
-  }
   if (rejected.length || missing.length) return { active: null, updated, unchanged, rejected, missing, manifests };
-  const active = await buildCanonicalFromStoredSources(onProgress);
+
+  const registry = await loadAdminRegistryState();
+  const registryHash = await canonicalAdminRegistryHash(registry);
+  const canPatchActivePortfolio = Boolean(incrementalBase)
+    && selected.length > 0
+    && selected.every(([source]) => INCREMENTAL_PORTFOLIO_SOURCES.has(source))
+    && incrementalBase!.active.engineVersion === CANONICAL_ENGINE_VERSION
+    && incrementalBase!.active.adminRegistryHash === registryHash;
+
+  let active: ActiveCanonicalBundle;
+  if (canPatchActivePortfolio) {
+    const all = await currentStages();
+    if (all.outdated.length || all.missing.length) throw new Error('INCREMENTAL_REQUIRES_COMPLETE_CURRENT_STAGING');
+    onProgress?.({ source: 'ALL', label: 'Carteira', index: selected.length, total: selected.length, phase: 'BUILDING', message: 'Atualizando Carteira, 218 e 12.322 sobre build v19 com Registry idêntico' });
+    const changedStages = await Promise.all(selected.map(([source]) => loadSourceStaging(source))) as StoredStage[];
+    active = await buildIncrementalPortfolioUpdate(incrementalBase!, changedStages, all.stages, registry, registryHash);
+  } else {
+    active = await buildCanonicalFromStoredSources(onProgress, registry);
+  }
   onProgress?.({ source: 'ALL', label: 'Atualização', index: selected.length, total: selected.length, phase: 'DONE', message: `Novo build ${active.motorBuildId} pronto para ativação` });
   return { active, updated, unchanged, rejected, missing, manifests: await loadSourceStagingManifests() };
 }
 
-export async function hasGeneratedCanonicalBuild(buildId: string) { return Boolean(await idbGet<StoredBuild>(BUILDS_STORE, buildId)); }
+export async function loadGeneratedCanonicalBuild(buildId: string) { return idbGet<StoredBuild>(BUILDS_STORE, buildId); }
+export async function generatedBuildMatchesActive(active: ActiveCanonicalBundle) {
+  const build = await loadGeneratedCanonicalBuild(active.motorBuildId);
+  return Boolean(build && completeIdentityMatches(build.active, active));
+}
+export async function hasGeneratedCanonicalBuild(buildId: string) { return Boolean(await loadGeneratedCanonicalBuild(buildId)); }
 export async function loadGeneratedCanonicalList(buildId: string, listId: CanonicalList['id']) {
   const stored = await idbGet<StoredList>(LISTS_STORE, `${buildId}:${listId}`);
   if (!stored) throw new Error(`GENERATED_LIST_NOT_FOUND:${listId}`);
   return stored.list;
 }
+export async function loadGeneratedCanonicalListForActive(active: ActiveCanonicalBundle, listId: CanonicalList['id']) {
+  if (!(await generatedBuildMatchesActive(active))) throw new Error('GENERATED_BUILD_IDENTITY_MISMATCH');
+  return loadGeneratedCanonicalList(active.motorBuildId, listId);
+}
 export async function loadGeneratedCanonicalManifest(buildId: string) {
-  const build = await idbGet<StoredBuild>(BUILDS_STORE, buildId);
+  const build = await loadGeneratedCanonicalBuild(buildId);
   if (!build) throw new Error('GENERATED_BUILD_NOT_FOUND');
   const ids: CanonicalList['id'][] = ['M1_ITEM_ESTOQUE', 'M2_CLIENTE_RCA', 'M3_MOVIMENTO_VENDAS', 'M4_HISTORICO_TRANSICAO'];
   const lists = {} as Record<string, { rowCount: number; warnings: number; errors: number }>;
@@ -514,7 +566,25 @@ export async function loadGeneratedCanonicalManifest(buildId: string) {
     const list = await loadGeneratedCanonicalList(buildId, id);
     lists[id] = { rowCount: list.records.length, warnings: list.warnings.length, errors: list.errors.length };
   }
-  return { status: 'VALID', generatedAt: build.generatedAt, lists };
+  return {
+    status: 'VALID', generatedAt: build.generatedAt, lists,
+    motorBuildId: build.active.motorBuildId,
+    stagingManifestHash: build.active.stagingManifestHash,
+    adminRegistryHash: build.active.adminRegistryHash ?? null,
+    canonicalInputHash: build.active.canonicalInputHash ?? null,
+    schemaVersion: build.active.schemaVersion,
+    engineVersion: build.active.engineVersion,
+  };
 }
 
-export const sourceImportTestHelpers = { normalizedFileName, sha256Bytes, parserVersionFor, acceptCurrentPortfolioAsBaseline, snapshotDateFromFile, normalizeOrderNumber };
+export const sourceImportTestHelpers = {
+  normalizedFileName,
+  sha256Bytes,
+  parserVersionFor,
+  acceptCurrentPortfolioAsBaseline,
+  snapshotDateFromFile,
+  normalizeOrderNumber,
+  stagingManifestHash,
+  activeFromLists,
+  completeIdentityMatches,
+};
