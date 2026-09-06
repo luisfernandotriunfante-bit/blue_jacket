@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { loadAdminRegistryState } from '../../canonical/adminRegistryIndexedDb';
 import { loadCandidateList } from '../../canonical/candidateLists';
 import type { ActiveCanonicalBundle } from '../../canonical/runtime';
 import {
+  evaluateSourceReplacementReadiness,
+  sourceDependencyMatrix,
+  type SourceReplacementAuthority,
+  type SourceReplacementReadiness,
+} from '../../canonical/sourceDependencyContract';
+import {
   detectSourceForFileName,
   isSourceStageCurrent,
+  loadSourceStaging,
   loadSourceStagingManifests,
   processSourceUpdates,
   requestPersistentSourceStorage,
@@ -15,6 +23,7 @@ import {
   systemDataOperationBusyMessage,
   systemDataOperationCoordinator,
 } from '../../canonical/systemDataOperationCoordinator';
+import { loadTargetState } from '../../canonical/targetStore';
 import { useData } from '../../store/DataContext';
 import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../../ui/pattern/PanelVisual';
 import {
@@ -32,6 +41,16 @@ const statusLabel = (manifest: SourceStageManifest | undefined, file: File | und
     : 'NÃO CARREGADA';
 
 const shortHash = (hash: string) => hash ? `${hash.slice(0, 10)}…` : '';
+
+const replacementLabel = (authority: SourceReplacementAuthority | null) => authority === 'AdminRegistry.RCAs'
+  ? 'Cadastro RCA'
+  : authority === 'AdminRegistry.Lançamentos'
+    ? 'Cadastro Lançamentos'
+    : authority === 'AdminRegistry.TopRetailers'
+      ? 'Top Varejistas'
+      : authority === 'TargetState.RcaTargets'
+        ? 'Target Registry'
+        : 'Não disponível';
 
 function sourceError(reason: unknown) {
   const code = String(reason);
@@ -60,11 +79,28 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   const [pageError, setPageError] = useState('');
   const [selected, setSelected] = useState<Partial<Record<string, File>>>({});
   const [manifests, setManifests] = useState<SourceStageManifest[]>([]);
+  const [dependencyReadiness, setDependencyReadiness] = useState<SourceReplacementReadiness[]>([]);
   const [unmatched, setUnmatched] = useState<string[]>([]);
 
-  const refresh = () => loadSourceStagingManifests()
-    .then(value => { setManifests(value); setPageError(''); })
-    .catch(reason => setPageError(String(reason)));
+  const dependencyContracts = useMemo(() => new Map(sourceDependencyMatrix().map(contract => [contract.id, contract])), []);
+  const readinessBySource = useMemo(() => new Map(dependencyReadiness.map(item => [item.sourceId, item])), [dependencyReadiness]);
+
+  const refresh = async () => {
+    try {
+      const [value, registry, target, ...stored] = await Promise.all([
+        loadSourceStagingManifests(),
+        loadAdminRegistryState(),
+        Promise.resolve(loadTargetState()),
+        ...REQUIRED_SOURCE_IDS.map(source => loadSourceStaging(source)),
+      ]);
+      setManifests(value);
+      const stages = stored.flatMap(item => item?.parsed ? [item.parsed] : []);
+      setDependencyReadiness(evaluateSourceReplacementReadiness(stages, registry, target));
+      setPageError('');
+    } catch (reason) {
+      setPageError(String(reason));
+    }
+  };
 
   useEffect(() => baseUpdateCoordinator.subscribe(setUpdateState), []);
   useEffect(() => systemDataOperationCoordinator.subscribe(setOperationState), []);
@@ -174,6 +210,7 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
     : selectedCount ? 'PROCESSAR E ATUALIZAR SISTEMA' : 'REPROCESSAR MOTOR ATUAL';
 
   return <PanelPage title="Bases" metricLabel="Fontes válidas" metricValue={`${validCount}/19`}>
+    <PanelAlert tone="warning">Todas as 19 fontes continuam obrigatórias nesta versão. A análise abaixo prepara a redução controlada da próxima fase.</PanelAlert>
     {activeCanonical
       ? <PanelAlert tone="success">Build ativo: {activeCanonical.motorBuildId}<br />Atualize somente os relatórios que mudaram; os demais stagings válidos serão reutilizados. Uma fonte marcada como “Atualização necessária” precisa ser selecionada novamente para aplicar sua nova regra de leitura.</PanelAlert>
       : <PanelAlert tone="info">Primeira carga: selecione as 19 fontes originais. Depois disso, cada atualização pode substituir apenas as fontes que mudaram.</PanelAlert>}
@@ -195,13 +232,24 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
       {pageError ? <PanelAlert tone="error">{pageError}</PanelAlert> : null}
       <div className="panel-table-wrap" style={{ marginTop: 12 }}>
         <table className="panel-table">
-          <thead><tr><th>Fonte</th><th>Status</th><th>Arquivo atual</th><th>Linhas</th><th>Hash</th><th>Substituir</th></tr></thead>
+          <thead><tr><th>Fonte</th><th>Status</th><th>Papel</th><th>Substituição</th><th>Readiness</th><th>Arquivo atual</th><th>Linhas</th><th>Hash</th><th>Substituir</th></tr></thead>
           <tbody>{REQUIRED_SOURCE_IDS.map(source => {
             const manifest = manifestBySource.get(source);
             const file = selected[source];
+            const contract = dependencyContracts.get(source);
+            const readiness = readinessBySource.get(source);
             return <tr key={source}>
               <td>{SOURCE_LABELS[source] ?? source}</td>
               <td>{statusLabel(manifest, file)}</td>
+              <td>Obrigatória atual</td>
+              <td>{replacementLabel(contract?.replacementAuthority ?? null)}</td>
+              <td>{contract?.replacementCandidate && readiness
+                ? <details><summary>{readiness.status}</summary>{readiness.details.map(detail => <div key={`${source}:${detail.competence ?? 'GLOBAL'}`} style={{ marginTop: 6, minWidth: 260 }}>
+                    <strong>{detail.competence ?? 'Global'}</strong><br />
+                    Fonte: {detail.sourceRecords} · Cobertos: {detail.coveredInternally} · Manual: {detail.manual} · Seed: {detail.seed} · Tombstones: {detail.tombstones} · Conflitos: {detail.conflicts} · Não resolvidos: {detail.unresolved}<br />
+                    {detail.reason}
+                  </div>)}</details>
+                : 'NÃO APLICÁVEL'}</td>
               <td>{file?.name ?? manifest?.fileName ?? '—'}</td>
               <td>{manifest?.parsedRows ?? '—'}</td>
               <td>{manifest ? shortHash(manifest.fileHash) : '—'}</td>
