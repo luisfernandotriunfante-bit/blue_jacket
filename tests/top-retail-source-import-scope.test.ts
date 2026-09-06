@@ -5,7 +5,7 @@ import fs from 'node:fs';
 const sourceImport = fs.readFileSync(new URL('../src/canonical/sourceImport.ts', import.meta.url), 'utf8');
 const topRetailM2 = fs.readFileSync(new URL('../src/canonical/topRetailM2.ts', import.meta.url), 'utf8');
 
-test('Roteiro Top/Registry é materializado no M2 antes de salvar o build ativo v19', () => {
+test('Roteiro Top/Registry é materializado no M2 antes de salvar o build ativo v20', () => {
   const buildIndex = sourceImport.indexOf('const bundle = buildCanonicalBundleFromStaging(parsedSources);');
   const registryAuthorityIndex = sourceImport.indexOf('applyAdminRegistryCanonicalAuthority(bundle, parsedSources, registry);', buildIndex);
   const topIndex = sourceImport.indexOf('bundle.lists.M2_CLIENTE_RCA = materializeTopRetailRouteInM2', registryAuthorityIndex);
@@ -15,7 +15,7 @@ test('Roteiro Top/Registry é materializado no M2 antes de salvar o build ativo 
   assert.ok(registryAuthorityIndex > buildIndex);
   assert.ok(topIndex > registryAuthorityIndex);
   assert.ok(saveIndex > topIndex);
-  assert.ok(sourceImport.includes('browser-stage4-product-assortment-v19-admin-registry-authority'));
+  assert.ok(sourceImport.includes('browser-stage4-product-assortment-v20-targets-by-competence'));
   assert.match(topRetailM2, /routeCompetence === targetCompetence/);
   assert.match(topRetailM2, /resolveTopAuthority\(registry, targetCompetence, cnpj, imported\)/);
   assert.match(topRetailM2, /SOURCE_PRESERVED/);
