@@ -1,3 +1,5 @@
+import { isValidCompetenceId } from './competence';
+
 type RecordValue = Record<string, unknown>;
 
 export type SellOutStatus = 'INVOICED' | 'TO_INVOICE' | 'UNKNOWN';
@@ -34,5 +36,5 @@ export function canonicalSellOutCompetence(records: RecordValue[], fallback: str
   const months = new Set(records.filter(row => row.fact_type === 'SALE').map(row => competenceFromDate(row.event_date)).filter((value): value is string => Boolean(value)));
   if (months.size === 1) return [...months][0];
   if (months.size > 1) return 'MIXED';
-  return fallback && /^\d{4}-\d{2}$/.test(fallback) ? fallback : 'UNRESOLVED';
+  return isValidCompetenceId(fallback) ? fallback : 'UNRESOLVED';
 }
