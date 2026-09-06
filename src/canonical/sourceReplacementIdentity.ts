@@ -12,6 +12,15 @@ async function sha256(value: unknown) {
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
+/** Exact v20 physical identity, used only to verify legacy bundle snapshot before rebuilding v21. */
+export function legacyStagingManifestHashV1(stages: ReplacementStageEvidence[]) {
+  const compact = SUPPORTED_SOURCE_IDS.map(sourceId => {
+    const stage = stages.find(candidate => candidate.source === sourceId);
+    return [sourceId, stage?.manifest.fileHash ?? '', stage?.manifest.parserVersion ?? '', stage?.manifest.schemaVersion ?? ''];
+  });
+  return sha256(compact);
+}
+
 export function stagingManifestProjectionV2(stages: ReplacementStageEvidence[], replacedSourceIds: string[]) {
   const replaced = new Set(replacedSourceIds);
   return [STAGING_MANIFEST_FORMAT_V2, ...SUPPORTED_SOURCE_IDS.map(sourceId => {
