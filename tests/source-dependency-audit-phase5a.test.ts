@@ -1,0 +1,258 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import {
+  AdminRegistryRepository,
+  InMemoryAdminRegistryStorage,
+  applyRegistrySeed,
+  emptyAdminRegistryState,
+  setRegistryRecordActive,
+  upsertManualLaunch,
+  upsertManualRca,
+  upsertManualTopRetail,
+  type AdminRegistryState,
+  type LaunchRegistryRecord,
+  type RcaRegistryRecord,
+  type TopRetailRegistryRecord,
+} from '../src/canonical/adminRegistry.ts';
+import { applyAdminRegistryCanonicalAuthority } from '../src/canonical/adminRegistryCanonicalAuthority.ts';
+import { resolveLaunchAuthority, resolveTopAuthority } from '../src/canonical/adminRegistryAuthority.ts';
+import { buildCanonicalBundleFromStaging } from '../src/canonical/motors.ts';
+import { buildSellOutViewModel } from '../src/canonical/operationalViewModels.ts';
+import { SOURCE_IDS } from '../src/canonical/parsers.ts';
+import { createRcaResolver } from '../src/canonical/rcaResolver.ts';
+import {
+  SUPPORTED_SOURCE_IDS,
+  evaluateSourceReplacementReadiness,
+  semanticBusinessEquivalent,
+  sourceDependencyContractIntegrity,
+  sourceDependencyMatrix,
+  sourceOmissionMatrix,
+} from '../src/canonical/sourceDependencyContract.ts';
+import { CANONICAL_ENGINE_VERSION, REQUIRED_SOURCE_IDS } from '../src/canonical/sourceImport.ts';
+import { BUSSOLA_SOURCE_ID, materializeEffectiveTargetFacts } from '../src/canonical/targetAuthority.ts';
+import { applyBussolaTargetSeedPreview, previewBussolaTargetSeed } from '../src/canonical/targetSeed.ts';
+import { emptyTargetState, withManualRcaTarget, withRcaTargetActive, type RcaTargetRecord, type TargetState } from '../src/canonical/targetStore.ts';
+import { buildTopRetailNetworksViewModel } from '../src/canonical/topRetailNetworksModel.ts';
+import { materializeTopRetailRouteInM2 } from '../src/canonical/topRetailM2.ts';
+import type { CanonicalList, ParsedSource, RawTyped } from '../src/canonical/types.ts';
+
+const NOW = '2026-09-06T20:00:00.000Z';
+const LATER = '2026-09-06T21:00:00.000Z';
+const ROUTE_SOURCE = "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx";
+const LAUNCH_SOURCE = 'lançamentos.xlsx';
+const RCA_SOURCE = 'NOVOS RCAS.xlsx';
+const CUSTOMER_CNPJ = '12345678000190';
+const EAN = '7891234567890';
+
+const typed = (value: unknown): RawTyped => ({ raw: value, typed: value });
+const row = (values: Record<string, unknown>, sourceRow = 2) => Object.fromEntries([
+  ...Object.entries(values).map(([key, value]) => [key, typed(value)]),
+  ['__source_row', typed(sourceRow)],
+]) as Record<string, RawTyped>;
+const parsed = (source: string, rows: ParsedSource['rows'] = [], fileName = source): ParsedSource => ({ source, fileName, sheet: 'test', rows, audits: [] });
+const list = (id: CanonicalList['id'], records: Record<string, unknown>[], competence = '2026-08'): CanonicalList => ({ id, records, sources: [], generatedAt: NOW, competence, snapshotDate: '2026-08-31', warnings: [], errors: [] });
+const without = (stages: ParsedSource[], source: string) => stages.filter(stage => stage.source !== source);
+
+const rcaStage = () => parsed(RCA_SOURCE, [row({
+  current_rca_code_principal: '10', legacy_rca_code_principal: '9', rca_name_raw_principal: 'RCA Teste', coordinator_code_principal: '1', coordinator_name_principal: 'Supervisor',
+  current_rca_code_auxiliar: '11', legacy_rca_code_auxiliar: '8', rca_name_raw_auxiliar: 'RCA Auxiliar', coordinator_code_auxiliar: '1', coordinator_name_auxiliar: 'Supervisor',
+})]);
+const launchStage = (extra = false) => parsed(LAUNCH_SOURCE, [
+  row({ launch_winthor_code: '100', launch_ean: EAN, launch_description: 'Produto Lançamento', launch_type: 'NOVO', launch_status: 'ATIVO' }),
+  ...(extra ? [row({ launch_winthor_code: '101', launch_ean: '7891234567883', launch_description: 'Novo sem seed', launch_type: 'NOVO', launch_status: 'ATIVO' }, 3)] : []),
+]);
+const routeStage = () => parsed(ROUTE_SOURCE, [row({
+  cnpj: CUSTOMER_CNPJ, store_name: 'Loja A', top_network: 'Rede A', banner: 'Bandeira A', manager_cnpj: CUSTOMER_CNPJ, group_code: 'G1', top_category: 'A', top_target: 1000,
+})], ROUTE_SOURCE);
+const bussolaStage = () => parsed(BUSSOLA_SOURCE_ID, [row({
+  pasta_type: 'MCD', industry_name: 'COLGATE', target_rca_code: '9', target_rca_name: 'RCA Teste', sales_target_pna: 900, positivity_target: 9,
+})], BUSSOLA_SOURCE_ID);
+const premiseStage = () => parsed('Nova Base de Premissas - Q3.xlsx', [row({ customer_document_declared: CUSTOMER_CNPJ, customer_name_premise: 'Loja A', state: 'MS', environment: 'VIZ', profile: 'A' })]);
+const clientStage = () => parsed('relatorio_carteira_clientes.xls', [row({ customer_cnpj: CUSTOMER_CNPJ, customer_name: 'Loja A', city: 'Campo Grande', representative_code: '10', winthor_customer_code: '500', trade_name: 'Loja A' })]);
+const saleStage = () => parsed('vendas-8022.xls', [row({ movement_date: '2026-08-10', customer_document: CUSTOMER_CNPJ, customer_winthor_code: '500', customer_name: 'Loja A', seller_code: '10', seller_name: 'RCA Teste', winthor_product_code: '100', manufacturer_code: '500', ean_product: EAN, product_description: 'Produto', order_winthor: '123456', order_rca: '1', invoice_number: '900', order_status: 'FATURADO', block_status: '', sale_type: 'VENDA', order_origin: 'PALM', units_sold: 10, cases_sold: 1, gross_weight_kg: 1, net_weight_kg: 1, sale_value: 500 })]);
+const historyStage = () => parsed('379 26.txt', [row({ movement_date: '2026-08-05', invoice_number: '1', invoice_series: '1', legacy_product_code: '500', customer_document: CUSTOMER_CNPJ, legacy_rca_code: '9', operation_code: '51201', cfop: '5403', quantity_raw: 1, value_raw: 50, discount_raw: 0, net_weight: 1, gross_weight: 1, movement_class: 'SALE' })]);
+const itemStage = () => parsed('cadastro-itens-286.xls', [row({ winthor_code: '100', internal_ean: EAN, manufacturer_code: '500', description_286: 'Produto', pack_286: 'CX' })]);
+const stockStage = () => parsed('posicao-estoque-105.xls', [row({ winthor_code: '100', physical_stock_units: 50, unit_cost_real: 2, sale_price_105: 3, pack_105: 'CX' })]);
+
+function fullStages() {
+  const specific = new Map<string, ParsedSource>([
+    [RCA_SOURCE, rcaStage()], [LAUNCH_SOURCE, launchStage()], [ROUTE_SOURCE, routeStage()], [BUSSOLA_SOURCE_ID, bussolaStage()],
+    ['Nova Base de Premissas - Q3.xlsx', premiseStage()], ['relatorio_carteira_clientes.xls', clientStage()], ['vendas-8022.xls', saleStage()],
+    ['379 26.txt', historyStage()], ['cadastro-itens-286.xls', itemStage()], ['posicao-estoque-105.xls', stockStage()],
+  ]);
+  return SOURCE_IDS.map(source => specific.get(source) ?? parsed(source));
+}
+
+async function seededRcaRegistry() {
+  const repository = new AdminRegistryRepository(new InMemoryAdminRegistryStorage());
+  await applyRegistrySeed(repository, 'rcas', rcaStage(), NOW);
+  return { repository, state: (await repository.load())! };
+}
+async function seededLaunchRegistry() {
+  const repository = new AdminRegistryRepository(new InMemoryAdminRegistryStorage());
+  await applyRegistrySeed(repository, 'launches', launchStage(), NOW);
+  return { repository, state: (await repository.load())! };
+}
+async function seededTopRegistry() {
+  const repository = new AdminRegistryRepository(new InMemoryAdminRegistryStorage());
+  await applyRegistrySeed(repository, 'topRetailers', routeStage(), NOW);
+  return { repository, state: (await repository.load())! };
+}
+async function seededTargetState(registry: AdminRegistryState) {
+  const source = bussolaStage();
+  const preview = await previewBussolaTargetSeed('2026-08', null, { loadBussola: async () => ({ parsed: source }), loadRegistry: async () => registry });
+  return applyBussolaTargetSeedPreview(null, preview, NOW);
+}
+
+function rcaBusinessProjection(stages: ParsedSource[], registry: AdminRegistryState) {
+  const bundle = buildCanonicalBundleFromStaging(stages);
+  applyAdminRegistryCanonicalAuthority(bundle, stages, registry);
+  return {
+    m2: bundle.lists.M2_CLIENTE_RCA.records.map(record => ({ rca_canonical_id: record.rca_canonical_id, rca_current_code: record.rca_current_code, rca_legacy_code: record.rca_legacy_code, rca_name: record.rca_name, coordinator_code: record.coordinator_code, coordinator_name: record.coordinator_name, audit_flags: record.audit_flags })),
+    m3: bundle.lists.M3_MOVIMENTO_VENDAS.records.filter(record => record.fact_type === 'SALE' || record.fact_type === 'TARGET').map(record => ({ fact_type: record.fact_type, rca_canonical_id: record.rca_canonical_id, transaction_rca_code: record.transaction_rca_code, audit_flags: record.audit_flags })),
+    m4: bundle.lists.M4_HISTORICO_TRANSICAO.records.map(record => ({ row_type: record.row_type, rca_canonical_id: record.rca_canonical_id, legacy_rca_code: record.legacy_rca_code, mapping_status: record.mapping_status, audit_flags: record.audit_flags })),
+  };
+}
+
+function launchBusinessProjection(stages: ParsedSource[], registry: AdminRegistryState) {
+  const bundle = buildCanonicalBundleFromStaging(stages);
+  applyAdminRegistryCanonicalAuthority(bundle, stages, registry);
+  return bundle.lists.M1_ITEM_ESTOQUE.records.map(record => ({ winthor_code: record.winthor_code, internal_ean: record.internal_ean, physical_stock_units: record.physical_stock_units, cost_unit_105: record.cost_unit_105, is_launch: record.is_launch, launch_status: record.launch_status, mapping_status: record.mapping_status })).sort((a, b) => String(a.winthor_code).localeCompare(String(b.winthor_code)));
+}
+
+function baseM2() {
+  return list('M2_CLIENTE_RCA', [{ competence: '2026-08', snapshot_date: '2026-08-31', customer_canonical_id: `CUSTOMER:${CUSTOMER_CNPJ}`, cnpj: CUSTOMER_CNPJ, winthor_customer_code: '500', customer_name: 'Loja A', trade_name: 'Loja A', city: 'Campo Grande', state: 'MS', representative_code_snapshot: '10', rca_canonical_id: 'RCA:10', rca_current_code: '10', rca_legacy_code: '9', rca_name: 'RCA Teste', coordinator_code: '1', coordinator_name: 'Supervisor', source_lineage: 'Premissas|Carteira Clientes' }]);
+}
+function topProjection(value: CanonicalList) {
+  return value.records.map(record => ({ cnpj: record.cnpj, top_network: record.top_network, top_banner: record.top_banner, manager_cnpj: record.manager_cnpj, top_group_code: record.top_group_code, top_category: record.top_category, top_target: record.top_target, top_route_competence: record.top_route_competence, network_resolution_status: record.network_resolution_status })).sort((a, b) => String(a.cnpj).localeCompare(String(b.cnpj)));
+}
+function saleFact() {
+  return { fact_id: 'SALE:1', fact_type: 'SALE', source: '8022', competence: '2026-08', event_date: '2026-08-10', customer_canonical_id: `CUSTOMER:${CUSTOMER_CNPJ}`, cnpj: CUSTOMER_CNPJ, customer_winthor_code: '500', customer_name: 'Loja A', rca_canonical_id: 'RCA:10', transaction_rca_code: '10', order_status: 'FATURADO', value: 500, units: 10, source_lineage: '8022' };
+}
+function m3FromTargets(targets: Record<string, unknown>[]) { return list('M3_MOVIMENTO_VENDAS', [saleFact(), ...targets], '2026-08'); }
+function targetProjection(result: ReturnType<typeof materializeEffectiveTargetFacts>) {
+  return { facts: result.facts.map(fact => ({ fact_type: fact.fact_type, source: fact.source, competence: fact.competence, transaction_rca_code: fact.transaction_rca_code, rca_canonical_id: fact.rca_canonical_id, sales_target: fact.sales_target, positivity_target: fact.positivity_target, target_assignment_status: fact.target_assignment_status, audit_flags: fact.audit_flags })), audits: result.audits.map(audit => ({ code: audit.code, source: audit.source, message: audit.message })) };
+}
+function readinessFor(sourceId: string, stages: ParsedSource[], registry: AdminRegistryState | null, targets: TargetState | null) {
+  return evaluateSourceReplacementReadiness(stages, registry, targets).find(item => item.sourceId === sourceId)!;
+}
+
+// D1–D8 — contrato e mapeamento
+
+test('D1 — SUPPORTED_SOURCE_IDS contém exatamente 19 fontes', () => { assert.equal(SUPPORTED_SOURCE_IDS.length, 19); assert.equal(new Set(SUPPORTED_SOURCE_IDS).size, 19); });
+test('D2 — REQUIRED_SOURCE_IDS continua exatamente 19', () => { assert.equal(REQUIRED_SOURCE_IDS.length, 19); assert.equal(new Set(REQUIRED_SOURCE_IDS).size, 19); });
+test('D3 — Supported e Required são o mesmo set nesta Fase 5A', () => assert.deepEqual([...SUPPORTED_SOURCE_IDS].sort(), [...REQUIRED_SOURCE_IDS].sort()));
+test('D4 — cada fonte possui exatamente um contrato', () => { const matrix = sourceDependencyMatrix(); assert.equal(matrix.length, 19); assert.equal(new Set(matrix.map(item => item.id)).size, 19); assert.equal(sourceDependencyContractIntegrity().duplicateContracts, 0); });
+test('D5 — nenhum contrato aponta para fonte inexistente', () => { const integrity = sourceDependencyContractIntegrity(); assert.equal(integrity.contractsCoverSupported, true); assert.equal(integrity.labelsMatch, true); });
+test('D6 — cada fonte possui consumer e capability comprovados', () => { for (const contract of sourceDependencyMatrix()) { assert.ok(contract.consumers.length > 0, contract.id); assert.ok(contract.capabilities.length > 0, contract.id); assert.ok(contract.parser); } });
+test('D7 — quatro candidatas possuem a autoridade substituta correta', () => { const byId = new Map(sourceDependencyMatrix().map(item => [item.id, item])); assert.equal(byId.get(RCA_SOURCE)?.replacementAuthority, 'AdminRegistry.RCAs'); assert.equal(byId.get(LAUNCH_SOURCE)?.replacementAuthority, 'AdminRegistry.Lançamentos'); assert.equal(byId.get(ROUTE_SOURCE)?.replacementAuthority, 'AdminRegistry.TopRetailers'); assert.equal(byId.get(BUSSOLA_SOURCE_ID)?.replacementAuthority, 'TargetState.RcaTargets'); });
+test('D8 — outras quinze fontes não recebem substituição fictícia', () => { const candidates = new Set([RCA_SOURCE, LAUNCH_SOURCE, ROUTE_SOURCE, BUSSOLA_SOURCE_ID]); for (const contract of sourceDependencyMatrix().filter(item => !candidates.has(item.id))) { assert.equal(contract.replacementCandidate, false); assert.equal(contract.replacementAuthority, null); assert.equal(contract.defaultClassification, 'HARD_REQUIRED'); } });
+
+// D9–D13 — RCA
+
+test('D9 — SOURCE_SEED RCA prova equivalência M2/M3/M4 e Principal/Auxiliar com/sem NOVOS RCAS', async () => {
+  const { state } = await seededRcaRegistry(); const stages = fullStages();
+  assert.equal(readinessFor(RCA_SOURCE, stages, state, null).status, 'READY');
+  assert.deepEqual(rcaBusinessProjection(stages, state), rcaBusinessProjection(without(stages, RCA_SOURCE), state));
+  const resolver = createRcaResolver([], state);
+  assert.equal(resolver.resolveCurrent('10').role, 'PRINCIPAL'); assert.equal(resolver.resolveCurrent('11').role, 'AUXILIAR');
+  assert.equal(resolver.resolveLegacy('9').canonicalId, 'RCA:10'); assert.equal(resolver.resolveLegacy('8').canonicalId, 'RCA:11');
+  assert.equal(resolver.resolveCurrent('10').coordinatorName, 'Supervisor');
+});
+test('D10 — RCA MANUAL vence e permanece equivalente com/sem fonte física', async () => {
+  const { repository } = await seededRcaRegistry();
+  await upsertManualRca(repository, { currentCode: '10', legacyCode: '9', name: 'RCA Manual B', coordinatorCode: '99', coordinatorName: 'Coord Manual', role: 'PRINCIPAL', validFromCompetence: null, validToCompetence: null, note: null }, undefined, LATER);
+  const state = (await repository.load())!; const stages = fullStages();
+  const withSource = createRcaResolver(stages, state).resolveCurrent('10'); const noSource = createRcaResolver(without(stages, RCA_SOURCE), state).resolveCurrent('10');
+  assert.equal(withSource.name, 'RCA Manual B'); assert.equal(withSource.coordinatorCode, '99'); assert.deepEqual(withSource, noSource);
+});
+test('D11 — tombstone RCA MANUAL suprime igualmente com/sem NOVOS RCAS', async () => {
+  const { repository } = await seededRcaRegistry();
+  await upsertManualRca(repository, { currentCode: '10', legacyCode: '9', name: 'Bloqueado', coordinatorCode: '1', coordinatorName: 'Supervisor', role: 'PRINCIPAL', validFromCompetence: null, validToCompetence: null, note: null }, 'MANUAL-TOMB', LATER).catch(async () => { await upsertManualRca(repository, { currentCode: '10', legacyCode: '9', name: 'Bloqueado', coordinatorCode: '1', coordinatorName: 'Supervisor', role: 'PRINCIPAL', validFromCompetence: null, validToCompetence: null, note: null }, undefined, LATER); });
+  const stateBefore = (await repository.load())!; const manual = stateBefore.rcas.find(record => record.origin === 'MANUAL' && record.currentCode === '10')!; await setRegistryRecordActive(repository, 'rcas', manual.id, false, LATER);
+  const state = (await repository.load())!; const stages = fullStages(); const a = createRcaResolver(stages, state).resolveCurrent('10'); const b = createRcaResolver(without(stages, RCA_SOURCE), state).resolveCurrent('10');
+  assert.equal(a.canonicalId, null); assert.equal(a.auditCode, 'ADMIN_REGISTRY_RCA_TOMBSTONE'); assert.deepEqual(a, b);
+});
+test('D12 — ambiguidade RCA MANUAL permanece sem fallback com/sem fonte', () => {
+  const registry = emptyAdminRegistryState(NOW); const base: RcaRegistryRecord = { id: 'A', currentCode: '10', legacyCode: '9', name: 'A', coordinatorCode: '1', coordinatorName: 'Coord A', role: 'PRINCIPAL', active: true, validFromCompetence: null, validToCompetence: null, origin: 'MANUAL', sourceRow: null, note: null, createdAt: NOW, updatedAt: NOW };
+  registry.rcas = [base, { ...base, id: 'B', name: 'B', coordinatorCode: '2', coordinatorName: 'Coord B' }]; const stages = fullStages();
+  const a = createRcaResolver(stages, registry).resolveCurrent('10'); const b = createRcaResolver(without(stages, RCA_SOURCE), registry).resolveCurrent('10');
+  assert.equal(a.status, 'AMBIGUOUS_RCA_CODE'); assert.equal(a.canonicalId, null); assert.equal(b.status, 'AMBIGUOUS_RCA_CODE'); assert.equal(b.canonicalId, null);
+});
+test('D13 — sem NOVOS RCAS e sem Registry RCA readiness é NOT_READY', () => assert.equal(readinessFor(RCA_SOURCE, without(fullStages(), RCA_SOURCE), null, null).status, 'NOT_READY'));
+
+// D14–D18 — Lançamentos
+
+test('D14 — Launch SOURCE_SEED produz M1 equivalente com/sem lançamentos.xlsx e não altera estoque', async () => {
+  const { state } = await seededLaunchRegistry(); const stages = fullStages();
+  assert.equal(readinessFor(LAUNCH_SOURCE, stages, state, null).status, 'READY');
+  const a = launchBusinessProjection(stages, state); const b = launchBusinessProjection(without(stages, LAUNCH_SOURCE), state); assert.deepEqual(a, b); assert.equal(a.find(item => item.winthor_code === '100')?.physical_stock_units, 50);
+});
+test('D15 — Launch MANUAL diferente da fonte permanece equivalente com/sem planilha', async () => {
+  const { repository } = await seededLaunchRegistry(); await upsertManualLaunch(repository, { winthorCode: '100', ean: EAN, description: 'Manual', type: 'MANUAL', status: 'M-ATIVO', validFromCompetence: null, validToCompetence: null, note: null }, undefined, LATER); const state = (await repository.load())!; const stages = fullStages();
+  assert.deepEqual(launchBusinessProjection(stages, state), launchBusinessProjection(without(stages, LAUNCH_SOURCE), state)); assert.equal(launchBusinessProjection(stages, state).find(item => item.winthor_code === '100')?.launch_status, 'M-ATIVO');
+});
+test('D16 — tombstone Launch MANUAL permanece igual com/sem planilha', async () => {
+  const { repository } = await seededLaunchRegistry(); await upsertManualLaunch(repository, { winthorCode: '100', ean: EAN, description: 'Manual', type: 'MANUAL', status: 'ATIVO', validFromCompetence: null, validToCompetence: null, note: null }, undefined, LATER); const manual = (await repository.load())!.launches.find(record => record.origin === 'MANUAL')!; await setRegistryRecordActive(repository, 'launches', manual.id, false, LATER); const state = (await repository.load())!; const stages = fullStages(); const a = launchBusinessProjection(stages, state); const b = launchBusinessProjection(without(stages, LAUNCH_SOURCE), state); assert.deepEqual(a, b); assert.equal(a.find(item => item.winthor_code === '100')?.is_launch, false);
+});
+test('D17 — ambiguidade Launch MANUAL bloqueia fallback igualmente com/sem fonte', () => {
+  const registry = emptyAdminRegistryState(NOW); const base: LaunchRegistryRecord = { id: 'L1', winthorCode: '100', ean: EAN, description: 'A', type: 'NOVO', status: 'A', active: true, validFromCompetence: null, validToCompetence: null, origin: 'MANUAL', sourceRow: null, note: null, createdAt: NOW, updatedAt: NOW }; registry.launches = [base, { ...base, id: 'L2', status: 'B' }]; const physical = launchStage().rows[0]; const a = resolveLaunchAuthority(registry, physical, { winthorCode: '100', eans: [EAN], competence: '2026-08' }); const b = resolveLaunchAuthority(registry, null, { winthorCode: '100', eans: [EAN], competence: '2026-08' }); assert.equal(a.ambiguous, true); assert.equal(a.record, null); assert.equal(b.ambiguous, true); assert.equal(b.record, null);
+});
+test('D18 — sem lançamentos.xlsx e sem Registry Launch classificação fica NOT_READY', () => assert.equal(readinessFor(LAUNCH_SOURCE, without(fullStages(), LAUNCH_SOURCE), null, null).status, 'NOT_READY'));
+
+// D19–D24 — Top Varejistas
+
+test('D19 — Top SOURCE_SEED da mesma competência equivale com/sem Roteiro físico', async () => {
+  const { state } = await seededTopRegistry(); const stages = fullStages(); const a = materializeTopRetailRouteInM2(baseM2(), stages, state); const b = materializeTopRetailRouteInM2(baseM2(), without(stages, ROUTE_SOURCE), state); assert.deepEqual(topProjection(a), topProjection(b)); assert.equal(readinessFor(ROUTE_SOURCE, stages, state, null).details.find(detail => detail.competence === '2026-08')?.status, 'READY');
+});
+test('D20 — Top MANUAL permanece equivalente com/sem Roteiro físico', async () => {
+  const { repository } = await seededTopRegistry(); await upsertManualTopRetail(repository, { competence: '2026-08', customerCnpj: CUSTOMER_CNPJ, network: 'Rede Manual', banner: 'Manual', managerCnpj: CUSTOMER_CNPJ, groupCode: 'GM', category: 'M', topTarget: 1500, note: null }, undefined, LATER); const state = (await repository.load())!; const stages = fullStages(); const a = materializeTopRetailRouteInM2(baseM2(), stages, state); const b = materializeTopRetailRouteInM2(baseM2(), without(stages, ROUTE_SOURCE), state); assert.deepEqual(topProjection(a), topProjection(b)); assert.equal(topProjection(a)[0].top_network, 'Rede Manual');
+});
+test('D21 — tombstone Top MANUAL suprime igualmente com/sem Roteiro', async () => {
+  const { repository } = await seededTopRegistry(); await upsertManualTopRetail(repository, { competence: '2026-08', customerCnpj: CUSTOMER_CNPJ, network: 'Rede Manual', banner: null, managerCnpj: CUSTOMER_CNPJ, groupCode: null, category: null, topTarget: 1000, note: null }, undefined, LATER); const manual = (await repository.load())!.topRetailers.find(record => record.origin === 'MANUAL')!; await setRegistryRecordActive(repository, 'topRetailers', manual.id, false, LATER); const state = (await repository.load())!; const stages = fullStages(); const a = materializeTopRetailRouteInM2(baseM2(), stages, state); const b = materializeTopRetailRouteInM2(baseM2(), without(stages, ROUTE_SOURCE), state); assert.deepEqual(topProjection(a), topProjection(b)); assert.equal(topProjection(a)[0].top_network, undefined);
+});
+test('D22 — ambiguidade Top MANUAL continua sem fallback com/sem Roteiro', () => {
+  const registry = emptyAdminRegistryState(NOW); const base: TopRetailRegistryRecord = { id: 'T1', competence: '2026-08', customerCnpj: CUSTOMER_CNPJ, network: 'A', banner: null, managerCnpj: CUSTOMER_CNPJ, groupCode: null, category: null, topTarget: 1000, active: true, origin: 'MANUAL', sourceRow: null, note: null, createdAt: NOW, updatedAt: NOW }; registry.topRetailers = [base, { ...base, id: 'T2', network: 'B' }]; const physical = routeStage().rows[0]; const a = resolveTopAuthority(registry, '2026-08', CUSTOMER_CNPJ, physical); const b = resolveTopAuthority(registry, '2026-08', CUSTOMER_CNPJ, null); assert.equal(a.ambiguous, true); assert.equal(a.record, null); assert.equal(b.ambiguous, true); assert.equal(b.record, null);
+});
+test('D23 — readiness Top é derivada por competência', async () => { const { state } = await seededTopRegistry(); const detail = readinessFor(ROUTE_SOURCE, fullStages(), state, null).details.find(item => item.competence === '2026-08'); assert.equal(detail?.status, 'READY'); assert.equal(detail?.sourceRecords, 1); assert.equal(detail?.coveredInternally, 1); });
+test('D24 — Top 08 READY não transforma 09 em READY', async () => {
+  const { repository } = await seededTopRegistry(); await upsertManualTopRetail(repository, { competence: '2026-09', customerCnpj: CUSTOMER_CNPJ, network: 'Rede Setembro', banner: null, managerCnpj: CUSTOMER_CNPJ, groupCode: null, category: null, topTarget: 2000, note: null }, undefined, LATER); const readiness = readinessFor(ROUTE_SOURCE, fullStages(), (await repository.load())!, null); assert.equal(readiness.details.find(item => item.competence === '2026-08')?.status, 'READY'); assert.equal(readiness.details.find(item => item.competence === '2026-09')?.status, 'NOT_READY');
+});
+
+// D25–D31 — Bússola / Targets
+
+test('D25 — SOURCE_SEED completo torna M3 TARGET semanticamente equivalente com/sem Bússola', async () => {
+  const { state: registry } = await seededRcaRegistry(); const targets = await seededTargetState(registry); const stages = fullStages(); const a = materializeEffectiveTargetFacts(stages, targets, registry); const b = materializeEffectiveTargetFacts(without(stages, BUSSOLA_SOURCE_ID), targets, registry); assert.deepEqual(targetProjection(a), targetProjection(b)); assert.equal(readinessFor(BUSSOLA_SOURCE_ID, stages, registry, targets).details.find(item => item.competence === '2026-08')?.status, 'READY');
+});
+test('D26 — Sell Out Gerencial é equivalente após substituir Bússola por TargetState', async () => {
+  const { state: registry } = await seededRcaRegistry(); const targets = await seededTargetState(registry); const stages = fullStages(); const aTargets = materializeEffectiveTargetFacts(stages, targets, registry).facts; const bTargets = materializeEffectiveTargetFacts(without(stages, BUSSOLA_SOURCE_ID), targets, registry).facts; const a = buildSellOutViewModel({ m2: baseM2(), m3: m3FromTargets(aTargets), generatedAt: NOW }); const b = buildSellOutViewModel({ m2: baseM2(), m3: m3FromTargets(bTargets), generatedAt: NOW }); assert.equal(semanticBusinessEquivalent({ totals: a.totals, vendorRows: a.vendorRows }, { totals: b.totals, vendorRows: b.vendorRows }), true); assert.equal(a.totals.realized, 500); assert.equal(a.totals.salesTarget, 900);
+});
+test('D27 — Meta Indústria de Redes é equivalente com/sem Bússola quando TargetState cobre o RCA', async () => {
+  const { state: registry } = await seededRcaRegistry(); const targets = await seededTargetState(registry); const stages = fullStages(); const topM2 = list('M2_CLIENTE_RCA', [{ ...baseM2().records[0], top_network: 'Rede A', manager_cnpj: CUSTOMER_CNPJ, top_group_code: 'G1', top_target: 1000, top_route_competence: '2026-08' }]); const a = buildTopRetailNetworksViewModel({ m2: topM2, m3: m3FromTargets(materializeEffectiveTargetFacts(stages, targets, registry).facts), sellOutTarget: 5000, networkTargetTotal: 3000, generatedAt: NOW }); const b = buildTopRetailNetworksViewModel({ m2: topM2, m3: m3FromTargets(materializeEffectiveTargetFacts(without(stages, BUSSOLA_SOURCE_ID), targets, registry).facts), sellOutTarget: 5000, networkTargetTotal: 3000, generatedAt: NOW }); assert.equal(a.totals.industryTarget, 900); assert.equal(b.totals.industryTarget, 900); assert.equal(semanticBusinessEquivalent(a.totals, b.totals), true);
+});
+test('D28 — Target MANUAL permanece equivalente com/sem Bússola', async () => {
+  const { state: registry } = await seededRcaRegistry(); const seeded = await seededTargetState(registry); const manual = withManualRcaTarget(seeded, { competence: '2026-08', rcaCanonicalId: 'RCA:10', sourceRcaCode: '9', salesTarget: 1500, positivityTarget: 15, note: null }, undefined, LATER); const stages = fullStages(); const a = materializeEffectiveTargetFacts(stages, manual, registry); const b = materializeEffectiveTargetFacts(without(stages, BUSSOLA_SOURCE_ID), manual, registry); assert.deepEqual(targetProjection(a), targetProjection(b)); assert.equal(a.facts[0]?.sales_target, 1500);
+});
+test('D29 — tombstone Target MANUAL suprime Bússola igualmente', async () => {
+  const { state: registry } = await seededRcaRegistry(); const seeded = await seededTargetState(registry); const manual = withManualRcaTarget(seeded, { competence: '2026-08', rcaCanonicalId: 'RCA:10', sourceRcaCode: '9', salesTarget: 1500, positivityTarget: 15, note: null }, undefined, LATER); const manualId = manual.records[0].rcaTargets.find(record => record.origin === 'MANUAL')!.id; const tombstone = withRcaTargetActive(manual, '2026-08', manualId, false, LATER); const stages = fullStages(); const a = materializeEffectiveTargetFacts(stages, tombstone, registry); const b = materializeEffectiveTargetFacts(without(stages, BUSSOLA_SOURCE_ID), tombstone, registry); assert.deepEqual(targetProjection(a), targetProjection(b)); assert.equal(a.facts.length, 0);
+});
+test('D30 — sem Bússola e sem TargetState RCA readiness é NOT_READY', async () => { const { state: registry } = await seededRcaRegistry(); assert.equal(readinessFor(BUSSOLA_SOURCE_ID, without(fullStages(), BUSSOLA_SOURCE_ID), registry, null).status, 'NOT_READY'); });
+test('D31 — Target readiness é competência-específica; 08 READY não implica 09', async () => {
+  const { state: registry } = await seededRcaRegistry(); const targets = await seededTargetState(registry); const september: RcaTargetRecord = { id: 'SEP', competence: '2026-09', rcaCanonicalId: 'RCA:10', sourceRcaCode: '9', salesTarget: 2000, positivityTarget: 20, active: true, origin: 'MANUAL', createdAt: NOW, updatedAt: NOW, note: null }; const withSeptember: TargetState = { ...targets, records: [...targets.records, { competence: '2026-09', sellOutTarget: null, positivityTarget: null, networkTarget: null, rcaTargets: [september], createdAt: NOW, updatedAt: NOW }] }; const readiness = readinessFor(BUSSOLA_SOURCE_ID, fullStages(), registry, withSeptember); assert.equal(readiness.details.find(item => item.competence === '2026-08')?.status, 'READY'); assert.equal(readiness.details.find(item => item.competence === '2026-09')?.status, 'NOT_READY');
+});
+
+// D32–D37 — omissão, silent defaults e derivação
+
+test('D32 — matriz de omissão executa diagnóstico para todas as 19 fontes', async () => { const { state: rcaRegistry } = await seededRcaRegistry(); const { state: launchRegistry } = await seededLaunchRegistry(); const { state: topRegistry } = await seededTopRegistry(); const registry = { ...emptyAdminRegistryState(NOW), rcas: rcaRegistry.rcas, launches: launchRegistry.launches, topRetailers: topRegistry.topRetailers }; const targets = await seededTargetState(registry); const result = sourceOmissionMatrix(fullStages(), registry, targets); assert.equal(result.length, 19); assert.equal(new Set(result.map(item => item.sourceId)).size, 19); assert.deepEqual(result.map(item => item.sourceId).sort(), [...REQUIRED_SOURCE_IDS].sort()); assert.ok(result.every(item => item.functionsWithoutInput.length > 0)); });
+test('D33 — zero/false/lista vazia nunca transforma ausência em prova de opcionalidade', () => { const result = sourceOmissionMatrix(fullStages(), null, null); assert.equal(result.some(item => item.classification === 'SAFE_ENRICHMENT_CANDIDATE'), false); assert.ok(result.every(item => item.silentDefaultRisk)); });
+test('D34 — readiness é derivada e não possui storage/flag READY manual', () => { const source = readFileSync(new URL('../src/canonical/sourceDependencyContract.ts', import.meta.url), 'utf8'); assert.doesNotMatch(source, /localStorage|indexedDB|READY\s*=\s*true|ready\s*:\s*true/i); assert.match(source, /evaluateSourceReplacementReadiness\(stages: ParsedSource\[\], adminRegistryState: AdminRegistryState \| null, targetState: TargetState \| null\)/); });
+test('D35 — alteração no Registry recalcula readiness RCA', async () => { const { state } = await seededRcaRegistry(); assert.equal(readinessFor(RCA_SOURCE, fullStages(), state, null).status, 'READY'); assert.notEqual(readinessFor(RCA_SOURCE, fullStages(), null, null).status, 'READY'); });
+test('D36 — alteração no TargetState recalcula readiness da Bússola', async () => { const { state: registry } = await seededRcaRegistry(); const targets = await seededTargetState(registry); assert.equal(readinessFor(BUSSOLA_SOURCE_ID, fullStages(), registry, targets).details.find(item => item.competence === '2026-08')?.status, 'READY'); assert.equal(readinessFor(BUSSOLA_SOURCE_ID, fullStages(), registry, null).details.find(item => item.competence === '2026-08')?.status, 'NOT_READY'); });
+test('D37 — novo staging físico recalcula cobertura e pode retirar READY', async () => { const { state } = await seededLaunchRegistry(); const base = fullStages(); assert.equal(readinessFor(LAUNCH_SOURCE, base, state, null).status, 'READY'); const changed = base.map(item => item.source === LAUNCH_SOURCE ? launchStage(true) : item); assert.equal(readinessFor(LAUNCH_SOURCE, changed, state, null).status, 'NOT_READY'); });
+
+// D38–D40 — Administração → Bases
+
+test('D38 — Bases continua renderizando exatamente o universo REQUIRED de 19 linhas', () => { const source = readFileSync(new URL('../src/pages/admin/BasesPage.tsx', import.meta.url), 'utf8'); assert.match(source, /REQUIRED_SOURCE_IDS\.map\(source =>/); assert.match(source, /metricValue=\{`\$\{validCount\}\/19`\}/); assert.equal(REQUIRED_SOURCE_IDS.length, 19); });
+test('D39 — Bases avisa explicitamente que 19\/19 continuam obrigatórias', () => { const source = readFileSync(new URL('../src/pages/admin/BasesPage.tsx', import.meta.url), 'utf8'); assert.match(source, /Todas as 19 fontes continuam obrigatórias nesta versão\. A análise abaixo prepara a redução controlada da próxima fase\./); });
+test('D40 — quatro candidatas expõem substituição, readiness e detalhe derivado', () => { const source = readFileSync(new URL('../src/pages/admin/BasesPage.tsx', import.meta.url), 'utf8'); for (const label of ['Cadastro RCA', 'Cadastro Lançamentos', 'Top Varejistas', 'Target Registry']) assert.ok(source.includes(label), label); for (const detail of ['Fonte:', 'Cobertos:', 'Manual:', 'Seed:', 'Tombstones:', 'Conflitos:', 'Não resolvidos:']) assert.ok(source.includes(detail), detail); assert.equal(CANONICAL_ENGINE_VERSION, 'browser-stage4-product-assortment-v20-targets-by-competence'); });
