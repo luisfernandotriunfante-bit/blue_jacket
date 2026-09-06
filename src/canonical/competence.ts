@@ -1,9 +1,18 @@
 import type { ParsedSource } from './types';
 
 const MONTHS: Record<string, string> = {
-  JAN: '01', FEV: '02', FEB: '02', MAR: '03', ABR: '04', APR: '04', MAI: '05', MAY: '05',
-  JUN: '06', JUL: '07', AGO: '08', AUG: '08', SET: '09', SEP: '09', OUT: '10', OCT: '10',
-  NOV: '11', DEZ: '12', DEC: '12',
+  JANEIRO: '01', JANUARY: '01', JAN: '01',
+  FEVEREIRO: '02', FEBRUARY: '02', FEV: '02', FEB: '02',
+  MARCO: '03', MARCH: '03', MAR: '03',
+  ABRIL: '04', APRIL: '04', ABR: '04', APR: '04',
+  MAIO: '05', MAY: '05', MAI: '05',
+  JUNHO: '06', JUNE: '06', JUN: '06',
+  JULHO: '07', JULY: '07', JUL: '07',
+  AGOSTO: '08', AUGUST: '08', AGO: '08', AUG: '08',
+  SETEMBRO: '09', SEPTEMBER: '09', SET: '09', SEP: '09',
+  OUTUBRO: '10', OCTOBER: '10', OUT: '10', OCT: '10',
+  NOVEMBRO: '11', NOVEMBER: '11', NOV: '11',
+  DEZEMBRO: '12', DECEMBER: '12', DEZ: '12', DEC: '12',
 };
 
 export type CompetenceCompatibility =
