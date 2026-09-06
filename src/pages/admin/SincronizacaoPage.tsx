@@ -14,7 +14,11 @@ import {
   uploadCurrentDeviceSnapshot,
   type DeviceSyncIdentity,
 } from '../../canonical/cloudSync';
-import { buildCanonicalFromStoredSources, CANONICAL_ENGINE_VERSION, SOURCE_LABELS } from '../../canonical/sourceImport';
+import { buildCanonicalFromStoredSources, CANONICAL_ENGINE_VERSION, loadSourceStaging } from '../../canonical/sourceImport';
+import { SOURCE_LABELS, SUPPORTED_SOURCE_IDS } from '../../canonical/sourceContract';
+import { legacyStagingManifestHashV1 } from '../../canonical/sourceReplacementIdentity';
+import { assertEffectiveSourceSetReady, resolveEffectiveSourceSet } from '../../canonical/sourceReplacementRuntime';
+import { loadSourceReplacementState, sourceReplacementProofHash, sourceReplacementsFromCertificates } from '../../canonical/sourceReplacementState';
 import {
   systemDataOperationBusyMessage,
   systemDataOperationCoordinator,
@@ -26,15 +30,21 @@ import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../../ui/p
 
 export function syncErrorMessage(reason: unknown) {
   const code = String(reason);
-  if (code.includes('SYNC_SOURCES_INCOMPLETE')) return 'Ainda faltam fontes válidas neste aparelho. Conclua a carga das 19 bases antes de ativar a sincronização.';
+  if (code.includes('HARD_MISSING:')) return 'Ainda faltam fontes físicas sempre obrigatórias neste aparelho. Complete as 15 bases hard-required antes de continuar.';
+  if (code.includes('REPLACEMENT_REQUIRED:')) return 'Uma fonte substituível está ausente sem certificado válido para o escopo atual. Reenvie a fonte ou ative uma substituição certificada.';
+  if (code.includes('REPLACEMENT_REVIEW_REQUIRED:')) return 'Uma nova versão física foi detectada para uma fonte com substituição ativa. Reconciliar/recertificar ou revogar explicitamente antes de continuar.';
+  if (code.includes('REPLACEMENT_COVERAGE_BROKEN:')) return 'A cobertura interna de uma substituição certificada foi quebrada. O build está bloqueado até a autoridade administrativa voltar a cobrir as chaves certificadas.';
+  if (code.includes('SYNC_SOURCES_INCOMPLETE')) return 'Ainda faltam fontes válidas neste aparelho. Complete as fontes obrigatórias para o contexto atual antes de ativar a sincronização.';
   if (code.includes('SYNC_SOURCE_SNAPSHOT_OUTDATED')) return 'A cópia remota foi gerada com uma regra antiga. Atualize essa base no aparelho de origem e sincronize novamente.';
-  if (code.includes('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE')) return 'As fontes, os cadastros administrativos, as metas RCA ou o build ativo mudaram durante a captura. Nenhuma cópia foi enviada; aguarde a operação em andamento e tente novamente.';
+  if (code.includes('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE')) return 'As fontes, os cadastros administrativos, as metas RCA, os certificados ou o build ativo mudaram durante a captura. Nenhuma cópia foi enviada.';
   if (code.includes('SYNC_SNAPSHOT_MISSING')) return 'Ainda não existe uma cópia sincronizada para restaurar.';
   if (code.includes('SYNC_PAYLOAD_INVALID')) return 'A cópia recebida não passou na validação de integridade e não foi aplicada.';
   if (code.includes('BUNDLE_LOCAL_REGISTRY_IDENTITY_REQUIRED')) return 'Não foi possível confirmar a identidade dos cadastros administrativos locais antes da recuperação do bundle.';
   if (code.includes('BUNDLE_LOCAL_TARGET_IDENTITY_REQUIRED')) return 'Não foi possível confirmar a identidade das metas RCA locais antes da recuperação do bundle.';
-  if (code.includes('BUNDLE_LEGACY_REBUILD_UNAVAILABLE:')) return 'Este bundle pertence a uma versão antiga do motor e não contém as fontes necessárias para reconstrução com a versão atual. Utilize a cópia sincronizada ou recarregue as bases.';
-  if (code.includes('BUNDLE_STAGING_SNAPSHOT_MISMATCH')) return 'Os relatórios armazenados neste aparelho não correspondem ao snapshot deste bundle. Não é possível reconstruir este backup com segurança. Restaure a cópia sincronizada correspondente ou carregue as fontes daquele snapshot.';
+  if (code.includes('BUNDLE_LOCAL_REPLACEMENT_IDENTITY_REQUIRED')) return 'Não foi possível confirmar a identidade das substituições certificadas locais antes da recuperação do bundle.';
+  if (code.includes('BUNDLE_LOCAL_LEGACY_STAGING_IDENTITY_REQUIRED')) return 'Não foi possível confirmar a identidade física v20 necessária para reconstruir este bundle legado.';
+  if (code.includes('BUNDLE_LEGACY_REBUILD_UNAVAILABLE:')) return 'Este bundle não pôde ser reconstruído com a engine atual e o conjunto de fontes/certificados deste aparelho.';
+  if (code.includes('BUNDLE_STAGING_SNAPSHOT_MISMATCH')) return 'Os relatórios armazenados neste aparelho não correspondem ao snapshot deste bundle. Não é possível reconstruir este backup com segurança.';
   if (code.includes('SOURCES_OUTDATED:')) {
     const sources = code.split('SOURCES_OUTDATED:')[1]?.split('|').map(source => SOURCE_LABELS[source] ?? source).join(', ');
     return `A regra de leitura mudou. Selecione novamente somente: ${sources || 'a fonte marcada como atualização necessária'}.`;
@@ -87,8 +97,16 @@ export function SincronizacaoPage() {
       setStatus('Validando e restaurando bundle técnico…');
       setError('');
       try {
-        const localRegistryHash = await canonicalAdminRegistryHash(await loadAdminRegistryState());
-        const localTargetHash = await rcaTargetRegistryHash(loadTargetState());
+        const registry = await loadAdminRegistryState();
+        const targetState = loadTargetState();
+        const replacementState = loadSourceReplacementState();
+        const localRegistryHash = await canonicalAdminRegistryHash(registry);
+        const localTargetHash = await rcaTargetRegistryHash(targetState);
+        const stored = (await Promise.all(SUPPORTED_SOURCE_IDS.map(source => loadSourceStaging(source)))).filter((stage): stage is NonNullable<typeof stage> => Boolean(stage));
+        const effective = assertEffectiveSourceSetReady(resolveEffectiveSourceSet({ physicalStages: stored, replacementState, adminRegistryState: registry, targetState }));
+        const localProofHash = await sourceReplacementProofHash(effective.certificates);
+        const localReplacements = sourceReplacementsFromCertificates(effective.certificates);
+        const localLegacyHash = await legacyStagingManifestHashV1(stored);
         const recovered = await recoverTechnicalBundle({
           currentEngineVersion: CANONICAL_ENGINE_VERSION,
           inspectBundle: () => inspectCanonicalBundle(file),
@@ -97,10 +115,13 @@ export function SincronizacaoPage() {
           activate: activateCanonical,
           localAdminRegistryHash: localRegistryHash,
           localRcaTargetRegistryHash: localTargetHash,
+          localSourceReplacementProofHash: localProofHash,
+          localSourceReplacements: localReplacements,
+          localLegacyStagingManifestHash: localLegacyHash,
         });
         setStatus(recovered.mode === 'COMPATIBLE'
           ? `Bundle ${recovered.active.motorBuildId} validado e ativado com a engine atual.`
-          : `Bundle legado validado. Dados foram reconstruídos com a engine atual. Build ativo: ${recovered.active.motorBuildId}.`);
+          : `Bundle legado ou de identidade diferente foi validado e reconstruído com a engine atual. Build ativo: ${recovered.active.motorBuildId}.`);
       } catch (reason) {
         setStatus('');
         setError(syncErrorMessage(reason));
@@ -145,7 +166,7 @@ export function SincronizacaoPage() {
       setSyncNotice('Enviando a cópia atual deste aparelho…');
       try {
         const synced = await uploadCurrentDeviceSnapshot(deviceSync);
-        setSyncNotice(`Cópia atual enviada com sucesso (${synced.bytes.toLocaleString('pt-BR')} bytes cifrados). Bases, configurações, cadastros administrativos e TargetState deste aparelho foram incluídos no mesmo snapshot seguro.`);
+        setSyncNotice(`Cópia atual enviada com sucesso (${synced.bytes.toLocaleString('pt-BR')} bytes cifrados). Bases, configurações, cadastros, metas e certificados deste aparelho foram incluídos no snapshot seguro.`);
       } catch (reason) {
         setSyncNotice('');
         setError(`Não foi possível enviar a cópia atual: ${syncErrorMessage(reason)}`);
@@ -214,7 +235,7 @@ export function SincronizacaoPage() {
   const syncLink = deviceSync ? deviceSyncLink(deviceSync) : '';
   const mutableOperationBusy = syncing || operationState.busy;
 
-  return <PanelPage title="Sincronização" metricLabel="Engine" metricValue="v20">
+  return <PanelPage title="Sincronização" metricLabel="Engine" metricValue="v21">
     {activeCanonical
       ? <PanelAlert tone="success">Build ativo: {activeCanonical.motorBuildId}</PanelAlert>
       : <PanelAlert tone="info">Nenhum build canônico está ativo neste aparelho.</PanelAlert>}
