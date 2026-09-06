@@ -23,6 +23,11 @@ export type CompetenceState = {
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 type Listener = (state: CompetenceState | null) => void;
 
+export type CompetenceBootstrapLifecycleResult = {
+  status: 'WAIT' | 'INITIALIZED' | 'REPAIRED' | 'PRESERVED';
+  state: CompetenceState | null;
+};
+
 export const COMPETENCE_STORAGE_KEY = 'blue-jacket-v1-competence-state';
 export const COMPETENCE_CHANGED_EVENT = 'blue-jacket-competence-changed';
 const listeners = new Set<Listener>();
@@ -139,6 +144,52 @@ export function bootstrapCompetenceState(
     currentCompetence,
     records: [...byId.values()],
   }, target);
+}
+
+export function isUnclaimedCompetenceState(state: CompetenceState | null) {
+  return Boolean(state && state.currentCompetence === null && state.records.length === 0);
+}
+
+/**
+ * Orquestra o primeiro bootstrap sem transformar ausência de evidência em autoridade.
+ * A leitura do state acontece dentro da aplicação da decisão, portanto qualquer ação
+ * manual concluída enquanto M3 era lido prevalece sobre a evidência assíncrona.
+ */
+export function initializeCompetenceFromAvailableEvidence(options: {
+  hasActiveBuild: boolean;
+  observedM3?: string | null;
+  settingsCompetences: string[];
+  target?: StorageLike;
+  now?: string;
+}): CompetenceBootstrapLifecycleResult {
+  const target = options.target ?? storage();
+  const existing = loadCompetenceState(target);
+  if (existing && !isUnclaimedCompetenceState(existing)) return { status: 'PRESERVED', state: existing };
+
+  const settingsCompetences = [...new Set(options.settingsCompetences.filter(isValidCompetenceId))];
+  const observedM3 = options.hasActiveBuild && isValidCompetenceId(options.observedM3) ? options.observedM3 : null;
+  if (settingsCompetences.length === 0 && !observedM3) return { status: 'WAIT', state: existing };
+
+  const timestamp = options.now ?? nowIso();
+  if (!validTimestamp(timestamp)) throw new Error('COMPETENCE_TIMESTAMP_INVALID');
+  const byId = new Map<string, CompetenceRecord>();
+  for (const id of settingsCompetences) byId.set(id, record(id, 'MIGRATION_REPORT_SETTINGS', timestamp));
+
+  let currentCompetence: string | null = null;
+  if (observedM3) {
+    const fromSettings = byId.get(observedM3);
+    byId.set(observedM3, fromSettings ? { ...fromSettings, origin: 'MIGRATION_M3', updatedAt: timestamp } : record(observedM3, 'MIGRATION_M3', timestamp));
+    currentCompetence = observedM3;
+  }
+
+  const next = persist({
+    schemaVersion: 'v1',
+    initializedAt: existing?.initializedAt ?? timestamp,
+    updatedAt: timestamp,
+    currentCompetence,
+    records: [...byId.values()],
+  }, target);
+  return { status: existing ? 'REPAIRED' : 'INITIALIZED', state: next };
 }
 
 export function createManualCompetence(id: string, options: { target?: StorageLike; now?: string } = {}) {
