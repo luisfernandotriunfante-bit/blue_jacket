@@ -16,8 +16,10 @@ import {
   type AdminRegistryState,
   type RcaRegistryRecord,
 } from '../src/canonical/adminRegistry.ts';
+import { canonicalAdminRegistryHash, canonicalInputHash } from '../src/canonical/adminRegistryIdentity.ts';
 import { cloudSyncTestHelpers, type CloudRestoreDependencies, type CloudSnapshot, type DeviceSyncIdentity } from '../src/canonical/cloudSync.ts';
-import { CANONICAL_ENGINE_VERSION, REQUIRED_SOURCE_IDS } from '../src/canonical/sourceImport.ts';
+import { CANONICAL_ENGINE_VERSION, REQUIRED_SOURCE_IDS, type SourceStorageSnapshot } from '../src/canonical/sourceImport.ts';
+import { sourceStorageSnapshotManifestHash } from '../src/canonical/sourceSnapshotIdentity.ts';
 import type { ParsedSource, RawTyped } from '../src/canonical/types.ts';
 
 const NOW = '2026-09-06T15:00:00.000Z';
@@ -219,32 +221,72 @@ const repository = (initial: unknown | null = null) => {
 });
 
 // R22-R24
- test('R22–R24 — motores, RCA resolver e TopRetailM2 não importam AdminRegistry', () => {
-  for (const file of ['../src/canonical/motors.ts', '../src/canonical/rcaResolver.ts', '../src/canonical/topRetailM2.ts']) {
-    const content = sourceText(file);
-    assert.doesNotMatch(content, /adminRegistry|AdminRegistry/);
-  }
+ test('R22–R24 — Registry entra por snapshot validado sem leitura de IndexedDB/CompetenceStore dentro das funções determinísticas', () => {
+  const motors = sourceText('../src/canonical/motors.ts');
+  const rca = sourceText('../src/canonical/rcaResolver.ts');
+  const top = sourceText('../src/canonical/topRetailM2.ts');
+
+  for (const content of [motors, rca, top]) assert.doesNotMatch(content, /adminRegistryIndexedDb|indexedDB|competenceStore|CompetenceStore/);
+  assert.match(rca, /createRcaResolver\(parsedSources: ParsedSource\[\], registry: AdminRegistryState \| null = null\)/);
+  assert.equal((rca.match(/export function createRcaResolver/g) ?? []).length, 1);
+  assert.match(top, /materializeTopRetailRouteInM2\(m2: CanonicalList, sources: ParsedSource\[\], registry: AdminRegistryState \| null = null\)/);
+  assert.equal((top.match(/export function materializeTopRetailRouteInM2/g) ?? []).length, 1);
 });
 
 // R25
- test('R25 — editar registry não altera stagingManifestHash de um build existente', async () => {
-  const { repo } = repository();
-  const active = { stagingManifestHash: 'same-source-manifest-hash' };
-  await upsertManualRca(repo, { currentCode: '1', legacyCode: null, name: null, coordinatorCode: null, coordinatorName: null, role: 'PRINCIPAL', validFromCompetence: null, validToCompetence: null, note: null }, undefined, NOW);
-  assert.equal(active.stagingManifestHash, 'same-source-manifest-hash');
-  assert.doesNotMatch(sourceText('../src/canonical/sourceImport.ts'), /adminRegistry|AdminRegistry/);
+ test('R25 — editar Registry preserva stagingManifestHash físico e altera somente registry/input identity', async () => {
+  const sourceSnapshot: SourceStorageSnapshot = {
+    format: 'blue-jacket-source-storage/v1',
+    exportedAt: NOW,
+    staging: REQUIRED_SOURCE_IDS.map((source, index) => ({
+      source,
+      manifest: {
+        source,
+        fileName: `${source}.test`,
+        fileHash: `physical-${index}`,
+        parserVersion: `parser-${index}`,
+        schemaVersion: 'v1',
+        parsedRows: 0,
+        warnings: 0,
+        errors: 0,
+        updatedAt: NOW,
+        status: 'VALID',
+      },
+      parsed: { source, fileName: `${source}.test`, sheet: 'test', rows: [], audits: [] },
+    })),
+  } as SourceStorageSnapshot;
+  const sourceHashA = await sourceStorageSnapshotManifestHash(sourceSnapshot);
+  const sourceHashB = await sourceStorageSnapshotManifestHash({ ...sourceSnapshot, exportedAt: LATER });
+  assert.equal(sourceHashA, sourceHashB);
+
+  const registryA: AdminRegistryState = {
+    ...emptyAdminRegistryState(NOW),
+    rcas: [{ id: 'r25', currentCode: '100', legacyCode: null, name: 'A', coordinatorCode: null, coordinatorName: null, role: 'PRINCIPAL', active: true, validFromCompetence: null, validToCompetence: null, origin: 'MANUAL', sourceRow: null, note: null, createdAt: NOW, updatedAt: NOW }],
+  };
+  const registryB: AdminRegistryState = structuredClone(registryA);
+  registryB.rcas[0].name = 'B';
+  registryB.updatedAt = LATER;
+  const registryHashA = await canonicalAdminRegistryHash(registryA);
+  const registryHashB = await canonicalAdminRegistryHash(registryB);
+  assert.notEqual(registryHashA, registryHashB);
+  assert.notEqual(await canonicalInputHash(sourceHashA, registryHashA), await canonicalInputHash(sourceHashB, registryHashB));
 });
 
 // R26
- test('R26 — engine permanece v18', () => assert.equal(CANONICAL_ENGINE_VERSION, 'browser-stage4-product-assortment-v18-sellout-closure'));
+ test('R26 — engine canônica é exatamente v19 Admin Registry Authority', () => assert.equal(CANONICAL_ENGINE_VERSION, 'browser-stage4-product-assortment-v19-admin-registry-authority'));
 
 // R27
- test('R27 — registry não participa do caminho canônico nesta fase', () => {
+ test('R27 — Registry participa da orquestração canônica sem storage dentro das funções determinísticas', () => {
   const motors = sourceText('../src/canonical/motors.ts');
   const sourceImport = sourceText('../src/canonical/sourceImport.ts');
-  assert.doesNotMatch(motors, /adminRegistry|AdminRegistry/);
-  assert.doesNotMatch(sourceImport, /adminRegistry|AdminRegistry/);
+  const authority = sourceText('../src/canonical/adminRegistryCanonicalAuthority.ts');
+  assert.match(sourceImport, /loadAdminRegistryState/);
+  assert.match(sourceImport, /canonicalAdminRegistryHash/);
+  assert.match(sourceImport, /canonicalInputHash/);
+  assert.match(sourceImport, /applyAdminRegistryCanonicalAuthority/);
   assert.match(sourceImport, /buildCanonicalBundleFromStaging\(parsedSources\)/);
+  assert.doesNotMatch(motors, /indexedDB|adminRegistryIndexedDb|competenceStore|CompetenceStore/);
+  assert.doesNotMatch(authority, /indexedDB|adminRegistryIndexedDb|competenceStore|CompetenceStore/);
 });
 
 const identity: DeviceSyncIdentity = { workspaceId: '7a7a7a7a-7a7a-4a7a-8a7a-7a7a7a7a7a7a', secret: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' };
@@ -328,21 +370,37 @@ function cloudHarness(initial: AdminRegistryState | null, failFirstBuild = false
   assert.match(page, /uploadCurrentDeviceSnapshot\(deviceSync\)/);
 });
 
-test('Fase 3A — Cadastros é funcional, seed não chama parser e 19 fontes permanecem', () => {
+test('Fase 3A — Cadastros continua funcional, seed controlado e 19 fontes permanecem sob uso canônico ATIVO', () => {
   const admin = sourceText('../src/pages/admin/AdminPage.tsx');
   const page = sourceText('../src/pages/admin/CadastrosPage.tsx');
+  const shared = sourceText('../src/pages/admin/registry/RegistryPanelShared.tsx');
   const seed = sourceText('../src/canonical/adminRegistrySeed.ts');
   assert.match(admin, /<CadastrosPage \/>/);
   assert.doesNotMatch(admin, /CadastrosPlaceholder/);
-  assert.match(page, /RCAs/); assert.match(page, /Lançamentos/); assert.match(page, /Top Varejistas/);
-  assert.match(page, /ainda não substituem as fontes utilizadas pelos motores canônicos/);
+  const rcasIndex = page.indexOf("label: 'RCAs'");
+  const launchesIndex = page.indexOf("label: 'Lançamentos'");
+  const topIndex = page.indexOf("label: 'Top Varejistas'");
+  assert.ok(rcasIndex >= 0 && rcasIndex < launchesIndex && launchesIndex < topIndex);
+  assert.match(page, /metricLabel="Uso nos motores" metricValue="ATIVO"/);
   assert.match(seed, /loadSourceStaging/);
   assert.doesNotMatch(seed, /parseSource|parsers/);
+  assert.match(shared, /Pré-visualizar importação/);
+  assert.match(shared, /Aplicar itens seguros do preview/);
+  assert.match(shared, /Pré-visualizar é passivo/);
   assert.equal(REQUIRED_SOURCE_IDS.length, 19);
 });
 
-test('Fase 3A — Bundle técnico continua sem AdminRegistry', () => {
-  for (const file of ['../src/canonical/bundleStore.ts', '../src/canonical/bundleRecovery.ts']) assert.doesNotMatch(sourceText(file), /adminRegistry|AdminRegistry/);
+test('Fase 3A — Bundle continua técnico M1–M4; v19 carrega apenas hashes, nunca AdminRegistryState', () => {
+  const bundle = sourceText('../src/canonical/bundleStore.ts');
+  const recovery = sourceText('../src/canonical/bundleRecovery.ts');
+  const cloud = sourceText('../src/canonical/cloudSync.ts');
+  assert.match(bundle, /adminRegistryHash/);
+  assert.match(bundle, /canonicalInputHash/);
+  assert.doesNotMatch(bundle, /AdminRegistryState|adminRegistryState/);
+  assert.doesNotMatch(recovery, /AdminRegistryState|adminRegistryState/);
+  assert.doesNotMatch(bundle, /adminRegistry\.json|rcas\.json|launchRegistry\.json|topRetailRegistry\.json/i);
+  assert.match(bundle, /'M1_ITEM_ESTOQUE', 'M2_CLIENTE_RCA', 'M3_MOVIMENTO_VENDAS', 'M4_HISTORICO_TRANSICAO'/);
+  assert.match(cloud, /adminRegistryState/);
 });
 
 test('Fase 3A — diagnósticos básicos identificam conflitos ativos', () => {
