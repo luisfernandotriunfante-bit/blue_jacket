@@ -53,6 +53,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   '12.322.txt': '12.322',
 };
 
+export type SourceReplacementAuthority = 'AdminRegistry.RCAs' | 'AdminRegistry.Lançamentos' | 'AdminRegistry.TopRetailers' | 'TargetState.RcaTargets';
 export type SupportedSourceId = typeof SUPPORTED_SOURCE_IDS[number];
 export type HardRequiredSourceId = typeof HARD_REQUIRED_SOURCE_IDS[number];
 export type ReplaceableSourceId = typeof REPLACEABLE_SOURCE_IDS[number];
