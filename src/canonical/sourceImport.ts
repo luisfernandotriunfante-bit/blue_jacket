@@ -2,9 +2,13 @@ import { SOURCE_IDS, parseSource } from './parsers';
 import { buildCanonicalBundleFromStaging } from './motors';
 import { materializeTopRetailRouteInM2 } from './topRetailM2';
 import { applyAdminRegistryCanonicalAuthority } from './adminRegistryCanonicalAuthority';
-import { canonicalAdminRegistryHash, canonicalInputHash } from './adminRegistryIdentity';
+import { canonicalAdminRegistryHash } from './adminRegistryIdentity';
 import { loadAdminRegistryState } from './adminRegistryIndexedDb';
 import type { AdminRegistryState } from './adminRegistry';
+import { applyTargetAuthorityToM3 } from './targetAuthority';
+import { canonicalInputHashV2, rcaTargetRegistryHash } from './targetIdentity';
+import { bootstrapTargetStateFromReportSettings, loadTargetState, type TargetState } from './targetStore';
+import { loadReportSettings } from './reportSettings';
 import type { ActiveCanonicalBundle } from './runtime';
 import type { CanonicalList, ParsedSource } from './types';
 
@@ -20,18 +24,14 @@ const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v3-route-monthly-meta',
   'entrada-notas-218.xls': 'browser-v2-invoice-registry',
   "Sortimento Recomendado - Q3'26.xlsx": 'browser-v4-jul-optional-blank-before-ean',
-  // A Carteira é sempre uma fotografia completa enviada pelo usuário. A versão
-  // também força o reprocessamento de um staging que poderia ter sido filtrado
-  // pela antiga regra de continuidade.
   'CARTEIRA 24.08.xlsx': 'browser-v5-portfolio-current-snapshot',
 };
 const SCHEMA_VERSION = 'v1';
 /**
- * A versão do motor é também o contrato de migração do build salvo no
- * navegador. Quando ela muda, os dados originais já presentes no staging são
- * remontados antes de qualquer tela os consumir.
+ * A versão do motor é também o contrato de migração do build salvo no navegador.
+ * v20 acrescenta somente a autoridade temporal das metas RCA à identidade canônica.
  */
-export const CANONICAL_ENGINE_VERSION = 'browser-stage4-product-assortment-v19-admin-registry-authority';
+export const CANONICAL_ENGINE_VERSION = 'browser-stage4-product-assortment-v20-targets-by-competence';
 const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
 export const isSourceStageCurrent = (manifest: SourceStageManifest | undefined) => Boolean(manifest && manifest.parserVersion === parserVersionFor(manifest.source) && manifest.schemaVersion === SCHEMA_VERSION);
 
@@ -81,6 +81,7 @@ type StoredBuild = {
   sourceHashes: Record<string, string>;
   stagingManifestHash?: string;
   adminRegistryHash?: string;
+  rcaTargetRegistryHash?: string;
   canonicalInputHash?: string;
 };
 type StoredList = { id: string; buildId: string; listId: CanonicalList['id']; list: CanonicalList };
@@ -100,7 +101,6 @@ type PortfolioContinuitySnapshot = {
   updatedAt: string;
 };
 
-/** Parsed source stages exported through the encrypted device-sync transport. */
 export type SourceStorageSnapshot = {
   format: 'blue-jacket-source-storage/v1';
   exportedAt: string;
@@ -265,11 +265,6 @@ async function replaceSourceStorage(snapshot: SourceStorageSnapshot) {
   } finally { database.close(); }
 }
 
-/**
- * Exports only parsed source stages. The receiving device generates its own
- * current build and canonical lists after integrity validation, so a local
- * history of reprocessed builds is never transferred.
- */
 export async function exportSourceStorageSnapshot(): Promise<SourceStorageSnapshot> {
   const staging = await idbGetAll<StoredStage>(STAGING_STORE);
   const snapshot: SourceStorageSnapshot = { format: 'blue-jacket-source-storage/v1', exportedAt: new Date().toISOString(), staging };
@@ -350,9 +345,6 @@ async function stageOne(source: string, file: File, onProgress?: (progress: Sour
 
   let portfolioSnapshot: PortfolioContinuitySnapshot | undefined;
   if (source === 'CARTEIRA 24.08.xlsx') {
-    // A origem sempre é uma fotografia integral da Carteira no momento do envio.
-    // Logo, datas e pedidos de uma carga anterior não podem retirar linhas desta
-    // nova fotografia. A baixa das NFs acontece depois, nos motores M3/M4.
     const continuity = acceptCurrentPortfolioAsBaseline(parsed, file.name, hash);
     parsed = continuity.parsed;
     portfolioSnapshot = continuity.snapshot;
@@ -376,7 +368,7 @@ async function stageOne(source: string, file: File, onProgress?: (progress: Sour
   return { status: 'VALID' as const, manifest };
 }
 
-/** Physical-source identity. This algorithm is intentionally unchanged from v18. */
+/** Physical-source identity. This algorithm is intentionally unchanged from v18/v19. */
 async function stagingManifestHash(stages: StoredStage[]) {
   const compact = REQUIRED_SOURCE_IDS.map(source => {
     const stage = stages.find(candidate => candidate.source === source);
@@ -398,13 +390,14 @@ function completeIdentityMatches(a: ActiveCanonicalBundle, b: ActiveCanonicalBun
   return a.motorBuildId === b.motorBuildId
     && a.stagingManifestHash === b.stagingManifestHash
     && a.adminRegistryHash === b.adminRegistryHash
+    && a.rcaTargetRegistryHash === b.rcaTargetRegistryHash
     && a.canonicalInputHash === b.canonicalInputHash
     && a.engineVersion === b.engineVersion
     && a.schemaVersion === b.schemaVersion;
 }
 
 async function saveGeneratedBuild(active: ActiveCanonicalBundle, lists: Record<CanonicalList['id'], CanonicalList>, sourceHashes: Record<string, string>) {
-  if (!active.adminRegistryHash || !active.canonicalInputHash || active.engineVersion !== CANONICAL_ENGINE_VERSION) throw new Error('CANONICAL_BUILD_IDENTITY_INCOMPLETE');
+  if (!active.adminRegistryHash || !active.rcaTargetRegistryHash || !active.canonicalInputHash || active.engineVersion !== CANONICAL_ENGINE_VERSION) throw new Error('CANONICAL_BUILD_IDENTITY_INCOMPLETE');
   const build: StoredBuild = {
     id: active.motorBuildId,
     active,
@@ -412,6 +405,7 @@ async function saveGeneratedBuild(active: ActiveCanonicalBundle, lists: Record<C
     sourceHashes,
     stagingManifestHash: active.stagingManifestHash,
     adminRegistryHash: active.adminRegistryHash,
+    rcaTargetRegistryHash: active.rcaTargetRegistryHash,
     canonicalInputHash: active.canonicalInputHash,
   };
   await idbPut(BUILDS_STORE, build);
@@ -422,14 +416,15 @@ async function saveGeneratedBuild(active: ActiveCanonicalBundle, lists: Record<C
   if (!verified || !completeIdentityMatches(verified.active, active)
     || verified.stagingManifestHash !== active.stagingManifestHash
     || verified.adminRegistryHash !== active.adminRegistryHash
+    || verified.rcaTargetRegistryHash !== active.rcaTargetRegistryHash
     || verified.canonicalInputHash !== active.canonicalInputHash) throw new Error('CANONICAL_BUILD_STORAGE_VERIFY_FAILED');
 }
 
-function activeFromLists(lists: Record<CanonicalList['id'], CanonicalList>, sourceHash: string, registryHash: string, inputHash: string) {
+function activeFromLists(lists: Record<CanonicalList['id'], CanonicalList>, sourceHash: string, registryHash: string, targetHash: string, inputHash: string) {
   const motorBuildId = `motor-browser-${Date.now()}-${inputHash.slice(0, 10)}`;
   const rowCounts = Object.fromEntries(Object.entries(lists).map(([id, list]) => [id, list.records.length])) as ActiveCanonicalBundle['rowCounts'];
   return {
-    status: 'ACTIVE', motorBuildId, stagingManifestHash: sourceHash, adminRegistryHash: registryHash, canonicalInputHash: inputHash,
+    status: 'ACTIVE', motorBuildId, stagingManifestHash: sourceHash, adminRegistryHash: registryHash, rcaTargetRegistryHash: targetHash, canonicalInputHash: inputHash,
     schemaVersion: SCHEMA_VERSION, engineVersion: CANONICAL_ENGINE_VERSION,
     approvedAt: new Date().toISOString(), rowCounts, factTypeCounts: factTypeCounts(lists.M3_MOVIMENTO_VENDAS),
   } satisfies ActiveCanonicalBundle;
@@ -453,8 +448,15 @@ async function registryForBuild(override?: AdminRegistryState | null) {
   return override === undefined ? loadAdminRegistryState() : override;
 }
 
-async function buildIncrementalPortfolioUpdate(base: IncrementalBase, changedStages: StoredStage[], allStages: StoredStage[], registry: AdminRegistryState | null, registryHash: string) {
-  if (base.active.engineVersion !== CANONICAL_ENGINE_VERSION || base.active.adminRegistryHash !== registryHash || !base.active.canonicalInputHash) throw new Error('INCREMENTAL_BASE_IDENTITY_MISMATCH');
+function targetForBuild(override?: TargetState | null) {
+  if (override !== undefined) return override;
+  const current = loadTargetState();
+  if (current) return current;
+  return bootstrapTargetStateFromReportSettings(loadReportSettings()).state;
+}
+
+async function buildIncrementalPortfolioUpdate(base: IncrementalBase, changedStages: StoredStage[], allStages: StoredStage[], registry: AdminRegistryState | null, registryHash: string, targetState: TargetState | null, targetHash: string) {
+  if (base.active.engineVersion !== CANONICAL_ENGINE_VERSION || base.active.adminRegistryHash !== registryHash || base.active.rcaTargetRegistryHash !== targetHash || !base.active.canonicalInputHash) throw new Error('INCREMENTAL_BASE_IDENTITY_MISMATCH');
   const changed = new Set(changedStages.map(stage => stage.source));
   const patch = buildCanonicalBundleFromStaging(changedStages.map(stage => stage.parsed)).lists;
   const m3 = base.lists.M3_MOVIMENTO_VENDAS;
@@ -480,28 +482,31 @@ async function buildIncrementalPortfolioUpdate(base: IncrementalBase, changedSta
     M4_HISTORICO_TRANSICAO: { ...m4, records: m4Records, generatedAt },
   };
   const sourceHash = await stagingManifestHash(allStages);
-  const inputHash = await canonicalInputHash(sourceHash, registryHash);
-  const active = activeFromLists(lists, sourceHash, registryHash, inputHash);
+  const inputHash = await canonicalInputHashV2(sourceHash, registryHash, targetHash);
+  const active = activeFromLists(lists, sourceHash, registryHash, targetHash, inputHash);
   await saveGeneratedBuild(active, lists, Object.fromEntries(allStages.map(stage => [stage.source, stage.manifest.fileHash])));
   return active;
 }
 
-export async function buildCanonicalFromStoredSources(onProgress?: (progress: SourceUpdateProgress) => void, registryOverride?: AdminRegistryState | null) {
+export async function buildCanonicalFromStoredSources(onProgress?: (progress: SourceUpdateProgress) => void, registryOverride?: AdminRegistryState | null, targetOverride?: TargetState | null) {
   const { stages, outdated, missing } = await currentStages();
   if (outdated.length) throw new Error(`SOURCES_OUTDATED:${outdated.join('|')}`);
   if (missing.length) throw new Error(`SOURCES_MISSING:${missing.join('|')}`);
-  onProgress?.({ source: 'ALL', label: 'Motores canônicos', index: REQUIRED_SOURCE_IDS.length, total: REQUIRED_SOURCE_IDS.length, phase: 'BUILDING', message: 'Gerando M1, M2, M3 e M4 das 19 fontes + Admin Registry validado' });
+  onProgress?.({ source: 'ALL', label: 'Motores canônicos', index: REQUIRED_SOURCE_IDS.length, total: REQUIRED_SOURCE_IDS.length, phase: 'BUILDING', message: 'Gerando M1, M2, M3 e M4 das 19 fontes + Admin Registry + Target Registry validados' });
 
   const registry = await registryForBuild(registryOverride);
+  const targetState = targetForBuild(targetOverride);
   const sourceHash = await stagingManifestHash(stages);
   const registryHash = await canonicalAdminRegistryHash(registry);
-  const inputHash = await canonicalInputHash(sourceHash, registryHash);
+  const targetHash = await rcaTargetRegistryHash(targetState);
+  const inputHash = await canonicalInputHashV2(sourceHash, registryHash, targetHash);
   const parsedSources = stages.map(stage => stage.parsed);
   const bundle = buildCanonicalBundleFromStaging(parsedSources);
   applyAdminRegistryCanonicalAuthority(bundle, parsedSources, registry);
+  bundle.lists.M3_MOVIMENTO_VENDAS = applyTargetAuthorityToM3(bundle.lists.M3_MOVIMENTO_VENDAS, parsedSources, targetState, registry);
   bundle.lists.M2_CLIENTE_RCA = materializeTopRetailRouteInM2(bundle.lists.M2_CLIENTE_RCA, parsedSources, registry);
   const lists = bundle.lists;
-  const active = activeFromLists(lists, sourceHash, registryHash, inputHash);
+  const active = activeFromLists(lists, sourceHash, registryHash, targetHash, inputHash);
   await saveGeneratedBuild(active, lists, Object.fromEntries(stages.map(stage => [stage.source, stage.manifest.fileHash])));
   return active;
 }
@@ -521,22 +526,25 @@ export async function processSourceUpdates(filesBySource: Partial<Record<string,
   if (rejected.length || missing.length) return { active: null, updated, unchanged, rejected, missing, manifests };
 
   const registry = await loadAdminRegistryState();
+  const targetState = targetForBuild();
   const registryHash = await canonicalAdminRegistryHash(registry);
+  const targetHash = await rcaTargetRegistryHash(targetState);
   const canPatchActivePortfolio = Boolean(incrementalBase)
     && selected.length > 0
     && selected.every(([source]) => INCREMENTAL_PORTFOLIO_SOURCES.has(source))
     && incrementalBase!.active.engineVersion === CANONICAL_ENGINE_VERSION
-    && incrementalBase!.active.adminRegistryHash === registryHash;
+    && incrementalBase!.active.adminRegistryHash === registryHash
+    && incrementalBase!.active.rcaTargetRegistryHash === targetHash;
 
   let active: ActiveCanonicalBundle;
   if (canPatchActivePortfolio) {
     const all = await currentStages();
     if (all.outdated.length || all.missing.length) throw new Error('INCREMENTAL_REQUIRES_COMPLETE_CURRENT_STAGING');
-    onProgress?.({ source: 'ALL', label: 'Carteira', index: selected.length, total: selected.length, phase: 'BUILDING', message: 'Atualizando Carteira, 218 e 12.322 sobre build v19 com Registry idêntico' });
+    onProgress?.({ source: 'ALL', label: 'Carteira', index: selected.length, total: selected.length, phase: 'BUILDING', message: 'Atualizando Carteira, 218 e 12.322 sobre build v20 com Admin Registry e RCA Target Registry idênticos' });
     const changedStages = await Promise.all(selected.map(([source]) => loadSourceStaging(source))) as StoredStage[];
-    active = await buildIncrementalPortfolioUpdate(incrementalBase!, changedStages, all.stages, registry, registryHash);
+    active = await buildIncrementalPortfolioUpdate(incrementalBase!, changedStages, all.stages, registry, registryHash, targetState, targetHash);
   } else {
-    active = await buildCanonicalFromStoredSources(onProgress, registry);
+    active = await buildCanonicalFromStoredSources(onProgress, registry, targetState);
   }
   onProgress?.({ source: 'ALL', label: 'Atualização', index: selected.length, total: selected.length, phase: 'DONE', message: `Novo build ${active.motorBuildId} pronto para ativação` });
   return { active, updated, unchanged, rejected, missing, manifests: await loadSourceStagingManifests() };
@@ -571,6 +579,7 @@ export async function loadGeneratedCanonicalManifest(buildId: string) {
     motorBuildId: build.active.motorBuildId,
     stagingManifestHash: build.active.stagingManifestHash,
     adminRegistryHash: build.active.adminRegistryHash ?? null,
+    rcaTargetRegistryHash: build.active.rcaTargetRegistryHash ?? null,
     canonicalInputHash: build.active.canonicalInputHash ?? null,
     schemaVersion: build.active.schemaVersion,
     engineVersion: build.active.engineVersion,
