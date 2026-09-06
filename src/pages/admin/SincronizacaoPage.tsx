@@ -16,7 +16,7 @@ import { buildCanonicalFromStoredSources, CANONICAL_ENGINE_VERSION, SOURCE_LABEL
 import { useData } from '../../store/DataContext';
 import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../../ui/pattern/PanelVisual';
 
-function syncError(reason: unknown) {
+export function syncErrorMessage(reason: unknown) {
   const code = String(reason);
   if (code.includes('SYNC_SOURCES_INCOMPLETE')) return 'Ainda faltam fontes válidas neste aparelho. Conclua a carga das 19 bases antes de ativar a sincronização.';
   if (code.includes('SYNC_SOURCE_SNAPSHOT_OUTDATED')) return 'A cópia remota foi gerada com uma regra antiga. Atualize essa base no aparelho de origem e sincronize novamente.';
@@ -28,14 +28,18 @@ function syncError(reason: unknown) {
     const sources = code.split('SOURCES_OUTDATED:')[1]?.split('|').map(source => SOURCE_LABELS[source] ?? source).join(', ');
     return `A regra de leitura mudou. Selecione novamente somente: ${sources || 'a fonte marcada como atualização necessária'}.`;
   }
-  return code;
+  return reason instanceof Error ? reason.message : code;
 }
 
-/** Preserves the previous automatic push after a successful source rebuild without coupling Bases to sync internals. */
-export async function syncActiveBuildIfPaired() {
+/** Preserves the automatic push after a successful source rebuild without coupling Bases to sync internals. */
+export async function syncActiveBuildIfPaired(expectedMotorBuildId: string) {
   const identity = deviceSyncIdentity();
-  if (!identity) return null;
-  return uploadCurrentDeviceSnapshot(identity);
+  if (!identity) return { status: 'NOT_PAIRED' } as const;
+  const synced = await uploadCurrentDeviceSnapshot(identity);
+  if (synced.active.motorBuildId !== expectedMotorBuildId) {
+    throw new Error(`SYNC_ACTIVE_BUILD_MISMATCH: expected ${expectedMotorBuildId}, received ${synced.active.motorBuildId}`);
+  }
+  return { status: 'SYNCED', bytes: synced.bytes, motorBuildId: synced.active.motorBuildId } as const;
 }
 
 export function SincronizacaoPage() {
@@ -63,7 +67,7 @@ export function SincronizacaoPage() {
           ? `Este aparelho foi pareado e recebeu o build ${restored.motorBuildId}.`
           : 'Este aparelho foi pareado; ainda não há build remoto para restaurar.');
       } catch (reason) {
-        setError(`Não foi possível concluir o pareamento: ${syncError(reason)}`);
+        setError(`Não foi possível concluir o pareamento: ${syncErrorMessage(reason)}`);
       } finally {
         setSyncing(false);
       }
@@ -88,7 +92,7 @@ export function SincronizacaoPage() {
         : `Bundle legado validado. Dados foram reconstruídos com a engine atual. Build ativo: ${recovered.active.motorBuildId}.`);
     } catch (reason) {
       setStatus('');
-      setError(syncError(reason));
+      setError(syncErrorMessage(reason));
     } finally {
       event.target.value = '';
     }
@@ -109,7 +113,7 @@ export function SincronizacaoPage() {
       setSyncNotice(`Sincronização ativa. A cópia inicial (${synced.bytes.toLocaleString('pt-BR')} bytes cifrados) está pronta para parear o celular.`);
     } catch (reason) {
       setSyncNotice('');
-      setError(`Não foi possível ativar a sincronização: ${syncError(reason)}`);
+      setError(`Não foi possível ativar a sincronização: ${syncErrorMessage(reason)}`);
     } finally {
       setSyncing(false);
     }
@@ -126,7 +130,7 @@ export function SincronizacaoPage() {
         ? `Build ${restored.motorBuildId} restaurado deste aparelho pareado.`
         : 'Não existe build remoto para restaurar.');
     } catch (reason) {
-      setError(`Não foi possível restaurar a cópia sincronizada: ${syncError(reason)}`);
+      setError(`Não foi possível restaurar a cópia sincronizada: ${syncErrorMessage(reason)}`);
     } finally {
       setSyncing(false);
     }
@@ -145,7 +149,7 @@ export function SincronizacaoPage() {
         ? `Aparelho pareado e build ${restored.motorBuildId} restaurado.`
         : 'Aparelho pareado; ainda não há build remoto para restaurar.');
     } catch (reason) {
-      setError(`Não foi possível parear este aparelho: ${syncError(reason)}`);
+      setError(`Não foi possível parear este aparelho: ${syncErrorMessage(reason)}`);
     } finally {
       setSyncing(false);
     }
