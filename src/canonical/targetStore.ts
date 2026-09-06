@@ -117,7 +117,8 @@ class LocalStorageTargetStateStorage implements TargetStateStorage {
 }
 
 export class TargetStateRepository {
-  constructor(private readonly storage: TargetStateStorage) {}
+  private readonly storage: TargetStateStorage;
+  constructor(storage: TargetStateStorage) { this.storage = storage; }
   load() {
     const value = this.storage.read();
     return value === null ? null : validateTargetState(value);
@@ -170,7 +171,6 @@ function generalFromSettings(settings: ReportSettings, competence: string) {
   };
 }
 
-/** Safe one-time bootstrap: only already competence-specific ReportSettings are copied. Legacy global targets are deliberately ignored. */
 export function bootstrapTargetStateFromReportSettings(settings: ReportSettings, repository: TargetStateRepository = targetStateRepository, now = nowIso()) {
   const existing = repository.load();
   if (existing) return { status: 'PRESERVED', state: existing } as const;
