@@ -16,6 +16,7 @@ import { AdminPage } from './pages/admin/AdminPage'
 import { DataProvider, useData } from './store/DataContext'
 import { ADMIN_TABS, MAIN_SECTIONS, initialNavigationState, type AdminTabId, type MainSectionId } from './navigation'
 import { deviceSyncHasNewerRemoteSnapshot, deviceSyncIdentity, incomingDeviceSyncCode, restoreCurrentDeviceSnapshot } from './canonical/cloudSync'
+import { systemDataOperationCoordinator } from './canonical/systemDataOperationCoordinator'
 import './ui/theme/foundation.css'
 
 /** Restores a newer paired snapshot on startup without replacing an unsynced local build. */
@@ -26,7 +27,7 @@ function DeviceSyncBootstrap() {
     if (incomingDeviceSyncCode()) return
     const identity = deviceSyncIdentity()
     if (!identity) return
-    void (async () => {
+    void systemDataOperationCoordinator.run('STARTUP_REMOTE_RESTORE', async () => {
       try {
         if (activeCanonical && !(await deviceSyncHasNewerRemoteSnapshot(identity))) return
         const restored = await restoreCurrentDeviceSnapshot(identity)
@@ -34,7 +35,7 @@ function DeviceSyncBootstrap() {
       } catch {
         // Offline, first-use, or integrity failures leave this device's local copy untouched.
       }
-    })()
+    })
   }, [])
 
   return null

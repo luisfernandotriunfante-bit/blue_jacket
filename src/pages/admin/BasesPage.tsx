@@ -11,6 +11,10 @@ import {
   SOURCE_LABELS,
   type SourceStageManifest,
 } from '../../canonical/sourceImport';
+import {
+  systemDataOperationBusyMessage,
+  systemDataOperationCoordinator,
+} from '../../canonical/systemDataOperationCoordinator';
 import { useData } from '../../store/DataContext';
 import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../../ui/pattern/PanelVisual';
 import {
@@ -52,6 +56,7 @@ type BasesPageProps = {
 export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   const { activeCanonical, activateCanonical } = useData();
   const [updateState, setUpdateState] = useState(() => baseUpdateCoordinator.getState());
+  const [operationState, setOperationState] = useState(() => systemDataOperationCoordinator.getState());
   const [pageError, setPageError] = useState('');
   const [selected, setSelected] = useState<Partial<Record<string, File>>>({});
   const [manifests, setManifests] = useState<SourceStageManifest[]>([]);
@@ -62,6 +67,7 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
     .catch(reason => setPageError(String(reason)));
 
   useEffect(() => baseUpdateCoordinator.subscribe(setUpdateState), []);
+  useEffect(() => systemDataOperationCoordinator.subscribe(setOperationState), []);
   useEffect(() => { void refresh(); }, []);
   useEffect(() => {
     if (!updateState.busy && updateState.phase !== 'IDLE') void refresh();
@@ -97,7 +103,7 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   };
 
   const process = async () => {
-    await baseUpdateCoordinator.run(async controls => {
+    const globalResult = await systemDataOperationCoordinator.run('BASE_UPDATE', async () => baseUpdateCoordinator.run(async controls => {
       controls.setPhase('PROCESSING');
       try {
         const storage = await requestPersistentSourceStorage();
@@ -152,10 +158,17 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
       } catch (reason) {
         return { phase: 'FAILED' as const, status: '', error: sourceError(reason) };
       }
-    });
+    }));
+
+    if (globalResult.status === 'BUSY') {
+      setPageError(systemDataOperationBusyMessage(globalResult.owner));
+      return;
+    }
+    if (globalResult.value.status === 'BUSY') setPageError('Já existe uma atualização de bases em andamento.');
   };
 
   const processing = updateState.busy;
+  const globallyBusy = operationState.busy;
   const processLabel = processing
     ? updateState.phase === 'SYNCING' ? 'Sincronizando…' : updateState.phase === 'ACTIVATING' ? 'Ativando…' : 'Processando…'
     : selectedCount ? 'PROCESSAR E ATUALIZAR SISTEMA' : 'REPROCESSAR MOTOR ATUAL';
@@ -171,10 +184,11 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
         Selecionar vários arquivos
         <input type="file" multiple disabled={processing} accept=".xls,.xlsx,.txt" onChange={onMany} style={{ display: 'none' }} />
       </label>{' '}
-      <button className="panel-button" disabled={processing || (!selectedCount && !canReprocess)} onClick={() => void process()}>
+      <button className="panel-button" disabled={processing || globallyBusy || (!selectedCount && !canReprocess)} onClick={() => void process()}>
         {processLabel}
       </button>
       {processing ? <PanelAlert tone="info">{updatePhaseMessage(updateState)}</PanelAlert> : null}
+      {operationState.busy && operationState.owner !== 'BASE_UPDATE' ? <PanelAlert tone="info">{systemDataOperationBusyMessage(operationState.owner)}</PanelAlert> : null}
       {unmatched.length ? <PanelAlert tone="warning">Não identifiquei automaticamente: {unmatched.join(', ')}. Use o botão da fonte correta na tabela abaixo.</PanelAlert> : null}
       {updateState.status ? <PanelAlert tone="success">{updateState.status}</PanelAlert> : null}
       {updateState.error ? <PanelAlert tone="error">{updateState.error}</PanelAlert> : null}

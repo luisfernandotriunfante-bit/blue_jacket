@@ -8,6 +8,7 @@ import {
   type CompetenceState,
 } from './competenceStore';
 import { buildCanonicalFromStoredSources, exportSourceStorageSnapshot, restoreSourceStorageSnapshot, type SourceStorageSnapshot } from './sourceImport';
+import { sourceStorageSnapshotManifestHash } from './sourceSnapshotIdentity';
 import { loadReportSettings, restoreReportSettings, type ReportSettings } from './reportSettings';
 import { resolveActiveCanonicalBundle, type ActiveCanonicalBundle } from './runtime';
 
@@ -40,6 +41,19 @@ export type CloudRestoreDependencies = {
   replaceCompetence: (value: unknown | null) => CompetenceState | null;
   replaceAdminRegistry?: (value: AdminRegistryState | null) => Promise<AdminRegistryState | null>;
   build: () => Promise<ActiveCanonicalBundle>;
+};
+
+export type CloudUploadDependencies = {
+  getActive: () => ActiveCanonicalBundle | null;
+  exportSources: () => Promise<SourceStorageSnapshot>;
+  sourceManifestHash: (snapshot: SourceStorageSnapshot) => Promise<string>;
+  loadSettings: () => ReportSettings;
+  loadCompetence: () => CompetenceState | null;
+  loadAdminRegistry: () => Promise<AdminRegistryState | null>;
+  encryptSnapshot: (identity: DeviceSyncIdentity, snapshot: CloudSnapshot) => Promise<Uint8Array>;
+  uploadPayload: (identity: DeviceSyncIdentity, payload: Uint8Array) => Promise<DeviceSyncStatus>;
+  saveState: (identity: DeviceSyncIdentity, remoteUpdatedAt: string) => void;
+  now: () => string;
 };
 
 function isIdentity(value: unknown): value is DeviceSyncIdentity {
@@ -282,19 +296,59 @@ export function clearIncomingDeviceSyncCode() {
   window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
 }
 
-export async function uploadCurrentDeviceSnapshot(identity = deviceSyncIdentity()) {
-  if (!identity) throw new Error('SYNC_NOT_CONNECTED');
-  const active = resolveActiveCanonicalBundle();
-  if (!active) throw new Error('SYNC_NO_ACTIVE_BUILD');
-  const createdAt = new Date().toISOString();
-  const [sources, adminRegistryState] = await Promise.all([exportSourceStorageSnapshot(), loadAdminRegistryState()]);
-  const snapshot = buildCloudSnapshot(active, sources, loadReportSettings(), loadCompetenceState(), createdAt, adminRegistryState);
-  const payload = await encrypt(identity, snapshot);
-  const response = await request('upload', identity, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: payload });
+async function uploadPayload(identity: DeviceSyncIdentity, payload: Uint8Array) {
+  const body = new Uint8Array(payload.byteLength);
+  body.set(payload);
+  const response = await request('upload', identity, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: body.buffer });
   const status = await response.json() as unknown;
   if (!isStatus(status)) throw new Error('SYNC_STATUS_INVALID');
-  saveSyncState(identity, status.updatedAt);
-  return { bytes: payload.byteLength, active, updatedAt: status.updatedAt };
+  return status;
+}
+
+const defaultUploadDependencies: CloudUploadDependencies = {
+  getActive: resolveActiveCanonicalBundle,
+  exportSources: exportSourceStorageSnapshot,
+  sourceManifestHash: sourceStorageSnapshotManifestHash,
+  loadSettings: loadReportSettings,
+  loadCompetence: loadCompetenceState,
+  loadAdminRegistry: loadAdminRegistryState,
+  encryptSnapshot: encrypt,
+  uploadPayload,
+  saveState: saveSyncState,
+  now: () => new Date().toISOString(),
+};
+
+async function uploadCurrentDeviceSnapshotWithDependencies(identity: DeviceSyncIdentity, dependencies: CloudUploadDependencies) {
+  const activeBefore = dependencies.getActive();
+  if (!activeBefore) throw new Error('SYNC_NO_ACTIVE_BUILD');
+
+  const createdAt = dependencies.now();
+  const [sources, adminRegistryState] = await Promise.all([
+    dependencies.exportSources(),
+    dependencies.loadAdminRegistry(),
+  ]);
+  const exportedSourcesManifestHash = await dependencies.sourceManifestHash(sources);
+  const activeAfter = dependencies.getActive();
+
+  if (
+    !activeAfter ||
+    activeBefore.motorBuildId !== activeAfter.motorBuildId ||
+    activeBefore.stagingManifestHash !== activeAfter.stagingManifestHash ||
+    exportedSourcesManifestHash !== activeBefore.stagingManifestHash
+  ) {
+    throw new Error('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE');
+  }
+
+  const snapshot = buildCloudSnapshot(activeBefore, sources, dependencies.loadSettings(), dependencies.loadCompetence(), createdAt, adminRegistryState);
+  const payload = await dependencies.encryptSnapshot(identity, snapshot);
+  const status = await dependencies.uploadPayload(identity, payload);
+  dependencies.saveState(identity, status.updatedAt);
+  return { bytes: payload.byteLength, active: activeBefore, updatedAt: status.updatedAt };
+}
+
+export async function uploadCurrentDeviceSnapshot(identity = deviceSyncIdentity()) {
+  if (!identity) throw new Error('SYNC_NOT_CONNECTED');
+  return uploadCurrentDeviceSnapshotWithDependencies(identity, defaultUploadDependencies);
 }
 
 export async function restoreCurrentDeviceSnapshot(identity = deviceSyncIdentity()) {
@@ -313,4 +367,12 @@ export async function deleteDeviceSyncWorkspace(identity = deviceSyncIdentity())
   clearDeviceSyncIdentity();
 }
 
-export const cloudSyncTestHelpers = { pairingCode, parsePairingCode, encrypt, decrypt, buildCloudSnapshot, applyCloudSnapshot };
+export const cloudSyncTestHelpers = {
+  pairingCode,
+  parsePairingCode,
+  encrypt,
+  decrypt,
+  buildCloudSnapshot,
+  applyCloudSnapshot,
+  uploadCurrentDeviceSnapshotWithDependencies,
+};
