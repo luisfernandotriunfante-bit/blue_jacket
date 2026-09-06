@@ -126,7 +126,9 @@ function importedLaunchIndexes(sources: ParsedSource[]) {
 
 function launchStatus(record: LaunchRegistryRecord | Record<string, RawTyped> | null) {
   if (!record) return null;
-  return 'id' in record ? record.status : value(record, 'launch_status');
+  if ('origin' in record && (record.origin === 'MANUAL' || record.origin === 'SOURCE_SEED')) return (record as LaunchRegistryRecord).status;
+  const physical = value(record as Record<string, RawTyped>, 'launch_status');
+  return physical === null ? null : String(physical);
 }
 
 function launchDescription(record: LaunchRegistryRecord) { return record.description; }
@@ -138,7 +140,7 @@ function applyLaunchAuthority(bundle: CanonicalBundle, sources: ParsedSource[], 
   const audits = [...list.warnings, ...list.errors].filter(audit => !audit.code.startsWith('ADMIN_REGISTRY_LAUNCH_') && audit.code !== 'ADMIN_REGISTRY_VALIDITY_UNRESOLVED');
   let usedRegistry = false;
 
-  const records = list.records.flatMap(record => {
+  const records: Array<Record<string, unknown>> = list.records.flatMap(record => {
     const code = codeKey(record.winthor_code);
     const eans = [record.internal_ean, record.industry_ean];
     const importedRow = imported.byEan.get(eanKey(record.internal_ean)) ?? imported.byEan.get(eanKey(record.industry_ean)) ?? imported.byCode.get(code) ?? null;
@@ -154,15 +156,15 @@ function applyLaunchAuthority(bundle: CanonicalBundle, sources: ParsedSource[], 
       launch_status: isLaunch ? launchStatus(resolution.record) : null,
       source_lineage: isRegistryAuthority(resolution.authority) ? appendLineage(record.source_lineage, 'AdminRegistry:Lançamentos') : record.source_lineage,
     }];
-  });
+  }) as Array<Record<string, unknown>>;
 
   const effective = effectiveRegistryLaunches(registry, comp);
   audits.push(...effective.audits);
   for (const launch of effective.records) {
-    const exists = records.some(record => (launch.winthorCode && codeKey(record.winthor_code) === codeKey(launch.winthorCode)) || (launch.ean && [record.internal_ean, record.industry_ean].some(value => eanKey(value) === eanKey(launch.ean))));
+    const exists = records.some(record => (launch.winthorCode && codeKey(record.winthor_code) === codeKey(launch.winthorCode)) || (launch.ean && [record.internal_ean, record.industry_ean].some(item => eanKey(item) === eanKey(launch.ean))));
     if (exists) continue;
     usedRegistry = true;
-    const blank = Object.fromEntries(schemas.M1_ITEM_ESTOQUE.map(field => [field.field, null]));
+    const blank = Object.fromEntries(schemas.M1_ITEM_ESTOQUE.map(field => [field.field, null])) as Record<string, unknown>;
     const id = launch.winthorCode || launch.ean;
     Object.assign(blank, {
       snapshot_date: list.snapshotDate,
