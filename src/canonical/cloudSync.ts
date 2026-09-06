@@ -297,7 +297,9 @@ export function clearIncomingDeviceSyncCode() {
 }
 
 async function uploadPayload(identity: DeviceSyncIdentity, payload: Uint8Array) {
-  const response = await request('upload', identity, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: payload });
+  const body = new Uint8Array(payload.byteLength);
+  body.set(payload);
+  const response = await request('upload', identity, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: body.buffer });
   const status = await response.json() as unknown;
   if (!isStatus(status)) throw new Error('SYNC_STATUS_INVALID');
   return status;
