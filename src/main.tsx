@@ -6,17 +6,14 @@ import { TopTabs } from './ui/navigation/TopTabs'
 import { PanelAlert, PanelEmptyState, PanelPage } from './ui/pattern/PanelVisual'
 import { EstoquePage, type EstoqueView } from './pages/EstoquePage'
 import { LancamentosPage } from './pages/LancamentosPage'
-import { ConfiguracoesPage } from './pages/ConfiguracoesPage'
-import { MetasPage } from './pages/MetasPage'
 import { SELL_OUT_TABS, SellOutPage } from './pages/SellOutPage'
 import { TopRetailNetworksPage } from './pages/TopRetailNetworksPage'
 import { DocumentosPage } from './pages/DocumentosPage'
 import { CriacaoComboPage } from './pages/CriacaoComboPage'
 import { ClientesSortimentoPage, type ClientesSortimentoView } from './pages/ClientesSortimentoUnifiedPage'
+import { AdminPage } from './pages/admin/AdminPage'
 import { DataProvider, useData } from './store/DataContext'
-import { ListasCanonicasPage } from './pages/ListasCanonicasPage'
-import { AuditoriaPage } from './pages/AuditoriaPage'
-import { EntradasNotasPage } from './pages/EntradasNotasPage'
+import { ADMIN_TABS, MAIN_SECTIONS, initialNavigationState, type AdminTabId, type MainSectionId } from './navigation'
 import { deviceSyncHasNewerRemoteSnapshot, deviceSyncIdentity, incomingDeviceSyncCode, restoreCurrentDeviceSnapshot } from './canonical/cloudSync'
 import './ui/theme/foundation.css'
 
@@ -44,30 +41,27 @@ function DeviceSyncBootstrap() {
 
 function App() {
   const { migrationError } = useData()
-  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.hash.replace(/^#/, '')).has('sync') ? 'configuracoes' : 'estoque')
+  const initialNavigation = initialNavigationState(window.location.hash)
+  const [activeTab, setActiveTab] = useState<MainSectionId>(initialNavigation.section)
+  const [activeAdminTopTab, setActiveAdminTopTab] = useState<AdminTabId>(initialNavigation.adminTab)
   const [activeEstoqueTopTab, setActiveEstoqueTopTab] = useState('overview')
   const [activeSellOutTopTab, setActiveSellOutTopTab] = useState('resumo')
   const [activeAtividadesTopTab, setActiveAtividadesTopTab] = useState('combo')
   const [activeClientesTopTab, setActiveClientesTopTab] = useState<ClientesSortimentoView>('overview')
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
-  const selectSection = (id: string) => {
+  const selectSection = (id: MainSectionId) => {
     setActiveTab(id)
+    if (id === 'administracao') setActiveAdminTopTab('bases')
     setSidebarOpen(false)
   }
 
-  const sidebarItems = [
-    { id: 'estoque', label: 'Estoque', active: activeTab === 'estoque', onSelect: () => selectSection('estoque') },
-    { id: 'sellout', label: 'Sell Out', active: activeTab === 'sellout', onSelect: () => selectSection('sellout') },
-    { id: 'pex', label: 'PEX', description: 'Em construção', active: activeTab === 'pex', onSelect: () => selectSection('pex') },
-    { id: 'sortimento', label: 'Clientes & Sortimento', active: activeTab === 'sortimento', onSelect: () => selectSection('sortimento') },
-    { id: 'atividades', label: 'Atividades', active: activeTab === 'atividades', onSelect: () => selectSection('atividades') },
-    { id: 'relatorios', label: 'Documentos', active: activeTab === 'relatorios', onSelect: () => selectSection('relatorios') },
-    { id: 'metas', label: 'Metas', active: activeTab === 'metas', onSelect: () => selectSection('metas') },
-    { id: 'listas-canonicas', label: 'Listas Canônicas', active: activeTab === 'listas-canonicas', onSelect: () => selectSection('listas-canonicas') },
-    { id: 'auditoria', label: 'Auditoria', active: activeTab === 'auditoria', onSelect: () => selectSection('auditoria') },
-    { id: 'configuracoes', label: 'Atualizar Bases', active: activeTab === 'configuracoes', onSelect: () => selectSection('configuracoes') },
-  ]
+  const sidebarItems = MAIN_SECTIONS.map(section => ({
+    ...section,
+    description: section.id === 'pex' ? 'Em construção' : undefined,
+    active: activeTab === section.id,
+    onSelect: () => selectSection(section.id),
+  }))
 
   const sidebar = (
     <>
@@ -120,6 +114,8 @@ function App() {
     <TopTabs tabs={atividadesTopTabs} activeId={activeAtividadesTopTab} onChange={setActiveAtividadesTopTab} />
   ) : activeTab === 'sortimento' ? (
     <TopTabs tabs={clientesTopTabs} activeId={activeClientesTopTab} onChange={value => setActiveClientesTopTab(value as ClientesSortimentoView)} />
+  ) : activeTab === 'administracao' ? (
+    <TopTabs tabs={[...ADMIN_TABS]} activeId={activeAdminTopTab} onChange={value => setActiveAdminTopTab(value as AdminTabId)} ariaLabel="Navegação da Administração" />
   ) : null
 
   const currentLabel = sidebarItems.find(item => item.id === activeTab)?.label ?? activeTab
@@ -138,10 +134,7 @@ function App() {
       : activeTab === 'sortimento' ? <ClientesSortimentoPage view={activeClientesTopTab} />
       : activeTab === 'atividades' && activeAtividadesTopTab === 'combo' ? <CriacaoComboPage />
       : activeTab === 'relatorios' ? <DocumentosPage />
-      : activeTab === 'metas' ? <MetasPage />
-      : activeTab === 'listas-canonicas' ? <ListasCanonicasPage />
-      : activeTab === 'auditoria' ? <AuditoriaPage />
-      : activeTab === 'configuracoes' ? <ConfiguracoesPage />
+      : activeTab === 'administracao' ? <AdminPage view={activeAdminTopTab} />
       : (
         <PanelPage title={currentLabel}>
           <PanelEmptyState variant="page" title={`${currentLabel} em construção`} description="Este módulo faz parte do roadmap e ainda não está disponível para uso operacional." />
