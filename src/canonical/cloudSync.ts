@@ -1,4 +1,6 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { validateAdminRegistryState, type AdminRegistryState } from './adminRegistry';
+import { loadAdminRegistryState, replaceAdminRegistryState } from './adminRegistryIndexedDb';
 import {
   loadCompetenceState,
   replaceCompetenceState,
@@ -25,15 +27,18 @@ export type CloudSnapshot = {
   sources: SourceStorageSnapshot;
   settings: ReportSettings;
   competenceState?: CompetenceState;
+  adminRegistryState?: AdminRegistryState;
 };
 
 export type CloudRestoreDependencies = {
   exportSources: () => Promise<SourceStorageSnapshot>;
   loadSettings: () => ReportSettings;
   loadCompetence: () => CompetenceState | null;
+  loadAdminRegistry?: () => Promise<AdminRegistryState | null>;
   restoreSources: (snapshot: SourceStorageSnapshot) => Promise<void>;
   restoreSettings: (value: unknown) => ReportSettings;
   replaceCompetence: (value: unknown | null) => CompetenceState | null;
+  replaceAdminRegistry?: (value: AdminRegistryState | null) => Promise<AdminRegistryState | null>;
   build: () => Promise<ActiveCanonicalBundle>;
 };
 
@@ -129,6 +134,10 @@ async function decrypt(identity: DeviceSyncIdentity, payload: Uint8Array) {
     try { snapshot.competenceState = validateCompetenceState(snapshot.competenceState); }
     catch { throw new Error('SYNC_PAYLOAD_INVALID'); }
   }
+  if (snapshot.adminRegistryState !== undefined) {
+    try { snapshot.adminRegistryState = validateAdminRegistryState(snapshot.adminRegistryState); }
+    catch { throw new Error('SYNC_PAYLOAD_INVALID'); }
+  }
   return snapshot;
 }
 
@@ -138,6 +147,7 @@ function buildCloudSnapshot(
   settings: ReportSettings,
   competenceState: CompetenceState | null,
   createdAt = new Date().toISOString(),
+  adminRegistryState: AdminRegistryState | null = null,
 ): CloudSnapshot {
   return {
     format: 'blue-jacket-device-sync/v1',
@@ -146,6 +156,7 @@ function buildCloudSnapshot(
     sources,
     settings,
     ...(competenceState ? { competenceState: validateCompetenceState(competenceState) } : {}),
+    ...(adminRegistryState ? { adminRegistryState: validateAdminRegistryState(adminRegistryState) } : {}),
   };
 }
 
@@ -153,28 +164,39 @@ const defaultRestoreDependencies: CloudRestoreDependencies = {
   exportSources: exportSourceStorageSnapshot,
   loadSettings: loadReportSettings,
   loadCompetence: loadCompetenceState,
+  loadAdminRegistry: loadAdminRegistryState,
   restoreSources: restoreSourceStorageSnapshot,
   restoreSettings: restoreReportSettings,
   replaceCompetence: replaceCompetenceState,
+  replaceAdminRegistry: replaceAdminRegistryState,
   build: buildCanonicalFromStoredSources,
 };
 
 async function applyCloudSnapshot(snapshot: CloudSnapshot, dependencies: CloudRestoreDependencies = defaultRestoreDependencies) {
   if (snapshot.competenceState !== undefined) validateCompetenceState(snapshot.competenceState);
+  if (snapshot.adminRegistryState !== undefined) validateAdminRegistryState(snapshot.adminRegistryState);
   const previousSources = await dependencies.exportSources().catch(() => null);
   const previousSettings = dependencies.loadSettings();
   const previousCompetence = dependencies.loadCompetence();
+  const previousAdminRegistry = dependencies.loadAdminRegistry ? await dependencies.loadAdminRegistry() : null;
+  let registryTouched = false;
 
   try {
     await dependencies.restoreSources(snapshot.sources);
     dependencies.restoreSettings(snapshot.settings);
     if (snapshot.competenceState !== undefined) dependencies.replaceCompetence(snapshot.competenceState);
+    if (snapshot.adminRegistryState !== undefined) {
+      if (!dependencies.replaceAdminRegistry) throw new Error('SYNC_ADMIN_REGISTRY_UNAVAILABLE');
+      await dependencies.replaceAdminRegistry(snapshot.adminRegistryState);
+      registryTouched = true;
+    }
     return await dependencies.build();
   } catch (reason) {
     try {
       if (previousSources) await dependencies.restoreSources(previousSources);
       dependencies.restoreSettings(previousSettings);
       dependencies.replaceCompetence(previousCompetence);
+      if (registryTouched && dependencies.replaceAdminRegistry) await dependencies.replaceAdminRegistry(previousAdminRegistry);
       if (previousSources) await dependencies.build();
     } catch { /* The original restore error remains the actionable failure. */ }
     throw reason;
@@ -265,8 +287,8 @@ export async function uploadCurrentDeviceSnapshot(identity = deviceSyncIdentity(
   const active = resolveActiveCanonicalBundle();
   if (!active) throw new Error('SYNC_NO_ACTIVE_BUILD');
   const createdAt = new Date().toISOString();
-  const sources = await exportSourceStorageSnapshot();
-  const snapshot = buildCloudSnapshot(active, sources, loadReportSettings(), loadCompetenceState(), createdAt);
+  const [sources, adminRegistryState] = await Promise.all([exportSourceStorageSnapshot(), loadAdminRegistryState()]);
+  const snapshot = buildCloudSnapshot(active, sources, loadReportSettings(), loadCompetenceState(), createdAt, adminRegistryState);
   const payload = await encrypt(identity, snapshot);
   const response = await request('upload', identity, { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: payload });
   const status = await response.json() as unknown;
