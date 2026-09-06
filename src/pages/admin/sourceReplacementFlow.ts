@@ -106,6 +106,22 @@ async function rollback(beforeState: SourceReplacementState | null, beforeActive
   if (beforeActive) deps.activate(beforeActive); else deps.deactivate();
 }
 
+async function syncAfterActivation(sourceId: string, scope: SourceReplacementScope, candidate: ActiveCanonicalBundle, successMessage: string, failureMessage: string, deps: SourceReplacementFlowDependencies) {
+  if (!deps.isPaired()) {
+    publish({ phase: 'SUCCESS', sourceId, scope, message: successMessage, active: candidate, error: null });
+    return true;
+  }
+  publish({ phase: 'SYNCING', sourceId, scope, message: 'Sincronizando certificado e build ativos.', active: candidate, error: null });
+  try {
+    await deps.sync();
+    publish({ phase: 'SUCCESS', sourceId, scope, message: successMessage, active: candidate, error: null });
+    return true;
+  } catch (reason) {
+    publish({ phase: 'LOCAL_SUCCESS_SYNC_FAILED', sourceId, scope, message: failureMessage, active: candidate, error: String(reason) });
+    return false;
+  }
+}
+
 export async function activateCertifiedSourceReplacement(sourceId: string, scope: SourceReplacementScope, overrides: Partial<SourceReplacementFlowDependencies> = {}) {
   const deps = { ...defaultDependencies, ...overrides };
   const gate = await systemDataOperationCoordinator.run('SOURCE_REPLACEMENT_UPDATE', async () => {
@@ -129,30 +145,81 @@ export async function activateCertifiedSourceReplacement(sourceId: string, scope
       const certificate = await certifySourceReplacementV21({ sourceId, scope, physicalStage: physical, allStages, adminRegistryState: registry, targetState: target, now: deps.now() });
       const nextState = withCertificate(beforeState, certificate);
 
-      publish({ phase: 'PERSISTING', sourceId, scope, message: 'Persistindo certificado validado antes do build substituído.', active: null, error: null });
-      deps.replaceReplacement(nextState);
-
       publish({ phase: 'BUILDING_REPLACED', sourceId, scope, message: 'Construindo candidato v21 com a fonte logicamente omitida.', active: null, error: null });
       const candidate = await deps.build(undefined, registry, target, nextState);
       const [baselineLists, candidateLists] = await Promise.all([loadBuildLists(baseline.motorBuildId, deps), loadBuildLists(candidate.motorBuildId, deps)]);
       publish({ phase: 'VERIFYING', sourceId, scope, message: 'Comparando baseline físico e candidato substituído.', active: null, error: null });
       if (!semanticBusinessEquivalent(sourceProjection(sourceId, baselineLists), sourceProjection(sourceId, candidateLists))) throw new Error('SOURCE_REPLACEMENT_RUNTIME_EQUIVALENCE_FAILED');
 
+      publish({ phase: 'PERSISTING', sourceId, scope, message: 'Persistindo certificado somente após a prova runtime.', active: null, error: null });
+      deps.replaceReplacement(nextState);
       publish({ phase: 'ACTIVATING', sourceId, scope, message: 'Ativando build certificado.', active: candidate, error: null });
-      deps.activate(candidate); activated = true;
-      if (deps.isPaired()) {
-        publish({ phase: 'SYNCING', sourceId, scope, message: 'Sincronizando certificado e build ativos.', active: candidate, error: null });
-        try { await deps.sync(); }
-        catch (reason) {
-          publish({ phase: 'LOCAL_SUCCESS_SYNC_FAILED', sourceId, scope, message: 'Substituição e build permanecem ativos localmente; sincronização falhou.', active: candidate, error: String(reason) });
-          return { active: candidate, certificate, synced: false };
-        }
-      }
-      publish({ phase: 'SUCCESS', sourceId, scope, message: 'Substituição certificada e build v21 ativos.', active: candidate, error: null });
-      return { active: candidate, certificate, synced: true };
+      deps.activate(candidate);
+      activated = true;
+      const synced = await syncAfterActivation(sourceId, scope, candidate, 'Substituição certificada e build v21 ativos.', 'Substituição e build permanecem ativos localmente; sincronização falhou.', deps);
+      return { active: candidate, certificate, synced };
     } catch (reason) {
       if (!activated) await rollback(beforeState, beforeActive, deps);
       publish({ phase: 'FAILED', sourceId, scope, message: 'A substituição não foi ativada.', active: beforeActive, error: String(reason) });
+      throw reason;
+    }
+  });
+  if (gate.status === 'BUSY') throw new Error(`SYSTEM_DATA_OPERATION_BUSY:${gate.owner ?? 'UNKNOWN'}`);
+  return gate.value;
+}
+
+/**
+ * Replaces certificate A by certificate B without ever re-enabling the stale
+ * physical source in production. The baseline removes only A in memory, so
+ * every other valid replacement remains active while the new physical B is
+ * evaluated and compared.
+ */
+export async function recertifySourceReplacement(sourceId: string, scope: SourceReplacementScope, overrides: Partial<SourceReplacementFlowDependencies> = {}) {
+  const deps = { ...defaultDependencies, ...overrides };
+  const gate = await systemDataOperationCoordinator.run('SOURCE_REPLACEMENT_UPDATE', async () => {
+    const beforeState = deps.loadReplacement();
+    const beforeActive = deps.getActive();
+    const previousCertificate = certificateFor(beforeState, sourceId, scope);
+    if (!previousCertificate) throw new Error('SOURCE_REPLACEMENT_CERTIFICATE_NOT_FOUND');
+    let activated = false;
+    try {
+      publish({ phase: 'CHECKING', sourceId, scope, message: 'Revalidando a nova fonte física sem reativar fallback produtivo.', active: beforeActive, error: null });
+      const [storedStages, registry] = await Promise.all([deps.loadStages(), deps.loadRegistry()]);
+      const target = deps.loadTarget();
+      const physical = storedStages.find(stage => stage.source === sourceId) ?? null;
+      if (!physical) throw new Error('SOURCE_REPLACEMENT_PHYSICAL_STAGE_REQUIRED');
+      if (physical.manifest.fileHash === previousCertificate.sourceFileHash) throw new Error('SOURCE_REPLACEMENT_RECERTIFICATION_NOT_REQUIRED');
+      const allStages = storedStages.map(stage => stage.parsed);
+
+      // Certificate A is removed only from the in-memory build context. This is
+      // what permits a physical baseline using B while every unrelated
+      // certificate remains effective and the persisted state still points to A.
+      const physicalBaselineState = withoutCertificate(beforeState, sourceId, scope);
+      publish({ phase: 'BUILDING_BASELINE', sourceId, scope, message: 'Construindo baseline físico com a nova versão, sem usar o certificado stale.', active: beforeActive, error: null });
+      const baseline = await deps.build(undefined, registry, target, physicalBaselineState);
+
+      publish({ phase: 'VERIFYING', sourceId, scope, message: 'Reavaliando readiness, coverage e equivalência da nova versão física.', active: beforeActive, error: null });
+      const independentProof = proveSourceReplacementEquivalence(sourceId, allStages, registry, target);
+      if (!independentProof.equivalent) throw new Error('SOURCE_REPLACEMENT_EQUIVALENCE_FAILED');
+      const certificate = await certifySourceReplacementV21({ sourceId, scope, physicalStage: physical, allStages, adminRegistryState: registry, targetState: target, now: deps.now() });
+      const nextState = withCertificate(beforeState, certificate);
+
+      publish({ phase: 'BUILDING_REPLACED', sourceId, scope, message: 'Construindo candidato substituído com o novo certificado em memória.', active: beforeActive, error: null });
+      const candidate = await deps.build(undefined, registry, target, nextState);
+      const [baselineLists, candidateLists] = await Promise.all([loadBuildLists(baseline.motorBuildId, deps), loadBuildLists(candidate.motorBuildId, deps)]);
+      publish({ phase: 'VERIFYING', sourceId, scope, message: 'Comparando a nova fonte física contra a authority interna.', active: beforeActive, error: null });
+      if (!semanticBusinessEquivalent(sourceProjection(sourceId, baselineLists), sourceProjection(sourceId, candidateLists))) throw new Error('SOURCE_REPLACEMENT_RUNTIME_EQUIVALENCE_FAILED');
+
+      publish({ phase: 'PERSISTING', sourceId, scope, message: 'Substituindo certificado A por B atomicamente.', active: beforeActive, error: null });
+      deps.replaceReplacement(nextState);
+      publish({ phase: 'ACTIVATING', sourceId, scope, message: 'Ativando build recertificado.', active: candidate, error: null });
+      deps.activate(candidate);
+      activated = true;
+      const synced = await syncAfterActivation(sourceId, scope, candidate, 'RECERTIFICAÇÃO CONCLUÍDA — novo certificado e build v21 ativos.', 'Novo certificado e build permanecem ativos localmente; sincronização falhou.', deps);
+      return { active: candidate, certificate, previousCertificate, synced };
+    } catch (reason) {
+      if (!activated) await rollback(beforeState, beforeActive, deps);
+      publish({ phase: 'FAILED', sourceId, scope, message: 'A recertificação não foi aplicada; certificado e build anteriores foram preservados.', active: beforeActive, error: String(reason) });
       throw reason;
     }
   });
@@ -173,25 +240,18 @@ export async function revokeCertifiedSourceReplacement(sourceId: string, scope: 
       const storedStages = await deps.loadStages();
       const physical = storedStages.find(stage => stage.source === sourceId);
       if (!physical || physical.manifest.status !== 'VALID') throw new Error('SOURCE_REPLACEMENT_REVOKE_PHYSICAL_REQUIRED:Reenvie a fonte antes de revogar esta substituição.');
-      const [registry] = await Promise.all([deps.loadRegistry()]);
+      const registry = await deps.loadRegistry();
       const target = deps.loadTarget();
       const nextState = withoutCertificate(beforeState, sourceId, scope);
-      publish({ phase: 'PERSISTING', sourceId, scope, message: 'Revogando certificado e preparando rebuild físico.', active: beforeActive, error: null });
-      deps.replaceReplacement(nextState);
       publish({ phase: 'BUILDING_REPLACED', sourceId, scope, message: 'Reconstruindo v21 com a fonte física novamente.', active: beforeActive, error: null });
       const candidate = await deps.build(undefined, registry, target, nextState);
+      publish({ phase: 'PERSISTING', sourceId, scope, message: 'Revogando certificado após rebuild físico válido.', active: beforeActive, error: null });
+      deps.replaceReplacement(nextState);
       publish({ phase: 'ACTIVATING', sourceId, scope, message: 'Ativando rebuild físico.', active: candidate, error: null });
-      deps.activate(candidate); activated = true;
-      if (deps.isPaired()) {
-        publish({ phase: 'SYNCING', sourceId, scope, message: 'Sincronizando revogação.', active: candidate, error: null });
-        try { await deps.sync(); }
-        catch (reason) {
-          publish({ phase: 'LOCAL_SUCCESS_SYNC_FAILED', sourceId, scope, message: 'Revogação permanece localmente ativa; sincronização falhou.', active: candidate, error: String(reason) });
-          return { active: candidate, synced: false };
-        }
-      }
-      publish({ phase: 'SUCCESS', sourceId, scope, message: 'Substituição revogada e fonte física reativada explicitamente.', active: candidate, error: null });
-      return { active: candidate, synced: true };
+      deps.activate(candidate);
+      activated = true;
+      const synced = await syncAfterActivation(sourceId, scope, candidate, 'Substituição revogada e fonte física reativada explicitamente.', 'Revogação permanece localmente ativa; sincronização falhou.', deps);
+      return { active: candidate, synced };
     } catch (reason) {
       if (!activated) await rollback(beforeState, beforeActive, deps);
       publish({ phase: 'FAILED', sourceId, scope, message: 'A revogação não foi aplicada.', active: beforeActive, error: String(reason) });
@@ -202,4 +262,4 @@ export async function revokeCertifiedSourceReplacement(sourceId: string, scope: 
   return gate.value;
 }
 
-export const sourceReplacementFlowTestHelpers = { sourceProjection, loadBuildLists, defaultDependencies };
+export const sourceReplacementFlowTestHelpers = { sourceProjection, loadBuildLists, defaultDependencies, rollback, syncAfterActivation };
