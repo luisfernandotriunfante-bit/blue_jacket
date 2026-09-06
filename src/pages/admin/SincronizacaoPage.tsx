@@ -108,6 +108,22 @@ export function SincronizacaoPage() {
     }
   };
 
+  const sendCurrentDeviceSnapshot = async () => {
+    if (!deviceSync) return;
+    setSyncing(true);
+    setError('');
+    setSyncNotice('Enviando a cópia atual deste aparelho…');
+    try {
+      const synced = await uploadCurrentDeviceSnapshot(deviceSync);
+      setSyncNotice(`Cópia atual enviada com sucesso (${synced.bytes.toLocaleString('pt-BR')} bytes cifrados). Bases, configurações e cadastros administrativos deste aparelho foram incluídos no mesmo snapshot seguro.`);
+    } catch (reason) {
+      setSyncNotice('');
+      setError(`Não foi possível enviar a cópia atual: ${syncErrorMessage(reason)}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const restoreFromDeviceSync = async () => {
     if (!deviceSync) return;
     setSyncing(true);
@@ -167,6 +183,7 @@ export function SincronizacaoPage() {
         <PanelAlert tone="success">Este aparelho já está pareado. Compartilhe o link abaixo somente com o seu outro aparelho.</PanelAlert>
         <textarea className="panel-input" readOnly value={syncLink} aria-label="Link de pareamento seguro" style={{ width: '100%', minHeight: 58, marginBottom: 8 }} />
         <button className="panel-button" disabled={syncing} onClick={() => void copyPairingLink()}>Copiar link de pareamento</button>{' '}
+        <button className="panel-button" disabled={syncing || !activeCanonical} onClick={() => void sendCurrentDeviceSnapshot()}>{syncing ? 'Sincronizando…' : 'ENVIAR CÓPIA ATUAL'}</button>{' '}
         <button className="panel-button" disabled={syncing} onClick={() => void restoreFromDeviceSync()}>{syncing ? 'Sincronizando…' : 'Restaurar cópia sincronizada'}</button>
       </> : <>
         <button className="panel-button" disabled={syncing || !activeCanonical} onClick={() => void startDeviceSync()}>{syncing ? 'Preparando…' : 'ATIVAR SINCRONIZAÇÃO NESTE APARELHO'}</button>
