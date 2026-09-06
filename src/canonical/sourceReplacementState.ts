@@ -140,7 +140,8 @@ export function withoutCertificate(state: SourceReplacementState | null, sourceI
 
 export class SourceReplacementRepository {
   private listeners = new Set<Listener>();
-  constructor(private storage: SourceReplacementStorage | null = typeof localStorage === 'undefined' ? null : localStorage) {}
+  private storage: SourceReplacementStorage | null;
+  constructor(storage: SourceReplacementStorage | null = typeof localStorage === 'undefined' ? null : localStorage) { this.storage = storage; }
   load() {
     if (!this.storage) return null;
     const raw = this.storage.getItem(STORAGE_KEY);
