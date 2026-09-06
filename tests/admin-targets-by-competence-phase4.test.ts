@@ -71,9 +71,9 @@ const bussolaRow = (overrides: Record<string, unknown> = {}) => ({ pasta_type: '
 async function activeFor(target: TargetState | null, id = 'BUILD-A'): Promise<ActiveCanonicalBundle> {
   const stagingManifestHash = 'SOURCE-HASH';
   const adminRegistryHash = await canonicalAdminRegistryHash(null);
-  const rcaTargetRegistryHash = await rcaTargetRegistryHash(target);
-  const canonicalInputHash = await canonicalInputHashV2(stagingManifestHash, adminRegistryHash, rcaTargetRegistryHash);
-  return { status: 'ACTIVE', motorBuildId: id, stagingManifestHash, adminRegistryHash, rcaTargetRegistryHash, canonicalInputHash, schemaVersion: 'v1', engineVersion: CANONICAL_ENGINE_VERSION, approvedAt: NOW, rowCounts: { M1_ITEM_ESTOQUE: 0, M2_CLIENTE_RCA: 0, M3_MOVIMENTO_VENDAS: 0, M4_HISTORICO_TRANSICAO: 0 }, factTypeCounts: { SALE: 0, INBOUND_ORDER: 0, RECEIPT: 0, TARGET: 0 } };
+  const targetRegistryHash = await rcaTargetRegistryHash(target);
+  const canonicalInputHash = await canonicalInputHashV2(stagingManifestHash, adminRegistryHash, targetRegistryHash);
+  return { status: 'ACTIVE', motorBuildId: id, stagingManifestHash, adminRegistryHash, rcaTargetRegistryHash: targetRegistryHash, canonicalInputHash, schemaVersion: 'v1', engineVersion: CANONICAL_ENGINE_VERSION, approvedAt: NOW, rowCounts: { M1_ITEM_ESTOQUE: 0, M2_CLIENTE_RCA: 0, M3_MOVIMENTO_VENDAS: 0, M4_HISTORICO_TRANSICAO: 0 }, factTypeCounts: { SALE: 0, INBOUND_ORDER: 0, RECEIPT: 0, TARGET: 0 } };
 }
 
 // GRUPO 1 — TARGET STORE (M1–M6 + hardening)
