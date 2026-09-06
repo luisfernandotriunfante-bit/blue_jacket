@@ -8,7 +8,7 @@ const base = { sources: ['Nova Base de Premissas - Q3.xlsx'], generatedAt: '2026
 const m2: CanonicalList = { ...base, id: 'M2_CLIENTE_RCA', records: [{ customer_canonical_id: 'CUSTOMER:00111111000100', cnpj: '00111111000100', customer_name: 'CLIENTE TESTE', premise_network: 'REDE PREMISSAS' }] };
 const route: ParsedSource = {
   source: "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx",
-  fileName: 'roteiro.xlsx',
+  fileName: "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx",
   sheet: 'Roteiro Ativo',
   rows: [{
     cnpj: rt('00111111000100'),
@@ -33,5 +33,6 @@ test('Roteiro Ativo entra no M2 persistido sem substituir a rede de Premissas e 
   assert.equal(customer.top_group_code, 'GRUPO TOP');
   assert.equal(customer.top_category, 'OURO');
   assert.equal(customer.top_target, 1234.56);
+  assert.equal(customer.top_route_competence, '2026-08');
   assert.ok(result.sources.includes("08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"));
 });

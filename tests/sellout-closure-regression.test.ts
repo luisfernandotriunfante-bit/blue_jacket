@@ -14,8 +14,8 @@ Object.assign(globalThis, {
 });
 const base = { sources: [], generatedAt: '2026-08-31T00:00:00Z', competence: '2026-08', snapshotDate: '2026-08-31', warnings: [], errors: [] };
 const m2 = { ...base, id: 'M2_CLIENTE_RCA' as const, records: [
-  { cnpj: '11111111000111', customer_name: 'Cliente 1', rca_canonical_id: 'RCA:10', rca_current_code: '10', rca_legacy_code: '900', rca_name: 'RCA A', coordinator_code: '1', coordinator_name: 'Supervisor A', top_network: 'Rede A', manager_cnpj: '11111111000111', top_target: 500 },
-  { cnpj: '22222222000122', customer_name: 'Cliente 2', rca_canonical_id: 'RCA:10', rca_current_code: '10', rca_name: 'RCA A', coordinator_code: '1', coordinator_name: 'Supervisor A', top_network: 'Rede A', manager_cnpj: '11111111000111', top_target: 500 },
+  { cnpj: '11111111000111', customer_name: 'Cliente 1', rca_canonical_id: 'RCA:10', rca_current_code: '10', rca_legacy_code: '900', rca_name: 'RCA A', coordinator_code: '1', coordinator_name: 'Supervisor A', top_network: 'Rede A', top_route_competence: '2026-08', manager_cnpj: '11111111000111', top_target: 500 },
+  { cnpj: '22222222000122', customer_name: 'Cliente 2', rca_canonical_id: 'RCA:10', rca_current_code: '10', rca_name: 'RCA A', coordinator_code: '1', coordinator_name: 'Supervisor A', top_network: 'Rede A', top_route_competence: '2026-08', manager_cnpj: '11111111000111', top_target: 500 },
 ] };
 
 test('status canônico não transforma vazio ou desconhecido em faturado', () => {

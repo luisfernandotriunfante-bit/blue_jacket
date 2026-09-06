@@ -37,6 +37,8 @@ export type SellOutDashboardModel = {
   lineUnclassifiedValue: number;
   lineUnclassifiedRecords: number;
   lineUnclassifiedExamples: string[];
+  ambiguousProductRecords: number;
+  ambiguousProductExamples: string[];
 };
 
 const validTarget = (value: number | null) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
@@ -66,6 +68,8 @@ export function buildSellOutDashboardModel({ base, m1, m3, targets }: { base: Se
         unclassifiedValue: base.salesByLine.filter(row => row.resolutionStatus === 'UNCLASSIFIED').reduce((sum, row) => sum + row.realized, 0),
         unclassifiedRecords: 0,
         unclassifiedExamples: [],
+        ambiguousProductRecords: 0,
+        ambiguousProductExamples: [],
       };
 
   const operationalModel: SellOutViewModel = {
@@ -101,5 +105,7 @@ export function buildSellOutDashboardModel({ base, m1, m3, targets }: { base: Se
     lineUnclassifiedValue: preparedLines.unclassifiedValue,
     lineUnclassifiedRecords: preparedLines.unclassifiedRecords,
     lineUnclassifiedExamples: preparedLines.unclassifiedExamples,
+    ambiguousProductRecords: preparedLines.ambiguousProductRecords,
+    ambiguousProductExamples: preparedLines.ambiguousProductExamples,
   };
 }

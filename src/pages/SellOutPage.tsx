@@ -55,6 +55,7 @@ function Summary({ dashboard }: { dashboard: SellOutDashboardModel }) {
     <PanelCard><PanelSectionHeader eyebrow="SELL OUT POR LINHA" title="Resultado das cinco linhas comerciais" description="As mesmas cinco divisões de produtos usadas no Sell Out anterior, preparadas antes da tela pela classificação canônica de itens." />
       <div className="sellout-line-grid">{dashboard.lineRows.map(row => <MetricCard key={row.line} label={row.line} value={currency.format(row.realized)} progress={row.share} progressLabel={`${percent.format(row.share)} do Sell Out`} info={`Faturado: ${currency.format(row.invoiced)} · A faturar: ${currency.format(row.toInvoice)}`} />)}</div>
       {dashboard.lineUnclassifiedValue !== 0 ? <PanelAlert tone="warning"><strong>Não classificado:</strong> {currency.format(dashboard.lineUnclassifiedValue)} em {number.format(dashboard.lineUnclassifiedRecords)} registro(s). Exemplos: {dashboard.lineUnclassifiedExamples.join(' · ') || 'sem identificador disponível'}.</PanelAlert> : null}
+      {dashboard.ambiguousProductRecords ? <PanelAlert tone="warning"><strong>Produto ambíguo:</strong> {number.format(dashboard.ambiguousProductRecords)} registro(s) não foram vinculados arbitrariamente. Identificadores: {dashboard.ambiguousProductExamples.join(' · ')}.</PanelAlert> : null}
     </PanelCard>
   </>;
 }

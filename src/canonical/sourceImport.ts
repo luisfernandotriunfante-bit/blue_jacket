@@ -27,7 +27,7 @@ const SCHEMA_VERSION = 'v1';
  * navegador. Quando ela muda, os dados originais já presentes no staging são
  * remontados antes de qualquer tela os consumir.
  */
-export const CANONICAL_ENGINE_VERSION = 'browser-stage4-product-assortment-v17';
+export const CANONICAL_ENGINE_VERSION = 'browser-stage4-product-assortment-v18-sellout-closure';
 const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
 export const isSourceStageCurrent = (manifest: SourceStageManifest | undefined) => Boolean(manifest && manifest.parserVersion === parserVersionFor(manifest.source) && manifest.schemaVersion === SCHEMA_VERSION);
 
