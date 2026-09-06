@@ -35,6 +35,7 @@ import {
 } from './baseUpdateFlow';
 import {
   activateCertifiedSourceReplacement,
+  recertifySourceReplacement,
   revokeCertifiedSourceReplacement,
   sourceReplacementLifecycle,
 } from './sourceReplacementFlow';
@@ -54,6 +55,7 @@ function sourceError(reason: unknown) {
   if (code.includes('REPLACEMENT_COVERAGE_BROKEN:')) return 'COBERTURA INTERNA QUEBRADA. O motor não fará fallback físico enquanto a substituição permanecer certificada.';
   if (code.includes('SOURCE_REPLACEMENT_REVOKE_PHYSICAL_REQUIRED')) return 'Reenvie a fonte antes de revogar esta substituição.';
   if (code.includes('SOURCE_REPLACEMENT_NOT_READY')) return 'SUBSTITUIÇÃO AINDA NÃO PRONTA — a readiness precisa ser READY no escopo exato.';
+  if (code.includes('SOURCE_REPLACEMENT_RECERTIFICATION_NOT_REQUIRED')) return 'A fonte física atual ainda corresponde ao certificado; recertificação não é necessária.';
   if (code.includes('SOURCES_OUTDATED:')) {
     const sources = code.split('SOURCES_OUTDATED:')[1]?.split('|').map(source => SOURCE_LABELS[source] ?? source).join(', ');
     return `A regra de leitura mudou. Selecione novamente somente: ${sources || 'a fonte marcada como atualização necessária'}.`;
@@ -113,7 +115,7 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   useEffect(() => sourceReplacementLifecycle.subscribe(setReplacementLifecycleState), []);
   useEffect(() => { void refresh(); }, []);
   useEffect(() => { if (!updateState.busy && updateState.phase !== 'IDLE') void refresh(); }, [updateState.busy, updateState.phase]);
-  useEffect(() => { if (!['CHECKING','BUILDING_BASELINE','BUILDING_REPLACED','VERIFYING','PERSISTING','ACTIVATING','SYNCING'].includes(replacementLifecycleState.phase)) void refresh(); }, [replacementLifecycleState.phase]);
+  useEffect(() => { if (!['CHECKING', 'BUILDING_BASELINE', 'BUILDING_REPLACED', 'VERIFYING', 'PERSISTING', 'ACTIVATING', 'SYNCING'].includes(replacementLifecycleState.phase)) void refresh(); }, [replacementLifecycleState.phase]);
 
   const manifestBySource = useMemo(() => new Map(manifests.map(manifest => [manifest.source, manifest])), [manifests]);
   const validCount = SUPPORTED_SOURCE_IDS.filter(source => isSourceStageCurrent(manifestBySource.get(source))).length;
@@ -121,7 +123,18 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   const selectedCount = Object.keys(selected).length;
   const canReprocess = Boolean(activeCanonical) && hardValidCount === HARD_REQUIRED_SOURCE_IDS.length;
 
-  const assignMany = (files: File[]) => { const next = { ...selected }; const unknown: string[] = []; for (const file of files) { const source = detectSourceForFileName(file.name); if (source) next[source] = file; else unknown.push(file.name); } setSelected(next); setUnmatched(unknown); setPageError(''); };
+  const assignMany = (files: File[]) => {
+    const next = { ...selected };
+    const unknown: string[] = [];
+    for (const file of files) {
+      const source = detectSourceForFileName(file.name);
+      if (source) next[source] = file;
+      else unknown.push(file.name);
+    }
+    setSelected(next);
+    setUnmatched(unknown);
+    setPageError('');
+  };
   const onMany = (event: ChangeEvent<HTMLInputElement>) => { assignMany(Array.from(event.target.files ?? [])); event.target.value = ''; };
   const onSource = (source: string, event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) setSelected(current => ({ ...current, [source]: file })); event.target.value = ''; };
 
@@ -131,7 +144,7 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
       try {
         const storage = await requestPersistentSourceStorage();
         if (storage.quota && storage.usage && storage.quota - storage.usage < 200 * 1024 * 1024) throw new Error('STORAGE_SPACE_LOW: menos de 200 MB livres para processar as bases.');
-        const base = activeCanonical ? { active: activeCanonical, lists: Object.fromEntries((await Promise.all((['M1_ITEM_ESTOQUE','M2_CLIENTE_RCA','M3_MOVIMENTO_VENDAS','M4_HISTORICO_TRANSICAO'] as const).map(async id => [id, await loadCandidateList(id)]))) as [string, unknown][]) as any } : undefined;
+        const base = activeCanonical ? { active: activeCanonical, lists: Object.fromEntries((await Promise.all((['M1_ITEM_ESTOQUE', 'M2_CLIENTE_RCA', 'M3_MOVIMENTO_VENDAS', 'M4_HISTORICO_TRANSICAO'] as const).map(async id => [id, await loadCandidateList(id)]))) as [string, unknown][]) as any } : undefined;
         const result = await processSourceUpdates(selected, progress => controls.setProgress(progress), base);
         if (result.rejected.length) return { phase: 'FAILED' as const, status: '', error: `Fonte rejeitada; o build anterior foi preservado. ${result.rejected.map(item => `${SOURCE_LABELS[item.source] ?? item.source}: ${item.errors.join(' | ')}`).join(' · ')}` };
         if (result.missing.length) {
@@ -148,7 +161,8 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
         const localStatus = result.updated.length ? `ATUALIZAÇÃO CONCLUÍDA — ${result.updated.length} fonte(s) atualizada(s), ${result.unchanged.length} reutilizada(s). Build ativo: ${result.active.motorBuildId}.` : `MOTOR REPROCESSADO — build v21 ativado: ${result.active.motorBuildId}.`;
         controls.setPhase('ACTIVATING');
         const syncResult = await activateBuildAndWaitForAutoSync(result.active, activateCanonical, async active => { controls.setPhase('SYNCING'); return onCanonicalActivated ? onCanonicalActivated(active) : { status: 'NOT_PAIRED' }; });
-        setSelected({}); const status = baseUpdateCompletionStatus(localStatus, syncResult);
+        setSelected({});
+        const status = baseUpdateCompletionStatus(localStatus, syncResult);
         if (syncResult.status === 'SYNC_FAILED') return { phase: 'LOCAL_SUCCESS_SYNC_FAILED' as const, status, error: sourceError(syncResult.error) };
         return { phase: 'SUCCESS' as const, status, error: '' };
       } catch (reason) { return { phase: 'FAILED' as const, status: '', error: sourceError(reason) }; }
@@ -164,6 +178,17 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
     try {
       const result = await activateCertifiedSourceReplacement(source, scope, { activate: activateCanonical, deactivate: deactivateCanonical });
       setPageStatus(`SUBSTITUIÇÃO ATIVA — ${SOURCE_LABELS[source] ?? source} (${scopeLabel(scope)}). Build: ${result.active.motorBuildId}.`);
+      await refresh();
+    } catch (reason) { setPageError(sourceError(reason)); }
+  };
+
+  const recertifyReplacement = async (source: string) => {
+    const scope = sourceScopeFor(source, operationalCompetence);
+    if (!scope) { setPageError('A competência operacional está MIXED/UNRESOLVED; não é permitido adivinhar escopo Top/Target para recertificação.'); return; }
+    setPageError(''); setPageStatus('');
+    try {
+      const result = await recertifySourceReplacement(source, scope, { activate: activateCanonical, deactivate: deactivateCanonical });
+      setPageStatus(`SUBSTITUIÇÃO RECERTIFICADA — ${SOURCE_LABELS[source] ?? source} (${scopeLabel(scope)}). Build: ${result.active.motorBuildId}.`);
       await refresh();
     } catch (reason) { setPageError(sourceError(reason)); }
   };
@@ -203,13 +228,27 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
       <div className="panel-table-wrap" style={{ marginTop: 12 }}><table className="panel-table">
         <thead><tr><th>Fonte</th><th>Fonte física</th><th>Papel</th><th>Authority</th><th>Readiness</th><th>Certificação</th><th>Escopo</th><th>Uso no motor</th><th>Arquivo / hash</th><th>Ações</th></tr></thead>
         <tbody>{SUPPORTED_SOURCE_IDS.map(source => {
-          const manifest = manifestBySource.get(source); const file = selected[source]; const contract = dependencyContracts.get(source); const readiness = readinessBySource.get(source); const diagnostic = diagnosticBySource.get(source);
+          const manifest = manifestBySource.get(source);
+          const file = selected[source];
+          const contract = dependencyContracts.get(source);
+          const readiness = readinessBySource.get(source);
+          const diagnostic = diagnosticBySource.get(source);
           const scope = sourceScopeFor(source, operationalCompetence);
           const certificates = replacementState?.certificates.filter(item => item.sourceId === source) ?? [];
           const currentCertificate = scope ? certificates.find(item => item.scope === scope) : null;
           const detail = scope === 'GLOBAL' ? readiness?.details.find(item => item.competence === null) ?? readiness?.details[0] : scope ? readiness?.details.find(item => `COMPETENCE:${item.competence}` === scope) : undefined;
           const ready = detail?.status === 'READY';
-          const certification = diagnostic?.status === 'REPLACED' ? 'SUBSTITUIÇÃO ATIVA' : diagnostic?.status === 'REVIEW_REQUIRED' ? 'REVIEW_REQUIRED' : diagnostic?.status === 'COVERAGE_BROKEN' ? 'BROKEN' : currentCertificate ? 'ATIVA — fora do build atual' : certificates.length ? `ATIVA: ${certificates.map(item => scopeLabel(item.scope)).join(', ')}` : 'NÃO ATIVA';
+          const certification = diagnostic?.status === 'REPLACED'
+            ? 'SUBSTITUIÇÃO ATIVA'
+            : diagnostic?.status === 'REVIEW_REQUIRED'
+              ? 'REVISÃO NECESSÁRIA — NOVA VERSÃO DA FONTE DETECTADA'
+              : diagnostic?.status === 'COVERAGE_BROKEN'
+                ? 'COBERTURA INTERNA QUEBRADA'
+                : currentCertificate
+                  ? 'ATIVA — fora do build atual'
+                  : certificates.length
+                    ? `ATIVA: ${certificates.map(item => scopeLabel(item.scope)).join(', ')}`
+                    : 'NÃO ATIVA';
           const motorUse = diagnostic?.status === 'REPLACED' ? 'SUBSTITUIÇÃO INTERNA' : hardSet.has(source) || diagnostic?.status === 'PHYSICAL' ? 'FONTE FÍSICA' : diagnostic?.status === 'REVIEW_REQUIRED' || diagnostic?.status === 'COVERAGE_BROKEN' ? 'BLOQUEADO' : 'FONTE FÍSICA REQUERIDA';
           return <tr key={source}>
             <td>{SOURCE_LABELS[source] ?? source}</td>
@@ -224,7 +263,10 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
             <td>
               <label className="panel-button" style={{ display: 'inline-block', cursor: globallyBusy ? 'not-allowed' : 'pointer' }} aria-disabled={globallyBusy}>Selecionar<input type="file" disabled={globallyBusy} accept=".xls,.xlsx,.txt" onChange={event => onSource(source, event)} style={{ display: 'none' }} /></label>
               {replaceableSet.has(source) ? <><br />
-                {!currentCertificate ? <button className="panel-button" disabled={globallyBusy || !ready || !manifest || !scope} onClick={() => void activateReplacement(source)}>ATIVAR SUBSTITUIÇÃO</button> : <button className="panel-button" disabled={globallyBusy} onClick={() => void revokeReplacement(source)}>REVOGAR SUBSTITUIÇÃO</button>}
+                {!currentCertificate ? <button className="panel-button" disabled={globallyBusy || !ready || !manifest || !scope} onClick={() => void activateReplacement(source)}>ATIVAR SUBSTITUIÇÃO</button> : <>
+                  {diagnostic?.status === 'REVIEW_REQUIRED' ? <button className="panel-button" disabled={globallyBusy || !manifest || !scope} onClick={() => void recertifyReplacement(source)}>RECERTIFICAR SUBSTITUIÇÃO</button> : null}{' '}
+                  <button className="panel-button" disabled={globallyBusy || !manifest} onClick={() => void revokeReplacement(source)}>REVOGAR SUBSTITUIÇÃO</button>
+                </>}
               </> : null}
             </td>
           </tr>;
