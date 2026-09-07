@@ -219,6 +219,35 @@ export function setCurrentCompetence(id: string, options: { target?: StorageLike
   }, target);
 }
 
+/** Pure administrative transition. It never reads or writes storage. */
+export function closeCompetenceInState(state: CompetenceState, id: string, timestamp: string): CompetenceState {
+  if (!validTimestamp(timestamp)) throw new Error('COMPETENCE_TIMESTAMP_INVALID');
+  const current = validateCompetenceState(state);
+  const selected = current.records.find(item => item.id === id);
+  if (!selected) throw new Error('COMPETENCE_RECORD_NOT_FOUND');
+  if (selected.status !== 'OPEN' || current.currentCompetence !== id) throw new Error('MONTHLY_CLOSE_NOT_CURRENT');
+  return validateCompetenceState({
+    ...current,
+    currentCompetence: null,
+    updatedAt: timestamp,
+    records: current.records.map(item => item.id === id ? { ...item, status: 'CLOSED' as const, updatedAt: timestamp } : item),
+  });
+}
+
+/** Pure administrative transition. Reopening never selects the competence automatically. */
+export function reopenCompetenceInState(state: CompetenceState, id: string, timestamp: string): CompetenceState {
+  if (!validTimestamp(timestamp)) throw new Error('COMPETENCE_TIMESTAMP_INVALID');
+  const current = validateCompetenceState(state);
+  const selected = current.records.find(item => item.id === id);
+  if (!selected) throw new Error('COMPETENCE_RECORD_NOT_FOUND');
+  if (selected.status !== 'CLOSED') throw new Error('MONTHLY_REOPEN_NOT_CLOSED');
+  return validateCompetenceState({
+    ...current,
+    updatedAt: timestamp,
+    records: current.records.map(item => item.id === id ? { ...item, status: 'OPEN' as const, updatedAt: timestamp } : item),
+  });
+}
+
 export function subscribeCompetenceState(listener: Listener) {
   listeners.add(listener);
   listener(loadCompetenceState());
