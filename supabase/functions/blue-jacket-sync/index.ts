@@ -2,13 +2,24 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const keys = JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') ?? '{}') as Record<string, string>;
 const SERVICE_KEY = keys.default ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const BUCKET = 'blue-jacket-sync';
+const MAX_BYTES = 52_428_800;
 const ORIGINS = new Set(['https://luisfernandotriunfante-bit.github.io', 'http://localhost:5173', 'http://127.0.0.1:5173']);
+
+type WorkspaceRow = {
+  workspace_id: string;
+  key_hash: string;
+  updated_at: string;
+  payload_bytes: number;
+  protocol_version: number;
+  revision: number;
+  current_object: string | null;
+};
 
 function cors(req: Request) {
   const origin = req.headers.get('origin') ?? '';
   return {
     'Access-Control-Allow-Origin': ORIGINS.has(origin) ? origin : 'https://luisfernandotriunfante-bit.github.io',
-    'Access-Control-Allow-Headers': 'content-type, apikey, x-blue-jacket-action, x-blue-jacket-workspace, x-blue-jacket-secret',
+    'Access-Control-Allow-Headers': 'content-type, apikey, x-blue-jacket-action, x-blue-jacket-workspace, x-blue-jacket-secret, x-blue-jacket-if-revision, x-blue-jacket-object-key',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Expose-Headers': 'x-blue-jacket-updated-at',
     Vary: 'Origin',
@@ -24,6 +35,7 @@ function json(req: Request, body: unknown, status = 200) {
 }
 function fail(req: Request, status: number, error: string) { return json(req, { error }, status); }
 function validWorkspaceId(value: string) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
+function validObjectKey(value: string) { return /^[0-9a-f]{64}$/i.test(value); }
 async function hash(value: string) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
   return Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0')).join('');
@@ -35,11 +47,23 @@ function equal(left: string, right: string) {
   return difference === 0;
 }
 function serviceHeaders(extra: HeadersInit = {}) { return { apikey: SERVICE_KEY, Authorization: 'Bearer ' + SERVICE_KEY, ...extra }; }
-function objectUrl(workspaceId: string) { return SUPABASE_URL + '/storage/v1/object/' + BUCKET + '/' + workspaceId + '/current.bjs'; }
+function encodedPath(path: string) { return path.split('/').map(segment => encodeURIComponent(segment)).join('/'); }
+function storageObjectUrl(path: string) { return `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${encodedPath(path)}`; }
+function legacyCurrentPath(workspaceId: string) { return `${workspaceId}/current.bjs`; }
+function historyObjectPath(workspaceId: string, objectKey: string) { return `${workspaceId}/history/${objectKey.toLowerCase()}.bjh`; }
+function statusBody(row: WorkspaceRow) {
+  return {
+    updatedAt: row.updated_at,
+    bytes: Number(row.payload_bytes),
+    revision: Number(row.revision),
+    protocolVersion: Number(row.protocol_version),
+  };
+}
+
 async function workspace(workspaceId: string) {
-  const response = await fetch(SUPABASE_URL + '/rest/v1/blue_jacket_sync_workspaces?workspace_id=eq.' + encodeURIComponent(workspaceId) + '&select=workspace_id,key_hash,updated_at,payload_bytes', { headers: serviceHeaders() });
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/blue_jacket_sync_workspaces?workspace_id=eq.${encodeURIComponent(workspaceId)}&select=workspace_id,key_hash,updated_at,payload_bytes,protocol_version,revision,current_object`, { headers: serviceHeaders() });
   if (!response.ok) throw new Error('WORKSPACE_READ_FAILED');
-  return (await response.json() as Array<{ workspace_id: string; key_hash: string; updated_at: string; payload_bytes: number }>)[0];
+  return (await response.json() as WorkspaceRow[])[0];
 }
 async function access(req: Request) {
   const workspaceId = req.headers.get('x-blue-jacket-workspace') ?? '';
@@ -49,9 +73,100 @@ async function access(req: Request) {
   if (!row || !equal(row.key_hash, await hash(secret))) return null;
   return { workspaceId, row };
 }
-async function removeSnapshot(workspaceId: string) {
-  const response = await fetch(objectUrl(workspaceId), { method: 'DELETE', headers: serviceHeaders() });
+
+async function removeObject(path: string) {
+  const response = await fetch(storageObjectUrl(path), { method: 'DELETE', headers: serviceHeaders() });
   if (response.status !== 404 && !response.ok) throw new Error('SYNC_DELETE_FAILED');
+}
+
+async function objectInfo(path: string) {
+  const response = await fetch(storageObjectUrl(path), { method: 'HEAD', headers: serviceHeaders() });
+  if (response.status === 404) return { exists: false, bytes: 0 };
+  if (!response.ok) throw new Error('SYNC_HISTORY_STATUS_FAILED');
+  const bytes = Number(response.headers.get('content-length') ?? '0');
+  return { exists: true, bytes: Number.isFinite(bytes) && bytes >= 0 ? bytes : 0 };
+}
+
+async function uploadCreateOnly(path: string, payload: ArrayBuffer) {
+  const response = await fetch(storageObjectUrl(path), {
+    method: 'PUT',
+    headers: serviceHeaders({ 'Content-Type': 'application/octet-stream' }),
+    body: payload,
+  });
+  if (response.ok) return 'CREATED' as const;
+  if (response.status === 400 || response.status === 409) {
+    const info = await objectInfo(path);
+    if (info.exists) return 'EXISTING' as const;
+  }
+  throw new Error('SYNC_HISTORY_UPLOAD_FAILED');
+}
+
+async function uploadCurrentCandidate(path: string, payload: ArrayBuffer) {
+  const response = await fetch(storageObjectUrl(path), {
+    method: 'PUT',
+    headers: serviceHeaders({ 'Content-Type': 'application/octet-stream' }),
+    body: payload,
+  });
+  if (!response.ok) throw new Error('SYNC_UPLOAD_FAILED');
+}
+
+async function listStorageFolder(prefix: string) {
+  const response = await fetch(`${SUPABASE_URL}/storage/v1/object/list/${BUCKET}`, {
+    method: 'POST',
+    headers: serviceHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ prefix, limit: 1000, offset: 0, sortBy: { column: 'name', order: 'asc' } }),
+  });
+  if (!response.ok) throw new Error('SYNC_DELETE_FAILED');
+  return await response.json() as Array<{ id: string | null; name: string }>;
+}
+
+async function listWorkspaceFiles(prefix: string): Promise<string[]> {
+  const items = await listStorageFolder(prefix);
+  const paths: string[] = [];
+  for (const item of items) {
+    const path = `${prefix}/${item.name}`;
+    if (item.id === null) paths.push(...await listWorkspaceFiles(path));
+    else paths.push(path);
+  }
+  return paths;
+}
+
+async function removeWorkspaceObjects(workspaceId: string) {
+  const paths = await listWorkspaceFiles(workspaceId).catch(() => [] as string[]);
+  for (const path of paths) await removeObject(path);
+  await removeObject(legacyCurrentPath(workspaceId)).catch(() => undefined);
+}
+
+async function casCurrentSnapshot(req: Request, verified: { workspaceId: string; row: WorkspaceRow }, payload: ArrayBuffer, expectedRevision: number) {
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) return fail(req, 400, 'SYNC_REVISION_INVALID');
+  if (expectedRevision !== Number(verified.row.revision)) return fail(req, 409, 'SYNC_REMOTE_CHANGED');
+  const candidate = `${verified.workspaceId}/current/${crypto.randomUUID().replace(/-/g, '')}.bjs`;
+  await uploadCurrentCandidate(candidate, payload);
+  const updatedAt = new Date().toISOString();
+  const metadata = await fetch(`${SUPABASE_URL}/rest/v1/blue_jacket_sync_workspaces?workspace_id=eq.${encodeURIComponent(verified.workspaceId)}&revision=eq.${expectedRevision}`, {
+    method: 'PATCH',
+    headers: serviceHeaders({ 'Content-Type': 'application/json', Prefer: 'return=representation' }),
+    body: JSON.stringify({
+      protocol_version: 2,
+      revision: expectedRevision + 1,
+      current_object: candidate,
+      payload_bytes: payload.byteLength,
+      updated_at: updatedAt,
+    }),
+  });
+  if (!metadata.ok) {
+    await removeObject(candidate).catch(() => undefined);
+    return fail(req, 502, 'SYNC_METADATA_UPDATE_FAILED');
+  }
+  const rows = await metadata.json() as WorkspaceRow[];
+  if (rows.length !== 1) {
+    await removeObject(candidate).catch(() => undefined);
+    return fail(req, 409, 'SYNC_REMOTE_CHANGED');
+  }
+  const previous = verified.row.current_object;
+  if (previous && previous !== candidate) await removeObject(previous).catch(() => undefined);
+  if (!previous) await removeObject(legacyCurrentPath(verified.workspaceId)).catch(() => undefined);
+  return json(req, { status: 'SYNCED', ...statusBody(rows[0]) });
 }
 
 Deno.serve(async req => {
@@ -64,7 +179,7 @@ Deno.serve(async req => {
       const secret = payload.secret ?? '';
       if (!validWorkspaceId(workspaceId) || secret.length < 40 || secret.length > 100) return fail(req, 400, 'SYNC_IDENTITY_INVALID');
       if (await workspace(workspaceId)) return fail(req, 409, 'SYNC_WORKSPACE_EXISTS');
-      const created = await fetch(SUPABASE_URL + '/rest/v1/blue_jacket_sync_workspaces', {
+      const created = await fetch(`${SUPABASE_URL}/rest/v1/blue_jacket_sync_workspaces`, {
         method: 'POST',
         headers: serviceHeaders({ 'Content-Type': 'application/json', Prefer: 'return=minimal' }),
         body: JSON.stringify({ workspace_id: workspaceId, key_hash: await hash(secret) }),
@@ -75,36 +190,72 @@ Deno.serve(async req => {
     const verified = await access(req);
     if (!verified) return fail(req, 401, 'SYNC_UNAUTHORIZED');
 
-    if (action === 'status' && req.method === 'GET') return json(req, { updatedAt: verified.row.updated_at, bytes: verified.row.payload_bytes });
+    if (action === 'status' && req.method === 'GET') return json(req, statusBody(verified.row));
 
     if (action === 'download' && req.method === 'GET') {
-      const object = await fetch(objectUrl(verified.workspaceId), { headers: serviceHeaders() });
+      const path = verified.row.current_object || legacyCurrentPath(verified.workspaceId);
+      const object = await fetch(storageObjectUrl(path), { headers: serviceHeaders() });
       if (object.status === 404) return fail(req, 404, 'SYNC_SNAPSHOT_MISSING');
       if (!object.ok) return fail(req, 502, 'SYNC_DOWNLOAD_FAILED');
       return reply(req, object.body, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store', 'x-blue-jacket-updated-at': verified.row.updated_at } });
     }
 
     if (action === 'upload' && req.method === 'PUT') {
+      if (Number(verified.row.protocol_version) >= 2) return fail(req, 409, 'SYNC_CLIENT_UPGRADE_REQUIRED');
       const payload = await req.arrayBuffer();
-      if (!payload.byteLength || payload.byteLength > 52_428_800) return fail(req, 413, 'SYNC_PAYLOAD_INVALID');
-      const stored = await fetch(objectUrl(verified.workspaceId), {
+      if (!payload.byteLength || payload.byteLength > MAX_BYTES) return fail(req, 413, 'SYNC_PAYLOAD_INVALID');
+      const stored = await fetch(storageObjectUrl(legacyCurrentPath(verified.workspaceId)), {
         method: 'PUT',
         headers: serviceHeaders({ 'Content-Type': 'application/octet-stream', 'x-upsert': 'true' }),
         body: payload,
       });
       if (!stored.ok) return fail(req, 502, 'SYNC_UPLOAD_FAILED');
       const updatedAt = new Date().toISOString();
-      const metadata = await fetch(SUPABASE_URL + '/rest/v1/blue_jacket_sync_workspaces?workspace_id=eq.' + encodeURIComponent(verified.workspaceId), {
+      const metadata = await fetch(`${SUPABASE_URL}/rest/v1/blue_jacket_sync_workspaces?workspace_id=eq.${encodeURIComponent(verified.workspaceId)}`, {
         method: 'PATCH',
-        headers: serviceHeaders({ 'Content-Type': 'application/json', Prefer: 'return=minimal' }),
+        headers: serviceHeaders({ 'Content-Type': 'application/json', Prefer: 'return=representation' }),
         body: JSON.stringify({ payload_bytes: payload.byteLength, updated_at: updatedAt }),
       });
-      return metadata.ok ? json(req, { status: 'SYNCED', bytes: payload.byteLength, updatedAt }) : fail(req, 502, 'SYNC_METADATA_UPDATE_FAILED');
+      if (!metadata.ok) return fail(req, 502, 'SYNC_METADATA_UPDATE_FAILED');
+      const rows = await metadata.json() as WorkspaceRow[];
+      return rows.length === 1 ? json(req, { status: 'SYNCED', ...statusBody(rows[0]) }) : fail(req, 502, 'SYNC_METADATA_UPDATE_FAILED');
+    }
+
+    if (action === 'upload-v2' && req.method === 'PUT') {
+      const expectedRaw = req.headers.get('x-blue-jacket-if-revision') ?? '';
+      if (!/^\d+$/.test(expectedRaw)) return fail(req, 400, 'SYNC_REVISION_INVALID');
+      const payload = await req.arrayBuffer();
+      if (!payload.byteLength || payload.byteLength > MAX_BYTES) return fail(req, 413, 'SYNC_PAYLOAD_INVALID');
+      return await casCurrentSnapshot(req, verified, payload, Number(expectedRaw));
+    }
+
+    const objectKey = req.headers.get('x-blue-jacket-object-key') ?? '';
+    if (action.startsWith('history-') && !validObjectKey(objectKey)) return fail(req, 400, 'SYNC_HISTORY_OBJECT_KEY_INVALID');
+    const historyPath = validObjectKey(objectKey) ? historyObjectPath(verified.workspaceId, objectKey) : '';
+
+    if (action === 'history-status' && req.method === 'GET') {
+      const info = await objectInfo(historyPath);
+      return json(req, info);
+    }
+
+    if (action === 'history-upload' && req.method === 'PUT') {
+      const payload = await req.arrayBuffer();
+      if (!payload.byteLength || payload.byteLength > MAX_BYTES) return fail(req, 413, 'SYNC_PAYLOAD_INVALID');
+      const outcome = await uploadCreateOnly(historyPath, payload);
+      const info = await objectInfo(historyPath);
+      return json(req, { status: outcome, bytes: info.bytes }, outcome === 'CREATED' ? 201 : 200);
+    }
+
+    if (action === 'history-download' && req.method === 'GET') {
+      const object = await fetch(storageObjectUrl(historyPath), { headers: serviceHeaders() });
+      if (object.status === 404) return fail(req, 404, 'SYNC_REMOTE_HISTORY_OBJECT_MISSING');
+      if (!object.ok) return fail(req, 502, 'SYNC_HISTORY_DOWNLOAD_FAILED');
+      return reply(req, object.body, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' } });
     }
 
     if (action === 'delete' && req.method === 'DELETE') {
-      await removeSnapshot(verified.workspaceId);
-      const deleted = await fetch(SUPABASE_URL + '/rest/v1/blue_jacket_sync_workspaces?workspace_id=eq.' + encodeURIComponent(verified.workspaceId), {
+      await removeWorkspaceObjects(verified.workspaceId);
+      const deleted = await fetch(`${SUPABASE_URL}/rest/v1/blue_jacket_sync_workspaces?workspace_id=eq.${encodeURIComponent(verified.workspaceId)}`, {
         method: 'DELETE',
         headers: serviceHeaders({ Prefer: 'return=minimal' }),
       });
@@ -112,7 +263,8 @@ Deno.serve(async req => {
     }
 
     return fail(req, 404, 'SYNC_ACTION_NOT_FOUND');
-  } catch {
+  } catch (reason) {
+    console.error('blue-jacket-sync', reason);
     return fail(req, 500, 'SYNC_INTERNAL_ERROR');
   }
 });
