@@ -204,15 +204,15 @@ test('CH80 — export Excel histórico usa provenance histórica', () => assert.
 test('CH81 — active B + history A exporta motorBuildId A', () => assert.match(src('../src/pages/ListasCanonicasPage.tsx'), /const provenance = selectedArchive\.buildIdentity/));
 test('CH82 — não existe ação ATIVAR/RESTAURAR histórico', () => assert.doesNotMatch(src('../src/pages/ListasCanonicasPage.tsx'), /ATIVAR BUILD|RESTAURAR BUILD|USAR COMO ATUAL|VOLTAR PARA ESTE BUILD/));
 
-// CH83–CH90
-test('CH83 — Cloud snapshot v1 NÃO contém CanonicalHistory', () => assert.doesNotMatch(src('../src/canonical/cloudSync.ts'), /CanonicalHistory|canonicalHistory/));
-test('CH84 — Cloud restore não limpa history local', () => assert.doesNotMatch(src('../src/canonical/cloudSync.ts'), /clearCanonicalHistory|deleteArchiveInternal/));
+// CH83–CH90 — Phase 8 invariants evolved for Phase 9 transport
+ test('CH83 — Cloud snapshot v1 continua sem CanonicalHistory', () => { const cloud = src('../src/canonical/cloudSync.ts'); const v1 = cloud.slice(cloud.indexOf('export type CloudSnapshotV1'), cloud.indexOf('export type CloudSnapshotV2')); assert.doesNotMatch(v1, /canonicalHistoryManifest|CanonicalHistoryArchive/); });
+test('CH84 — Cloud restore v1 não limpa history local', () => { const cloud = src('../src/canonical/cloudSync.ts'); const v1Apply = cloud.slice(cloud.indexOf('async function applyCloudSnapshot('), cloud.indexOf('function saveIdentity')); assert.doesNotMatch(v1Apply, /deleteArchiveInternal|historyRepository/); assert.doesNotMatch(v1Apply, /clearCanonicalHistory/); });
 test('CH85 — Bundle format permanece inalterado', () => assert.match(src('../src/canonical/bundleStore.ts'), /blue-jacket-canonical-bundle\/v1/));
 test('CH86 — CanonicalHistory não entra no technical ZIP', () => assert.doesNotMatch(src('../src/canonical/bundleStore.ts'), /CanonicalHistory|canonicalHistory/));
 test('CH87 — engine continua exatamente v21', () => assert.equal(CANONICAL_ENGINE_VERSION, 'browser-stage4-product-assortment-v21-source-replacement'));
 test('CH88 — canonicalInputHash não inclui history', () => assert.doesNotMatch(src('../src/canonical/sourceReplacementIdentity.ts'), /CanonicalHistory|canonicalHistory/));
 test('CH89 — motorBuildId não inclui history', () => assert.doesNotMatch(src('../src/canonical/sourceImport.ts'), /CanonicalHistory|canonicalHistory/));
-test('CH90 — nenhum Sync/Backup v2 foi implementado', () => { assert.doesNotMatch(src('../src/canonical/cloudSync.ts'), /blue-jacket-device-sync\/v2/); assert.doesNotMatch(src('../src/canonical/canonicalHistory.ts'), /uploadPayload|Supabase|BJ2/); });
+test('CH90 — Sync/Backup v2 não transforma CanonicalHistory local em Active nem acopla seu repository ao Supabase', () => { assert.match(src('../src/canonical/cloudSync.ts'), /blue-jacket-device-sync\/v2/); assert.doesNotMatch(src('../src/canonical/canonicalHistory.ts'), /uploadPayload|Supabase|BJH1|history-upload|activateCanonicalBundle/); });
 
 // CH91–CH96
 test('CH91 — DataContext continua usando somente activeCanonical operacional', () => assert.doesNotMatch(src('../src/store/DataContext.tsx'), /CanonicalHistory|canonicalHistory|historicalActiveCanonical/));
