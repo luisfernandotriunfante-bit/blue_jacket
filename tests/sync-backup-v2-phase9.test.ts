@@ -295,3 +295,28 @@ sb(97, 'Estoque não lê remote history', () => assert.doesNotMatch(source('../s
 sb(98, 'Redes não lê remote history', () => assert.doesNotMatch(source('../src/pages/TopRetailNetworksPage.tsx'), /canonicalHistorySync|history-download/));
 sb(99, 'sete abas administrativas permanecem', () => assert.equal(ADMIN_TABS.length, 7));
 sb(100, 'não existe heuristic merge entre aparelhos', () => assert.doesNotMatch(source('../src/canonical/cloudSync.ts'), /mergeRemote|heuristicMerge|autoMergeConflict/i));
+
+// SB101–SB104 — remote History create-only hardening
+sb(101, 'uploadCreateOnly usa POST create-only no Storage', () => {
+  const body = edge().split('async function uploadCreateOnly')[1]?.split('async function uploadCurrentCandidate')[0] ?? '';
+  assert.match(body, /method: 'POST'/);
+  assert.doesNotMatch(body, /method: 'PUT'/);
+});
+sb(102, 'History desabilita upsert explicitamente', () => {
+  const body = edge().split('async function uploadCreateOnly')[1]?.split('async function uploadCurrentCandidate')[0] ?? '';
+  assert.match(body, /'x-upsert': 'false'/);
+  assert.doesNotMatch(body, /'x-upsert': 'true'/);
+});
+sb(103, 'interface pública history-upload permanece PUT', () => {
+  assert.match(edge(), /action === 'history-upload' && req\.method === 'PUT'/);
+});
+sb(104, 'legacy current, current candidate e History mantêm semânticas distintas', () => {
+  const text = edge();
+  const history = text.split('async function uploadCreateOnly')[1]?.split('async function uploadCurrentCandidate')[0] ?? '';
+  const candidate = text.split('async function uploadCurrentCandidate')[1]?.split('async function listStorageFolder')[0] ?? '';
+  assert.match(text, /legacyCurrentPath[\s\S]*method: 'PUT'[\s\S]*'x-upsert': 'true'/);
+  assert.match(history, /method: 'POST'/);
+  assert.match(history, /'x-upsert': 'false'/);
+  assert.match(candidate, /method: 'PUT'/);
+  assert.doesNotMatch(candidate, /x-upsert/);
+});
