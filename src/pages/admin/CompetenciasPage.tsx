@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../../canonical/candidateLists';
 import { compareOfficialCompetence, competenceFromFileName, formatCompetenceId, isValidCompetenceId } from '../../canonical/competence';
 import {
@@ -8,9 +8,29 @@ import {
   subscribeCompetenceState,
   type CompetenceState,
 } from '../../canonical/competenceStore';
+import {
+  exportMonthlyClosingCertificateJson,
+  type MonthlyClosingPreview,
+} from '../../canonical/monthlyClosingIdentity';
+import {
+  activeCloseEvent,
+  closingEventsForCompetence,
+  latestCloseEvent,
+  loadMonthlyClosingState,
+  subscribeMonthlyClosingState,
+  type MonthlyClosingCloseEvent,
+  type MonthlyClosingState,
+} from '../../canonical/monthlyClosingState';
 import { reportSettingsCompetences } from '../../canonical/reportSettings';
 import { canonicalSellOutCompetence } from '../../canonical/sellOutRules';
 import { loadSourceStagingManifests } from '../../canonical/sourceImport';
+import {
+  loadMonthlyClosingPreview,
+  monthlyClosingCoordinator,
+  runMonthlyClose,
+  runMonthlyReopen,
+  type MonthlyClosingLifecycleState,
+} from './monthlyClosingFlow';
 import { useData } from '../../store/DataContext';
 import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../../ui/pattern/PanelVisual';
 
@@ -33,22 +53,59 @@ const compatibilityLabel = (status: ReturnType<typeof compareOfficialCompetence>
   NO_OBSERVED_DATA: 'SEM DADOS OBSERVADOS',
 }[status]);
 
+const lifecycleMessage = (state: MonthlyClosingLifecycleState) => {
+  if (state.phase === 'CHECKING') return 'Conferindo novamente competência, Auditoria Global e evidências…';
+  if (state.phase === 'PERSISTING') return 'Persistindo histórico imutável e status da competência…';
+  if (state.phase === 'SYNCING') return 'Estado local validado. Sincronizando entre aparelhos…';
+  return state.message;
+};
+
+function downloadText(name: string, value: string) {
+  const blob = new Blob([value], { type: 'application/json;charset=utf-8' });
+  const href = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = href;
+  anchor.download = name;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(href);
+}
+
 export function CompetenciasPage() {
   const { activeCanonical } = useData();
   const [state, setState] = useState<CompetenceState | null>(() => {
     try { return loadCompetenceState(); } catch { return null; }
   });
+  const [closingState, setClosingState] = useState<MonthlyClosingState | null>(() => {
+    try { return loadMonthlyClosingState(); } catch { return null; }
+  });
+  const [closingLifecycle, setClosingLifecycle] = useState<MonthlyClosingLifecycleState>(() => monthlyClosingCoordinator.getState());
   const [month, setMonth] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [m3Evidence, setM3Evidence] = useState<string | null>(null);
   const [routeEvidence, setRouteEvidence] = useState<string | null>(null);
   const [targetEvidence, setTargetEvidence] = useState<string[]>(() => reportSettingsCompetences());
+  const [preview, setPreview] = useState<MonthlyClosingPreview | null>(null);
+  const [previewReviewedAt, setPreviewReviewedAt] = useState<string | null>(null);
+  const [checkingPreview, setCheckingPreview] = useState(false);
+  const [warningsReviewed, setWarningsReviewed] = useState(false);
+  const [closingNote, setClosingNote] = useState('');
+  const [detailCompetence, setDetailCompetence] = useState<string | null>(null);
+  const [reopenReason, setReopenReason] = useState('');
 
   useEffect(() => {
-    try { return subscribeCompetenceState(setState); }
+    try { return subscribeCompetenceState(next => { setState(next); }); }
     catch (reason) { setError(`Estado de Competências inválido: ${String(reason)}`); return undefined; }
   }, []);
+
+  useEffect(() => {
+    try { return subscribeMonthlyClosingState(next => { setClosingState(next); }); }
+    catch (reason) { setError(`Histórico de fechamento inválido: ${String(reason)}`); return undefined; }
+  }, []);
+
+  useEffect(() => monthlyClosingCoordinator.subscribe(setClosingLifecycle), []);
 
   useEffect(() => {
     let live = true;
@@ -72,6 +129,19 @@ export function CompetenciasPage() {
   const official = state?.currentCompetence ?? null;
   const m3Compatibility = compareOfficialCompetence(official, m3Evidence);
   const routeCompatibility = compareOfficialCompetence(official, routeEvidence);
+  const selectedClose = detailCompetence ? latestCloseEvent(closingState, detailCompetence) : null;
+  const selectedReopen = useMemo(() => selectedClose
+    ? closingEventsForCompetence(closingState, selectedClose.competence).find(event => event.type === 'REOPEN' && event.revision === selectedClose.revision) ?? null
+    : null, [closingState, selectedClose]);
+
+  useEffect(() => {
+    if (!preview || preview.competence !== official || preview.activeBuildIdentity?.motorBuildId !== activeCanonical?.motorBuildId) {
+      setPreview(null);
+      setPreviewReviewedAt(null);
+      setWarningsReviewed(false);
+      setClosingNote('');
+    }
+  }, [official, activeCanonical?.motorBuildId]);
 
   const create = () => {
     try {
@@ -86,36 +156,156 @@ export function CompetenciasPage() {
     try {
       setCurrentCompetence(id);
       setError('');
-      setMessage(`Competência ${formatCompetenceId(id)} definida como corrente. Nenhuma competência anterior foi fechada.`);
+      setMessage(`Competência ${formatCompetenceId(id)} definida como corrente. Nenhuma outra competência foi fechada automaticamente.`);
     } catch (reason) { setMessage(''); setError(String(reason)); }
   };
+
+  const verifyClosing = async () => {
+    if (!current) return;
+    setCheckingPreview(true); setError(''); setMessage(''); setWarningsReviewed(false); setClosingNote('');
+    try {
+      const next = await loadMonthlyClosingPreview(current.id);
+      setPreview(next);
+      setPreviewReviewedAt(new Date().toISOString());
+    } catch (reason) { setPreview(null); setError(String(reason)); }
+    finally { setCheckingPreview(false); }
+  };
+
+  const closeCurrent = async () => {
+    if (!current || !preview?.auditSemanticHash) return;
+    if (!window.confirm(`Fechar ${formatCompetenceId(current.id)}?\n\nEsta competência ficará somente leitura em Metas.\nO build atualmente ativo será registrado como evidência do fechamento.\nNenhuma nova competência será selecionada automaticamente.`)) return;
+    setError(''); setMessage('');
+    const result = await runMonthlyClose({ competence: current.id, expectedAuditHash: preview.auditSemanticHash, expectedWarningIds: preview.warningIds, warningsReviewed, note: closingNote });
+    if (result.status === 'BUSY') { setError('Há outra operação de dados em andamento. O fechamento não foi iniciado.'); return; }
+    const inner = result.value;
+    if (inner.status === 'BUSY') { setError('Já existe um fechamento ou reabertura em andamento.'); return; }
+    const completion = inner.value;
+    if (completion.phase === 'FAILED') setError(completion.error);
+    else {
+      setMessage(completion.message);
+      setPreview(null); setPreviewReviewedAt(null); setWarningsReviewed(false); setClosingNote('');
+    }
+  };
+
+  const reopen = async (competence: string) => {
+    if (!reopenReason.trim()) { setError('MONTHLY_REOPEN_REASON_REQUIRED'); return; }
+    if (!window.confirm(`Reabrir ${formatCompetenceId(competence)}?\n\nA competência voltará para ABERTA, mas não será selecionada como corrente automaticamente.`)) return;
+    setError(''); setMessage('');
+    const result = await runMonthlyReopen({ competence, reason: reopenReason });
+    if (result.status === 'BUSY') { setError('Há outra operação de dados em andamento. A reabertura não foi iniciada.'); return; }
+    const inner = result.value;
+    if (inner.status === 'BUSY') { setError('Já existe um fechamento ou reabertura em andamento.'); return; }
+    const completion = inner.value;
+    if (completion.phase === 'FAILED') setError(completion.error);
+    else { setMessage(completion.message); setReopenReason(''); setDetailCompetence(null); }
+  };
+
+  const exportClosing = async (close: MonthlyClosingCloseEvent) => {
+    if (!closingState) return;
+    try {
+      const json = await exportMonthlyClosingCertificateJson(closingState, close.competence, close.revision);
+      downloadText(`blue-jacket-fechamento-${close.competence}-r${close.revision}.json`, json);
+    } catch (reason) { setError(String(reason)); }
+  };
+
+  const closeEnabled = Boolean(preview
+    && !preview.partial
+    && preview.blockers.length === 0
+    && preview.activeBuildIdentity
+    && preview.auditSemanticHash
+    && (preview.warnings.length === 0 || (warningsReviewed && closingNote.trim()))
+    && !closingLifecycle.busy);
 
   return <PanelPage title="Competências" metricLabel="Competência atual" metricValue={official ? formatCompetenceId(official) : 'Não definida'}>
     {error ? <PanelAlert tone="error">{error}</PanelAlert> : null}
     {message ? <PanelAlert tone="success">{message}</PanelAlert> : null}
+    {closingLifecycle.busy ? <PanelAlert tone="warning">{lifecycleMessage(closingLifecycle)}</PanelAlert> : null}
+    {closingLifecycle.phase === 'LOCAL_SUCCESS_SYNC_FAILED' ? <PanelAlert tone="warning">{closingLifecycle.message} {closingLifecycle.error}</PanelAlert> : null}
 
     <PanelCard>
       <PanelSectionHeader eyebrow="PERÍODO ADMINISTRATIVO OFICIAL" title="Competência corrente" description="A competência oficial valida as evidências mensais dos dados; ela não reescreve datas, fontes ou M1–M4." />
       {current
         ? <div><strong>Competência atual:</strong> {formatCompetenceId(current.id)}<br /><strong>Status:</strong> ABERTA</div>
-        : <PanelAlert tone="warning">Nenhuma competência corrente definida.</PanelAlert>}
+        : <PanelAlert tone="warning">Nenhuma competência corrente definida. Após um fechamento isso é esperado até que outra competência OPEN seja escolhida explicitamente.</PanelAlert>}
     </PanelCard>
 
     <PanelCard>
-      <PanelSectionHeader eyebrow="CADASTRO" title="Cadastrar competência" description="Criar e tornar atual são ações distintas. Toda competência criada nesta fase nasce ABERTA." />
+      <PanelSectionHeader eyebrow="FECHAMENTO MENSAL" title={current ? `Homologar ${formatCompetenceId(current.id)}` : 'Sem competência corrente'} description="Fechar registra qual build canônico e qual Auditoria Global foram homologados. Não recalcula, não cria outro build e não escolhe o próximo mês." action={current ? <button type="button" className="panel-button" disabled={checkingPreview || closingLifecycle.busy} onClick={() => void verifyClosing()}>{checkingPreview ? 'VERIFICANDO…' : 'VERIFICAR FECHAMENTO'}</button> : undefined} />
+      {current && !preview ? <PanelAlert>Execute VERIFICAR FECHAMENTO para gerar uma nova revisão read-only da Auditoria Global antes de confirmar.</PanelAlert> : null}
+      {preview ? <div className="panel-stack" style={{ gap: 12 }}>
+        <div className="stock-analysis-note">
+          <span>Competência: <strong>{formatCompetenceId(preview.competence)}</strong></span>
+          <span>Status: <strong>ABERTA</strong></span>
+          <span>Build atual: <strong>{preview.activeBuildIdentity?.motorBuildId ?? '—'}</strong></span>
+          <span>Auditoria: <strong>{preview.auditStatus}</strong></span>
+          <span>Blockers: <strong>{preview.blockers.length}</strong></span>
+          <span>Warnings: <strong>{preview.warnings.length}</strong></span>
+          <span>Última revisão: <strong>{previewReviewedAt ? dateTime.format(new Date(previewReviewedAt)) : '—'}</strong></span>
+        </div>
+        {preview.partial ? <PanelAlert tone="error">A Auditoria Global está parcial. O fechamento é bloqueado até que a leitura completa seja possível.</PanelAlert> : null}
+        {preview.blockers.length ? <PanelAlert tone="error"><strong>Fechamento bloqueado.</strong> Resolva os bloqueios em Administração → Auditoria.<ul>{preview.blockers.slice(0, 8).map(item => <li key={item.id}>{item.code} · {item.domain} · {item.message} ({item.count})</li>)}</ul></PanelAlert> : null}
+        {preview.warnings.length ? <div>
+          <PanelAlert tone="warning"><strong>Existem {preview.warnings.length} pontos de atenção.</strong> Eles não são blockers, mas precisam ser revisados e reconhecidos explicitamente.</PanelAlert>
+          <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Código</th><th>Domínio</th><th>Mensagem</th><th>Qtd.</th></tr></thead><tbody>{preview.warnings.map(item => <tr key={item.id}><td>{item.code}</td><td>{item.domain}</td><td>{item.message}</td><td>{item.count}</td></tr>)}</tbody></table></div>
+          <label className="panel-field" style={{ marginTop: 12 }}><span><input type="checkbox" checked={warningsReviewed} onChange={event => setWarningsReviewed(event.target.checked)} /> Revisei os pontos de atenção acima.</span></label>
+          <label className="panel-field" style={{ marginTop: 12 }}><span className="panel-mini-label">Observação do fechamento — obrigatória com warnings</span><textarea value={closingNote} onChange={event => setClosingNote(event.target.value)} rows={3} placeholder="Registre a ciência e o contexto para o fechamento." /></label>
+        </div> : <PanelAlert tone="success">A Auditoria não possui blockers nem warnings. O fechamento pode prosseguir sem observação obrigatória.</PanelAlert>}
+        <div className="panel-inline-actions"><button type="button" className="panel-button" disabled={!closeEnabled} onClick={() => void closeCurrent()}>FECHAR COMPETÊNCIA</button><span>Antes de persistir, a Auditoria será executada novamente e o hash precisa continuar idêntico.</span></div>
+      </div> : null}
+    </PanelCard>
+
+    <PanelCard>
+      <PanelSectionHeader eyebrow="CADASTRO" title="Cadastrar competência" description="Criar e tornar atual são ações distintas. Toda nova competência nasce ABERTA." />
       <div className="panel-inline-actions">
         <label className="panel-field" style={{ maxWidth: 260 }}><span className="panel-mini-label">Competência</span><input type="month" value={month} onChange={event => setMonth(event.target.value)} /></label>
-        <button type="button" className="panel-button" disabled={!isValidCompetenceId(month)} onClick={create}>Criar competência</button>
+        <button type="button" className="panel-button" disabled={!isValidCompetenceId(month) || closingLifecycle.busy} onClick={create}>Criar competência</button>
       </div>
     </PanelCard>
 
     <PanelCard>
-      <PanelSectionHeader eyebrow="REGISTRY" title="Competências registradas" description="Pode haver mais de uma competência ABERTA, mas apenas uma corrente. Esta fase não fecha nem reabre meses." />
-      <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Competência</th><th>Status</th><th>Corrente</th><th>Origem</th><th>Criada em</th><th>Atualizada em</th><th>Ação</th></tr></thead><tbody>
-        {(state?.records ?? []).map(record => <tr key={record.id}><td><strong>{formatCompetenceId(record.id)}</strong></td><td>{record.status === 'OPEN' ? 'ABERTA' : 'FECHADA'}</td><td>{official === record.id ? 'SIM' : 'NÃO'}</td><td>{originLabel(record.origin)}</td><td>{dateTime.format(new Date(record.createdAt))}</td><td>{dateTime.format(new Date(record.updatedAt))}</td><td>{record.status === 'OPEN' && official !== record.id ? <button type="button" className="panel-secondary-button" onClick={() => makeCurrent(record.id)}>Tornar atual</button> : '—'}</td></tr>)}
+      <PanelSectionHeader eyebrow="REGISTRY" title="Competências registradas" description="Pode haver mais de uma competência ABERTA, mas apenas uma corrente. Fechamentos possuem evidência imutável por revisão." />
+      <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Competência</th><th>Status</th><th>Corrente</th><th>Fechamento</th><th>Origem</th><th>Atualizada em</th><th>Ações</th></tr></thead><tbody>
+        {(state?.records ?? []).map(record => {
+          const close = latestCloseEvent(closingState, record.id);
+          const activeClose = activeCloseEvent(closingState, record.id);
+          const legacyClosed = record.status === 'CLOSED' && !activeClose;
+          return <tr key={record.id}><td><strong>{formatCompetenceId(record.id)}</strong></td><td>{record.status === 'OPEN' ? 'ABERTA' : 'FECHADA'}</td><td>{official === record.id ? 'SIM' : 'NÃO'}</td><td>{record.status === 'CLOSED' ? activeClose ? `r${activeClose.revision} · ${dateTime.format(new Date(activeClose.occurredAt))} · ${activeClose.evidence.activeBuildIdentity.motorBuildId.slice(0, 16)}` : 'FECHADA — LEGADO SEM EVIDÊNCIA' : close ? `Último ciclo r${close.revision}` : '—'}</td><td>{originLabel(record.origin)}</td><td>{dateTime.format(new Date(record.updatedAt))}</td><td><div className="panel-inline-actions">
+            {record.status === 'OPEN' && official !== record.id ? <button type="button" className="panel-secondary-button" disabled={closingLifecycle.busy} onClick={() => makeCurrent(record.id)}>Tornar atual</button> : null}
+            {record.status === 'CLOSED' ? <button type="button" className="panel-secondary-button" onClick={() => { setDetailCompetence(record.id); setReopenReason(''); }}>VER FECHAMENTO</button> : null}
+            {record.status === 'CLOSED' && activeClose ? <button type="button" className="panel-secondary-button" onClick={() => void exportClosing(activeClose)}>EXPORTAR JSON</button> : null}
+            {record.status === 'CLOSED' && activeClose ? <button type="button" className="panel-secondary-button" disabled={closingLifecycle.busy} onClick={() => { setDetailCompetence(record.id); setReopenReason(''); }}>REABRIR</button> : null}
+            {legacyClosed ? <span title="MONTHLY_CLOSE_EVIDENCE_MISSING">Reabertura bloqueada: sem evidência de fechamento</span> : null}
+            {record.status === 'OPEN' && official === record.id ? 'Corrente' : null}
+          </div></td></tr>;
+        })}
         {!state?.records.length ? <tr><td colSpan={7}>Nenhuma competência registrada.</td></tr> : null}
       </tbody></table></div>
     </PanelCard>
+
+    {detailCompetence ? <PanelCard>
+      <PanelSectionHeader eyebrow="DETALHE DO FECHAMENTO" title={formatCompetenceId(detailCompetence)} description="O certificado registra evidência administrativa mínima; não contém M1–M4, Registry ou TargetState raw." action={<button type="button" className="panel-secondary-button" onClick={() => { setDetailCompetence(null); setReopenReason(''); }}>Fechar detalhe</button>} />
+      {selectedClose ? <div className="panel-stack" style={{ gap: 10 }}>
+        <div className="stock-analysis-note">
+          <span>Revision: <strong>r{selectedClose.revision}</strong></span>
+          <span>Fechado em: <strong>{dateTime.format(new Date(selectedClose.occurredAt))}</strong></span>
+          <span>Build: <strong>{selectedClose.evidence.activeBuildIdentity.motorBuildId}</strong></span>
+          <span>Engine: <strong>{selectedClose.evidence.activeBuildIdentity.engineVersion}</strong></span>
+          <span>Canonical input: <strong>{selectedClose.evidence.activeBuildIdentity.canonicalInputHash.slice(0, 16)}…</strong></span>
+          <span>Auditoria: <strong>{selectedClose.evidence.auditOverallStatus}</strong></span>
+          <span>Audit hash: <strong>{selectedClose.evidence.auditSemanticHash.slice(0, 16)}…</strong></span>
+          <span>Warnings reconhecidos: <strong>{selectedClose.evidence.warningIds.length}</strong></span>
+        </div>
+        <div><strong>Resumo:</strong> {selectedClose.evidence.auditSummary.blockers} blockers · {selectedClose.evidence.auditSummary.warnings} warnings · {selectedClose.evidence.auditSummary.info} info · {selectedClose.evidence.auditSummary.pass} pass</div>
+        <div><strong>Observação:</strong> {selectedClose.note ?? '—'}</div>
+        {selectedClose.evidence.warnings.length ? <div><strong>Warnings reconhecidos:</strong><ul>{selectedClose.evidence.warnings.map(warning => <li key={warning.id}>{warning.code} · {warning.domain} · {warning.message} ({warning.count})</li>)}</ul></div> : null}
+        {selectedReopen ? <PanelAlert tone="warning">Reaberto em {dateTime.format(new Date(selectedReopen.occurredAt))}. Motivo: {selectedReopen.reason}</PanelAlert> : null}
+        <div className="panel-inline-actions"><button type="button" className="panel-secondary-button" onClick={() => void exportClosing(selectedClose)}>EXPORTAR JSON</button></div>
+        {(state?.records.find(item => item.id === detailCompetence)?.status === 'CLOSED') && activeCloseEvent(closingState, detailCompetence) ? <div>
+          <label className="panel-field"><span className="panel-mini-label">Motivo da reabertura — obrigatório</span><textarea value={reopenReason} onChange={event => setReopenReason(event.target.value)} rows={3} /></label>
+          <button type="button" className="panel-button" disabled={!reopenReason.trim() || closingLifecycle.busy} onClick={() => void reopen(detailCompetence)}>CONFIRMAR REABERTURA</button>
+        </div> : null}
+      </div> : <PanelAlert tone="error">MONTHLY_CLOSE_EVIDENCE_MISSING — Esta competência foi fechada antes do histórico de fechamento. A Fase 7 não inventa um CLOSE retroativo e não permite reabertura sem evidência.</PanelAlert>}
+    </PanelCard> : null}
 
     <PanelCard>
       <PanelSectionHeader eyebrow="EVIDÊNCIAS DO BUILD" title="Oficial × fontes observadas" description="Divergências são exibidas; nenhuma evidência é corrigida ou reinterpretada automaticamente." />
