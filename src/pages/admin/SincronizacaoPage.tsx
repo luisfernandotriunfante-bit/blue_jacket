@@ -6,6 +6,8 @@ import {
   clearIncomingDeviceSyncCode,
   connectDeviceSyncWorkspace,
   createDeviceSyncWorkspace,
+  deviceSyncBackupStatus,
+  deviceSyncHasNewerRemoteSnapshot,
   deviceSyncIdentity,
   deviceSyncLink,
   incomingDeviceSyncCode,
@@ -22,15 +24,22 @@ import {
 import { useData } from '../../store/DataContext';
 import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../../ui/pattern/PanelVisual';
 
+type BackupStatus = Awaited<ReturnType<typeof deviceSyncBackupStatus>>;
+
 export function syncErrorMessage(reason: unknown) {
   const code = String(reason);
   if (code.includes('HARD_MISSING:')) return 'Ainda faltam fontes físicas sempre obrigatórias neste aparelho. Complete as 15 bases hard-required antes de continuar.';
   if (code.includes('REPLACEMENT_REQUIRED:')) return 'Uma fonte substituível está ausente sem certificado válido para o escopo atual. Reenvie a fonte ou ative uma substituição certificada.';
   if (code.includes('REPLACEMENT_REVIEW_REQUIRED:')) return 'Uma nova versão física foi detectada para uma fonte com substituição ativa. Reconciliar/recertificar ou revogar explicitamente antes de continuar.';
   if (code.includes('REPLACEMENT_COVERAGE_BROKEN:')) return 'A cobertura interna de uma substituição certificada foi quebrada. O build está bloqueado até a autoridade administrativa voltar a cobrir as chaves certificadas.';
+  if (code.includes('SYNC_REMOTE_NEWER') || code.includes('SYNC_REMOTE_CHANGED')) return 'Existe uma revisão mais nova enviada por outro aparelho. Restaure-a antes de enviar alterações deste dispositivo.';
+  if (code.includes('SYNC_REMOTE_BASELINE_REQUIRED')) return 'Este aparelho ainda não possui a revisão-base do backup remoto. Restaure a cópia remota antes de enviar alterações.';
+  if (code.includes('SYNC_HISTORY_COLLISION')) return 'O histórico canônico local e o backup remoto divergem para o mesmo build. A sincronização foi bloqueada para evitar sobrescrita.';
+  if (code.includes('SYNC_REMOTE_HISTORY_OBJECT_MISSING')) return 'O manifesto remoto referencia um arquivo histórico que não está mais disponível no backup. Nenhuma alteração local foi aplicada.';
+  if (code.includes('SYNC_HISTORY_LOCAL_CORRUPT') || code.includes('CANONICAL_HISTORY_CORRUPT')) return 'Um arquivo do Histórico Canônico local não passou na validação de integridade. O envio foi bloqueado.';
   if (code.includes('SYNC_SOURCES_INCOMPLETE')) return 'Ainda faltam fontes válidas neste aparelho. Complete as fontes obrigatórias para o contexto atual antes de ativar a sincronização.';
   if (code.includes('SYNC_SOURCE_SNAPSHOT_OUTDATED')) return 'A cópia remota foi gerada com uma regra antiga. Atualize essa base no aparelho de origem e sincronize novamente.';
-  if (code.includes('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE')) return 'As fontes, os cadastros administrativos, as metas RCA, os certificados ou o build ativo mudaram durante a captura. Nenhuma cópia foi enviada.';
+  if (code.includes('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE')) return 'As fontes, os cadastros administrativos, as metas RCA, os certificados, o histórico ou o build ativo mudaram durante a captura. Nenhuma cópia atual foi enviada.';
   if (code.includes('SYNC_SNAPSHOT_MISSING')) return 'Ainda não existe uma cópia sincronizada para restaurar.';
   if (code.includes('SYNC_PAYLOAD_INVALID')) return 'A cópia recebida não passou na validação de integridade e não foi aplicada.';
   if (code.includes('BUNDLE_LOCAL_REGISTRY_IDENTITY_REQUIRED')) return 'Não foi possível confirmar a identidade dos cadastros administrativos locais antes da recuperação do bundle.';
@@ -55,8 +64,27 @@ export function SincronizacaoPage() {
   const [operationState, setOperationState] = useState(() => systemDataOperationCoordinator.getState());
   const [syncCode, setSyncCode] = useState('');
   const [syncNotice, setSyncNotice] = useState('');
+  const [remoteBackup, setRemoteBackup] = useState<BackupStatus | null>(null);
+  const [remoteNewer, setRemoteNewer] = useState(false);
+
+  const refreshRemoteBackup = async (identity: DeviceSyncIdentity | null) => {
+    if (!identity) {
+      setRemoteBackup(null);
+      setRemoteNewer(false);
+      return;
+    }
+    try {
+      const [backup, newer] = await Promise.all([deviceSyncBackupStatus(identity), deviceSyncHasNewerRemoteSnapshot(identity)]);
+      setRemoteBackup(backup);
+      setRemoteNewer(newer);
+    } catch {
+      setRemoteBackup(null);
+      setRemoteNewer(false);
+    }
+  };
 
   useEffect(() => systemDataOperationCoordinator.subscribe(setOperationState), []);
+  useEffect(() => { void refreshRemoteBackup(deviceSync); }, [deviceSync]);
 
   useEffect(() => {
     const incoming = incomingDeviceSyncCode();
@@ -71,8 +99,9 @@ export function SincronizacaoPage() {
           const restored = await restoreCurrentDeviceSnapshot(identity);
           if (restored) activateCanonical(restored); else deactivateCanonical();
           setDeviceSync(identity);
+          await refreshRemoteBackup(identity);
           setSyncNotice(restored
-            ? `Este aparelho foi pareado e recebeu o build ${restored.motorBuildId}.`
+            ? `Este aparelho foi pareado e recebeu o build ${restored.motorBuildId}, incluindo o histórico canônico disponível no backup.`
             : 'Este aparelho foi pareado; ainda não há build remoto para restaurar.');
         } catch (reason) {
           setError(`Não foi possível concluir o pareamento: ${syncErrorMessage(reason)}`);
@@ -123,12 +152,13 @@ export function SincronizacaoPage() {
       }
       setSyncing(true);
       setError('');
-      setSyncNotice('Criando cópia cifrada para o outro aparelho…');
+      setSyncNotice('Criando Backup v2 cifrado para o outro aparelho…');
       try {
         const identity = await createDeviceSyncWorkspace();
         const synced = await uploadCurrentDeviceSnapshot(identity);
         setDeviceSync(identity);
-        setSyncNotice(`Sincronização ativa. A cópia inicial (${synced.bytes.toLocaleString('pt-BR')} bytes cifrados) está pronta para parear o celular.`);
+        await refreshRemoteBackup(identity);
+        setSyncNotice(`Backup v2 ativo. Snapshot: ${synced.bytes.toLocaleString('pt-BR')} bytes; histórico: ${synced.historyUploaded} novo(s), ${synced.historyReused} já existente(s), ${synced.historyMissing} indisponível(is).`);
       } catch (reason) {
         setSyncNotice('');
         setError(`Não foi possível ativar a sincronização: ${syncErrorMessage(reason)}`);
@@ -144,13 +174,15 @@ export function SincronizacaoPage() {
     const result = await systemDataOperationCoordinator.run('SYNC_SEND', async () => {
       setSyncing(true);
       setError('');
-      setSyncNotice('Enviando a cópia atual deste aparelho…');
+      setSyncNotice('Enviando estado atual e histórico oficial disponível…');
       try {
         const synced = await uploadCurrentDeviceSnapshot(deviceSync);
-        setSyncNotice(`Cópia atual enviada com sucesso (${synced.bytes.toLocaleString('pt-BR')} bytes cifrados). Bases, configurações, cadastros, metas e certificados deste aparelho foram incluídos no snapshot seguro.`);
+        await refreshRemoteBackup(deviceSync);
+        setSyncNotice(`Backup v2 concluído na revisão ${synced.revision}. Snapshot: ${synced.bytes.toLocaleString('pt-BR')} bytes; archives novos: ${synced.historyUploaded}; reutilizados: ${synced.historyReused}; sem arquivo disponível: ${synced.historyMissing}.`);
       } catch (reason) {
         setSyncNotice('');
         setError(`Não foi possível enviar a cópia atual: ${syncErrorMessage(reason)}`);
+        await refreshRemoteBackup(deviceSync);
       } finally {
         setSyncing(false);
       }
@@ -166,13 +198,18 @@ export function SincronizacaoPage() {
     const result = await systemDataOperationCoordinator.run('SYNC_RESTORE', async () => {
       setSyncing(true);
       setError('');
+      setSyncNotice('Restaurando estado e histórico canônico…');
       try {
         const restored = await restoreCurrentDeviceSnapshot(deviceSync);
         if (restored) activateCanonical(restored); else deactivateCanonical();
+        const backup = await deviceSyncBackupStatus(deviceSync);
+        setRemoteBackup(backup);
+        setRemoteNewer(false);
         setSyncNotice(restored
-          ? `Build ${restored.motorBuildId} restaurado deste aparelho pareado.`
+          ? `Build ${restored.motorBuildId} restaurado. Histórico remoto disponível: ${backup.availableArchives}; ainda indisponível: ${backup.missingArchives}.`
           : 'Não existe build remoto para restaurar.');
       } catch (reason) {
+        setSyncNotice('');
         setError(`Não foi possível restaurar a cópia sincronizada: ${syncErrorMessage(reason)}`);
       } finally {
         setSyncing(false);
@@ -185,14 +222,16 @@ export function SincronizacaoPage() {
     const result = await systemDataOperationCoordinator.run('SYNC_PAIR_AND_RESTORE', async () => {
       setSyncing(true);
       setError('');
+      setSyncNotice('Restaurando estado e histórico canônico…');
       try {
         const identity = await connectDeviceSyncWorkspace(syncCode);
         const restored = await restoreCurrentDeviceSnapshot(identity);
         if (restored) activateCanonical(restored); else deactivateCanonical();
         setDeviceSync(identity);
         setSyncCode('');
+        await refreshRemoteBackup(identity);
         setSyncNotice(restored
-          ? `Aparelho pareado e build ${restored.motorBuildId} restaurado.`
+          ? `Aparelho pareado e build ${restored.motorBuildId} restaurado com o histórico disponível.`
           : 'Aparelho pareado; ainda não há build remoto para restaurar.');
       } catch (reason) {
         setError(`Não foi possível parear este aparelho: ${syncErrorMessage(reason)}`);
@@ -215,6 +254,7 @@ export function SincronizacaoPage() {
 
   const syncLink = deviceSync ? deviceSyncLink(deviceSync) : '';
   const mutableOperationBusy = syncing || operationState.busy;
+  const remoteProtocol = remoteBackup?.protocolVersion === 2 ? 'v2' : 'v1';
 
   return <PanelPage title="Sincronização" metricLabel="Engine" metricValue="v21">
     {activeCanonical
@@ -223,12 +263,22 @@ export function SincronizacaoPage() {
     {operationState.busy ? <PanelAlert tone="info">{systemDataOperationBusyMessage(operationState.owner)}</PanelAlert> : null}
 
     <PanelCard>
-      <PanelSectionHeader eyebrow="SINCRONIZAÇÃO ENTRE APARELHOS" title="Computador e celular" description="A cópia é cifrada antes do envio. Abra o link de pareamento uma única vez no outro aparelho; as próximas atualizações continuam usando o mesmo workspace seguro." />
+      <PanelSectionHeader eyebrow="SYNC / BACKUP V2" title="Computador e celular" description="O snapshot operacional continua cifrado com AES-GCM; o Histórico Canônico é enviado em objetos incrementais separados e imutáveis. Pareamento BJ1 permanece o mesmo." />
       {deviceSync ? <>
         <PanelAlert tone="success">Este aparelho já está pareado. Compartilhe o link abaixo somente com o seu outro aparelho.</PanelAlert>
+        {remoteBackup ? <div className="panel-grid panel-grid-4" style={{ marginBottom: 12 }}>
+          <div><strong>Protocolo remoto</strong><br />{remoteProtocol}</div>
+          <div><strong>Revisão remota</strong><br />{remoteBackup.revision}</div>
+          <div><strong>Snapshot atual</strong><br />{remoteBackup.bytes.toLocaleString('pt-BR')} bytes</div>
+          <div><strong>Histórico oficial</strong><br />{remoteBackup.availableArchives}/{remoteBackup.officialArchives} disponível</div>
+        </div> : null}
+        {remoteBackup?.protocolVersion === 1 && remoteBackup.bytes > 0 ? <PanelAlert tone="info">Cópia remota legada v1. Ela será atualizada para Backup v2 no próximo envio concluído com sucesso.</PanelAlert> : null}
+        {remoteBackup?.protocolVersion === 2 && remoteBackup.missingArchives === 0 ? <PanelAlert tone="success">Backup atual e histórico estão completos.</PanelAlert> : null}
+        {remoteBackup?.protocolVersion === 2 && remoteBackup.missingArchives > 0 ? <PanelAlert tone="info">Estado operacional protegido, mas existem {remoteBackup.missingArchives} fechamento(s) antigo(s) sem arquivo canônico disponível.</PanelAlert> : null}
+        {remoteNewer ? <PanelAlert tone="error">Existe uma revisão mais nova enviada por outro aparelho. Restaure-a antes de enviar alterações deste dispositivo.</PanelAlert> : null}
         <textarea className="panel-input" readOnly value={syncLink} aria-label="Link de pareamento seguro" style={{ width: '100%', minHeight: 58, marginBottom: 8 }} />
         <button className="panel-button" onClick={() => void copyPairingLink()}>Copiar link de pareamento</button>{' '}
-        <button className="panel-button" disabled={mutableOperationBusy || !activeCanonical} onClick={() => void sendCurrentDeviceSnapshot()}>{syncing ? 'Sincronizando…' : 'ENVIAR CÓPIA ATUAL'}</button>{' '}
+        <button className="panel-button" disabled={mutableOperationBusy || !activeCanonical || remoteNewer} onClick={() => void sendCurrentDeviceSnapshot()}>{syncing ? 'Sincronizando…' : 'ENVIAR CÓPIA ATUAL'}</button>{' '}
         <button className="panel-button" disabled={mutableOperationBusy} onClick={() => void restoreFromDeviceSync()}>{syncing ? 'Sincronizando…' : 'Restaurar cópia sincronizada'}</button>
       </> : <>
         <button className="panel-button" disabled={mutableOperationBusy || !activeCanonical} onClick={() => void startDeviceSync()}>{syncing ? 'Preparando…' : 'ATIVAR SINCRONIZAÇÃO NESTE APARELHO'}</button>
