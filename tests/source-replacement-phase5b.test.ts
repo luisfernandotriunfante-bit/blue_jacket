@@ -1,0 +1,341 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import * as XLSX from 'xlsx';
+import { emptyAdminRegistryState, type AdminRegistryState } from '../src/canonical/adminRegistry.ts';
+import { adminRegistryCanonicalAuthorityTestHelpers } from '../src/canonical/adminRegistryCanonicalAuthority.ts';
+import { canonicalAdminRegistryHash } from '../src/canonical/adminRegistryIdentity.ts';
+import { recoverTechnicalBundle } from '../src/canonical/bundleRecovery.ts';
+import { cloudSyncTestHelpers, type CloudRestoreDependencies, type CloudSnapshot, type CloudUploadDependencies, type DeviceSyncIdentity } from '../src/canonical/cloudSync.ts';
+import { canonicalEngineNeedsRebuild, rebuildForCanonicalEngine } from '../src/canonical/engineMigration.ts';
+import { createExcelWorkbook, deterministicSourceReplacements, exportPayload } from '../src/canonical/exporters.ts';
+import { createRcaResolver } from '../src/canonical/rcaResolver.ts';
+import type { ActiveCanonicalBundle } from '../src/canonical/runtime.ts';
+import {
+  CANONICAL_ENGINE_VERSION,
+  detectSourceForFileName,
+  validateSourceStorageSnapshot,
+  type SourceStorageSnapshot,
+} from '../src/canonical/sourceImport.ts';
+import {
+  HARD_REQUIRED_SOURCE_IDS,
+  REPLACEABLE_SOURCE_IDS,
+  SOURCE_CONTRACT_VERSION,
+  SUPPORTED_SOURCE_IDS,
+  sourceContractIntegrity,
+} from '../src/canonical/sourceContract.ts';
+import { proveSourceReplacementEquivalence } from '../src/canonical/sourceReplacementAuthority.ts';
+import { certifySourceReplacementV21 } from '../src/canonical/sourceReplacementCertification.ts';
+import { canonicalInputHashV3, stagingManifestHashV2, stagingManifestProjectionV2 } from '../src/canonical/sourceReplacementIdentity.ts';
+import { assertEffectiveSourceSetReady, resolveEffectiveSourceSet } from '../src/canonical/sourceReplacementRuntime.ts';
+import {
+  EMPTY_SOURCE_REPLACEMENT_PROOF,
+  InMemorySourceReplacementStorage,
+  SourceReplacementRepository,
+  coverageHashFor,
+  emptySourceReplacementState,
+  sourceReplacementProofHash,
+  sourceReplacementsFromCertificates,
+  validateSourceReplacementCertificate,
+  validateSourceReplacementState,
+  withCertificate,
+  type SourceReplacementCertificate,
+  type SourceReplacementState,
+} from '../src/canonical/sourceReplacementState.ts';
+import { createSystemDataOperationCoordinator } from '../src/canonical/systemDataOperationCoordinator.ts';
+import { materializeEffectiveTargetFacts } from '../src/canonical/targetAuthority.ts';
+import { rcaTargetRegistryHash } from '../src/canonical/targetIdentity.ts';
+import type { TargetState } from '../src/canonical/targetStore.ts';
+import type { CanonicalList, ParsedSource, RawTyped } from '../src/canonical/types.ts';
+import {
+  activateCertifiedSourceReplacement,
+  recertifySourceReplacement,
+  revokeCertifiedSourceReplacement,
+  sourceReplacementLifecycle,
+  type SourceReplacementFlowDependencies,
+} from '../src/pages/admin/sourceReplacementFlow.ts';
+import {
+  V20_ENGINE,
+  V21_ENGINE,
+  activeV20Fixture,
+  activeV21Fixture,
+  certificateFixture,
+  emptyReplacementStateFixture,
+  sha256Fixture,
+  sourceStorageV1Fixture,
+  sourceStorageV2Fixture,
+  sourceStorageV2HardOnlyFixture,
+  storedStageFixture,
+} from './phase5b-fixtures.ts';
+
+const NOW = '2026-09-06T20:00:00.000Z';
+const LATER = '2026-09-06T21:00:00.000Z';
+const RCA_SOURCE = 'NOVOS RCAS.xlsx';
+const LAUNCH_SOURCE = 'lançamentos.xlsx';
+const TOP_SOURCE = "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx";
+const TARGET_SOURCE = 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx';
+const CNPJ = '12345678000190';
+const EAN = '7891234567890';
+const identity: DeviceSyncIdentity = { workspaceId: '11111111-1111-4111-8111-111111111111', secret: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' };
+const settings = { networkTargetByCompetence: {}, networkAllocationByCompetence: {}, sellOutTargetByCompetence: {}, positivityTargetByCompetence: {}, legacySellOutTarget: null, legacyPositivityTarget: null, inboundForecastByInvoice: {} };
+const sourceText = (relative: string) => readFileSync(new URL(relative, import.meta.url), 'utf8');
+const cell = (value: unknown): RawTyped => ({ raw: value, typed: value });
+const row = (values: Record<string, unknown>, sourceRow = 2) => Object.fromEntries([...Object.entries(values).map(([key, value]) => [key, cell(value)]), ['__source_row', cell(sourceRow)]]) as ParsedSource['rows'][number];
+const parsed = (source: string, rows: ParsedSource['rows'] = [], fileName = source): ParsedSource => ({ source, fileName, sheet: 'test', rows, audits: [] });
+const list = (id: CanonicalList['id'], records: Record<string, unknown>[] = []): CanonicalList => ({ id, records, sources: [], generatedAt: NOW, competence: '2026-08', snapshotDate: '2026-08-31', warnings: [], errors: [] });
+
+function registryFixture(): AdminRegistryState {
+  const state = emptyAdminRegistryState(NOW);
+  state.rcas = [{ id: 'RCA-10', currentCode: '10', legacyCode: '9', name: 'RCA Teste', coordinatorCode: '1', coordinatorName: 'Supervisor', role: 'PRINCIPAL', active: true, validFromCompetence: null, validToCompetence: null, origin: 'SOURCE_SEED', sourceRow: 2, note: null, createdAt: NOW, updatedAt: NOW }];
+  state.launches = [{ id: 'LAUNCH-100', winthorCode: '100', ean: EAN, description: 'Produto Lançamento', type: 'NOVO', status: 'ATIVO', active: true, validFromCompetence: null, validToCompetence: null, origin: 'SOURCE_SEED', sourceRow: 2, note: null, createdAt: NOW, updatedAt: NOW }];
+  state.topRetailers = [{ id: 'TOP-08', competence: '2026-08', customerCnpj: CNPJ, network: 'Rede A', banner: 'Bandeira A', managerCnpj: CNPJ, groupCode: 'G1', category: 'A', topTarget: 1000, active: true, origin: 'SOURCE_SEED', sourceRow: 2, note: null, createdAt: NOW, updatedAt: NOW }];
+  return state;
+}
+
+function targetFixture(): TargetState {
+  return {
+    format: 'blue-jacket-target-state/v1', schemaVersion: 'v1', createdAt: NOW, updatedAt: NOW,
+    records: [{ competence: '2026-08', sellOutTarget: 5000, positivityTarget: 50, networkTarget: 3000, createdAt: NOW, updatedAt: NOW, rcaTargets: [{ id: 'TARGET-08-10', competence: '2026-08', rcaCanonicalId: 'RCA:10', sourceRcaCode: '9', salesTarget: 900, positivityTarget: 9, active: true, origin: 'SOURCE_SEED', createdAt: NOW, updatedAt: NOW, note: null }] }],
+  };
+}
+
+function fullStages(competence = '2026-08', extraLaunch = false): ParsedSource[] {
+  const specific = new Map<string, ParsedSource>([
+    [RCA_SOURCE, parsed(RCA_SOURCE, [row({ current_rca_code_principal: '10', legacy_rca_code_principal: '9', rca_name_raw_principal: 'RCA Teste', coordinator_code_principal: '1', coordinator_name_principal: 'Supervisor' })])],
+    [LAUNCH_SOURCE, parsed(LAUNCH_SOURCE, [row({ launch_winthor_code: '100', launch_ean: EAN, launch_description: 'Produto Lançamento', launch_type: 'NOVO', launch_status: 'ATIVO' }), ...(extraLaunch ? [row({ launch_winthor_code: '101', launch_ean: '7891234567883', launch_description: 'Novo B', launch_type: 'NOVO', launch_status: 'ATIVO' }, 3)] : [])])],
+    [TOP_SOURCE, parsed(TOP_SOURCE, [row({ cnpj: CNPJ, store_name: 'Loja A', top_network: 'Rede A', banner: 'Bandeira A', manager_cnpj: CNPJ, group_code: 'G1', top_category: 'A', top_target: 1000 })], TOP_SOURCE)],
+    [TARGET_SOURCE, parsed(TARGET_SOURCE, [row({ pasta_type: 'MCD', industry_name: 'COLGATE', target_rca_code: '9', target_rca_name: 'RCA Teste', sales_target_pna: 900, positivity_target: 9 })], TARGET_SOURCE)],
+    ['Nova Base de Premissas - Q3.xlsx', parsed('Nova Base de Premissas - Q3.xlsx', [row({ customer_document_declared: CNPJ, customer_name_premise: 'Loja A', state: 'MS', environment: 'VIZ', profile: 'A' })])],
+    ['relatorio_carteira_clientes.xls', parsed('relatorio_carteira_clientes.xls', [row({ customer_cnpj: CNPJ, customer_name: 'Loja A', city: 'Campo Grande', representative_code: '10', winthor_customer_code: '500', trade_name: 'Loja A' })])],
+    ['vendas-8022.xls', parsed('vendas-8022.xls', [row({ movement_date: `${competence}-10`, customer_document: CNPJ, customer_winthor_code: '500', customer_name: 'Loja A', seller_code: '10', seller_name: 'RCA Teste', winthor_product_code: '100', manufacturer_code: '500', ean_product: EAN, product_description: 'Produto', order_winthor: '123456', order_rca: '1', invoice_number: '900', order_status: 'FATURADO', block_status: '', sale_type: 'VENDA', order_origin: 'PALM', units_sold: 10, cases_sold: 1, gross_weight_kg: 1, net_weight_kg: 1, sale_value: 500 })])],
+    ['379 26.txt', parsed('379 26.txt', [row({ movement_date: `${competence}-05`, invoice_number: '1', invoice_series: '1', legacy_product_code: '500', customer_document: CNPJ, legacy_rca_code: '9', operation_code: '51201', cfop: '5403', quantity_raw: 1, value_raw: 50, discount_raw: 0, net_weight: 1, gross_weight: 1, movement_class: 'SALE' })])],
+    ['cadastro-itens-286.xls', parsed('cadastro-itens-286.xls', [row({ winthor_code: '100', internal_ean: EAN, manufacturer_code: '500', description_286: 'Produto', pack_286: 'CX' })])],
+    ['posicao-estoque-105.xls', parsed('posicao-estoque-105.xls', [row({ winthor_code: '100', physical_stock_units: 50, unit_cost_real: 2, sale_price_105: 3, pack_105: 'CX' })])],
+  ]);
+  return SUPPORTED_SOURCE_IDS.map(source => specific.get(source) ?? parsed(source));
+}
+
+function storedStages(stages = fullStages()) {
+  return stages.map(stage => storedStageFixture(stage.source, { parsed: stage }));
+}
+
+function omitStored(stages: ReturnType<typeof storedStages>, sourceId: string) { return stages.filter(stage => stage.source !== sourceId); }
+function replacementState(certificate: SourceReplacementCertificate) { return withCertificate(null, certificate); }
+
+async function certify(sourceId: string, scope: 'GLOBAL' | `COMPETENCE:${string}`, stages = fullStages(), registry = registryFixture(), target = targetFixture()) {
+  const stored = storedStages(stages);
+  const physicalStage = stored.find(stage => stage.source === sourceId) ?? null;
+  return certifySourceReplacementV21({ sourceId, scope, physicalStage, allStages: stages, adminRegistryState: registry, targetState: target, now: NOW });
+}
+
+async function replacementIdentityFor(sources: SourceStorageSnapshot, state: SourceReplacementState | null, registry: AdminRegistryState | null, target: TargetState | null) {
+  const effective = assertEffectiveSourceSetReady(resolveEffectiveSourceSet({ physicalStages: sources.staging, replacementState: state, adminRegistryState: registry, targetState: target }));
+  const proofHash = await sourceReplacementProofHash(effective.certificates);
+  return { proofHash, replacements: sourceReplacementsFromCertificates(effective.certificates), replacedSourceIds: effective.omitted };
+}
+
+async function activeForSnapshot(sources: SourceStorageSnapshot, state: SourceReplacementState | null, registry: AdminRegistryState | null, target: TargetState | null, motorBuildId = 'BUILD-CLOUD') {
+  const replacement = await replacementIdentityFor(sources, state, registry, target);
+  const sourceHash = await stagingManifestHashV2(sources.staging, replacement.replacedSourceIds);
+  const adminHash = await canonicalAdminRegistryHash(registry);
+  const targetHash = await rcaTargetRegistryHash(target);
+  return activeV21Fixture({ motorBuildId, stagingManifestHash: sourceHash, adminRegistryHash: adminHash, rcaTargetRegistryHash: targetHash, sourceReplacementProofHash: replacement.proofHash, sourceReplacements: replacement.replacements });
+}
+
+function prepared(active: ActiveCanonicalBundle) {
+  return {
+    motorBuildId: active.motorBuildId,
+    stagingManifestHash: active.stagingManifestHash,
+    adminRegistryHash: active.adminRegistryHash,
+    rcaTargetRegistryHash: active.rcaTargetRegistryHash,
+    sourceContractVersion: active.sourceContractVersion,
+    sourceReplacementProofHash: active.sourceReplacementProofHash,
+    sourceReplacements: active.sourceReplacements,
+    canonicalInputHash: active.canonicalInputHash,
+    schemaVersion: active.schemaVersion,
+    engineVersion: active.engineVersion,
+    rowCounts: active.rowCounts,
+    active,
+    bytes: new Uint8Array(),
+    manifest: { bundleFormat: 'blue-jacket-canonical-bundle/v1', motorBuildId: active.motorBuildId, stagingManifestHash: active.stagingManifestHash, adminRegistryHash: active.adminRegistryHash, rcaTargetRegistryHash: active.rcaTargetRegistryHash, sourceContractVersion: active.sourceContractVersion, sourceReplacementProofHash: active.sourceReplacementProofHash, sourceReplacements: active.sourceReplacements, canonicalInputHash: active.canonicalInputHash, schemaVersion: active.schemaVersion, engineVersion: active.engineVersion, rowCounts: active.rowCounts, files: {}, createdAt: active.approvedAt },
+  } as any;
+}
+
+function emptyList(id: CanonicalList['id']) { return list(id, []); }
+
+async function flowHarness(input: {
+  stages?: ParsedSource[];
+  stored?: ReturnType<typeof storedStages>;
+  registry?: AdminRegistryState;
+  target?: TargetState;
+  initialState?: SourceReplacementState | null;
+  initialActive?: ActiveCanonicalBundle;
+  paired?: boolean;
+  syncFails?: boolean;
+  failBuildAt?: number;
+}) {
+  const parsedStages = input.stages ?? fullStages();
+  const stored = input.stored ?? storedStages(parsedStages);
+  const registry = input.registry ?? registryFixture();
+  const target = input.target ?? targetFixture();
+  let state = input.initialState ?? null;
+  let active: ActiveCanonicalBundle | null = input.initialActive ?? await activeV21Fixture({ motorBuildId: 'BUILD-OLD' });
+  let buildCount = 0;
+  const buildStates: Array<SourceReplacementState | null> = [];
+  const activated: string[] = [];
+  const deps: Partial<SourceReplacementFlowDependencies> = {
+    loadStages: async () => stored,
+    loadRegistry: async () => registry,
+    loadTarget: () => target,
+    loadReplacement: () => state,
+    replaceReplacement: next => { state = next; return state; },
+    getActive: () => active,
+    build: async (_progress, _registry, _target, replacement) => {
+      buildCount += 1;
+      buildStates.push(replacement ? structuredClone(replacement) : null);
+      if (input.failBuildAt === buildCount) throw new Error(`FLOW_BUILD_FAIL_${buildCount}`);
+      const certificates = replacement?.certificates ?? [];
+      const proofHash = await sourceReplacementProofHash(certificates);
+      return activeV21Fixture({ motorBuildId: `BUILD-${buildCount}-${proofHash}`, sourceReplacementProofHash: proofHash, sourceReplacements: sourceReplacementsFromCertificates(certificates) });
+    },
+    loadList: async (_buildId, id) => emptyList(id),
+    activate: next => { active = next; activated.push(next.motorBuildId); },
+    deactivate: () => { active = null; },
+    isPaired: () => Boolean(input.paired),
+    sync: async () => { if (input.syncFails) throw new Error('FLOW_SYNC_FAIL'); return undefined; },
+    now: () => LATER,
+  };
+  return { deps, read: () => ({ state, active, buildCount, buildStates, activated, stored, registry, target }) };
+}
+
+// E1–E5 — RCA residual
+
+test('E1 — RCA resolvido remove somente RCA_UNRESOLVED', () => assert.equal(adminRegistryCanonicalAuthorityTestHelpers.removeResolvedRcaResidualAudit('RCA_UNRESOLVED'), null));
+test('E2 — RCA realmente unresolved mantém RCA_UNRESOLVED', () => { const r = createRcaResolver([], emptyAdminRegistryState(NOW)).resolveLegacy('999'); assert.equal(r.auditCode, 'RCA_UNRESOLVED'); });
+test('E3 — RCA ambiguous mantém audit de ambiguidade', () => { const state = registryFixture(); state.rcas.push({ ...state.rcas[0], id: 'RCA-20', currentCode: '20', name: 'Outro' }); const r = createRcaResolver([], state).resolveLegacy('9'); assert.equal(r.status, 'AMBIGUOUS_RCA_CODE'); assert.equal(r.auditCode, 'AMBIGUOUS_RCA_CODE'); });
+test('E4 — resolução final remove RCA_UNRESOLVED e preserva OUTRO_AUDIT', () => assert.equal(adminRegistryCanonicalAuthorityTestHelpers.removeResolvedRcaResidualAudit('RCA_UNRESOLVED|OUTRO_AUDIT'), 'OUTRO_AUDIT'));
+test('E5 — Registry equivalente produz projeções integrais RCA iguais com/sem NOVOS RCAS', () => { const proof = proveSourceReplacementEquivalence(RCA_SOURCE, fullStages(), registryFixture(), targetFixture()); assert.equal(proof.equivalent, true); assert.deepEqual(proof.withSource, proof.withoutSource); });
+
+// E6–E10 — source contract
+
+test('E6 — SUPPORTED contém exatamente 19 fontes', () => assert.equal(SUPPORTED_SOURCE_IDS.length, 19));
+test('E7 — HARD contém exatamente 15 fontes', () => assert.equal(HARD_REQUIRED_SOURCE_IDS.length, 15));
+test('E8 — REPLACEABLE contém exatamente 4 fontes', () => assert.equal(REPLACEABLE_SOURCE_IDS.length, 4));
+test('E9 — união hard+replaceable é exatamente supported', () => { const union = [...HARD_REQUIRED_SOURCE_IDS, ...REPLACEABLE_SOURCE_IDS].sort(); assert.deepEqual(union, [...SUPPORTED_SOURCE_IDS].sort()); assert.equal(sourceContractIntegrity().unionMatchesSupported, true); });
+test('E10 — os 19 matchers continuam reconhecendo seus formatos', () => { for (const source of SUPPORTED_SOURCE_IDS) assert.equal(detectSourceForFileName(source), source, source); });
+
+// E11–E16 — replacement state
+
+test('E11 — SourceReplacementState faz round-trip integral', () => { const repo = new SourceReplacementRepository(new InMemorySourceReplacementStorage()); const state = replacementState(certificateFixture({ sourceId: LAUNCH_SOURCE })); assert.deepEqual(repo.save(state), state); assert.deepEqual(repo.load(), state); });
+test('E12 — schema inválido de ReplacementState é rejeitado', () => assert.throws(() => validateSourceReplacementState({ format: 'bad', certificates: [] }), /SOURCE_REPLACEMENT_STATE_INVALID/));
+test('E13 — certificação sem readiness/prova válida é rejeitada', async () => { const stages = fullStages(); const physical = storedStages(stages).find(stage => stage.source === LAUNCH_SOURCE)!; await assert.rejects(() => certifySourceReplacementV21({ sourceId: LAUNCH_SOURCE, scope: 'GLOBAL', physicalStage: physical, allStages: stages, adminRegistryState: emptyAdminRegistryState(NOW), targetState: targetFixture(), now: NOW }), /SOURCE_REPLACEMENT_NOT_READY|SOURCE_REPLACEMENT_EQUIVALENCE_FAILED/); });
+test('E14 — certificação sem staging físico é rejeitada', async () => await assert.rejects(() => certifySourceReplacementV21({ sourceId: LAUNCH_SOURCE, scope: 'GLOBAL', physicalStage: null, allStages: fullStages(), adminRegistryState: registryFixture(), targetState: targetFixture(), now: NOW }), /SOURCE_REPLACEMENT_PHYSICAL_STAGE_REQUIRED/));
+test('E15 — coverage keys produzem hash determinístico independente de ordem e duplicata', async () => assert.equal(await coverageHashFor(['B', 'A', 'A']), await coverageHashFor(['A', 'B'])));
+test('E16 — certifiedAt não altera proof semântico', async () => { const a = certificateFixture({ sourceId: LAUNCH_SOURCE, certifiedAt: NOW }); const b = { ...a, certifiedAt: LATER }; assert.equal(await sourceReplacementProofHash([a]), await sourceReplacementProofHash([b])); });
+
+// E17–E24 — Launch/RCA certification
+
+test('E17 — Launch READY gera certificate GLOBAL', async () => { const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); assert.equal(cert.scope, 'GLOBAL'); assert.equal(cert.replacementAuthority, 'AdminRegistry.Lançamentos'); });
+test('E18 — Launch com/sem físico é semanticamente equivalente', () => assert.equal(proveSourceReplacementEquivalence(LAUNCH_SOURCE, fullStages(), registryFixture(), targetFixture()).equivalent, true));
+test('E19 — novo physical hash sob certificate Launch vira REVIEW_REQUIRED', async () => { const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); const stored = storedStages(); const launch = stored.find(stage => stage.source === LAUNCH_SOURCE)!; launch.manifest.fileHash = sha256Fixture('launch-B'); const r = resolveEffectiveSourceSet({ physicalStages: stored, replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.equal(r.diagnostics.find(item => item.sourceId === LAUNCH_SOURCE)?.status, 'REVIEW_REQUIRED'); });
+test('E20 — REVIEW_REQUIRED não reativa físico silenciosamente', async () => { const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); const stored = storedStages(); stored.find(stage => stage.source === LAUNCH_SOURCE)!.manifest.fileHash = sha256Fixture('launch-B'); const r = resolveEffectiveSourceSet({ physicalStages: stored, replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.equal(r.omitted.includes(LAUNCH_SOURCE), false); assert.throws(() => assertEffectiveSourceSetReady(r), /REPLACEMENT_REVIEW_REQUIRED/); });
+test('E21 — RCA READY gera certificate GLOBAL', async () => { const cert = await certify(RCA_SOURCE, 'GLOBAL'); assert.equal(cert.scope, 'GLOBAL'); assert.equal(cert.replacementAuthority, 'AdminRegistry.RCAs'); });
+test('E22 — RCA M2/M3/M4 permanecem equivalentes com/sem fonte física', () => { const proof = proveSourceReplacementEquivalence(RCA_SOURCE, fullStages(), registryFixture(), targetFixture()); assert.equal(proof.equivalent, true); assert.deepEqual(proof.withSource, proof.withoutSource); });
+test('E23 — coverage quebrada bloqueia certificate ativo', async () => { const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); const registry = registryFixture(); registry.launches = []; const r = resolveEffectiveSourceSet({ physicalStages: storedStages(), replacementState: replacementState(cert), adminRegistryState: registry, targetState: targetFixture() }); assert.equal(r.diagnostics.find(item => item.sourceId === LAUNCH_SOURCE)?.status, 'COVERAGE_BROKEN'); assert.throws(() => assertEffectiveSourceSetReady(r), /REPLACEMENT_COVERAGE_BROKEN/); });
+test('E24 — ambiguidade administrativa impede novo certificado', async () => { const registry = registryFixture(); registry.launches.push({ ...registry.launches[0], id: 'LAUNCH-AMB', status: 'OUTRO', origin: 'MANUAL' }); registry.launches[0] = { ...registry.launches[0], origin: 'MANUAL' }; await assert.rejects(() => certify(LAUNCH_SOURCE, 'GLOBAL', fullStages(), registry, targetFixture()), /SOURCE_REPLACEMENT_NOT_READY|SOURCE_REPLACEMENT_CONFLICTED|SOURCE_REPLACEMENT_EQUIVALENCE_FAILED/); });
+
+// E25–E32 — Top/Target
+
+test('E25 — Top agosto certifica COMPETENCE:2026-08', async () => { const cert = await certify(TOP_SOURCE, 'COMPETENCE:2026-08'); assert.equal(cert.scope, 'COMPETENCE:2026-08'); assert.equal(cert.replacementAuthority, 'AdminRegistry.TopRetailers'); });
+test('E26 — Roteiro 08 pode ser omitido com certificate 08 válido', async () => { const cert = await certify(TOP_SOURCE, 'COMPETENCE:2026-08'); const r = assertEffectiveSourceSetReady(resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(), TOP_SOURCE), replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() })); assert.ok(r.omitted.includes(TOP_SOURCE)); });
+test('E27 — Top 09 continua não coberto por certificate 08', async () => { const cert = await certify(TOP_SOURCE, 'COMPETENCE:2026-08'); const r = resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(fullStages('2026-09')), TOP_SOURCE), replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.ok(r.replacementRequired.includes(TOP_SOURCE)); });
+test('E28 — Top não possui cross-month de 08 para 09', async () => { const cert = await certify(TOP_SOURCE, 'COMPETENCE:2026-08'); const r = resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(fullStages('2026-09')), TOP_SOURCE), replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.equal(r.diagnostics.find(item => item.sourceId === TOP_SOURCE)?.scope, 'COMPETENCE:2026-09'); assert.equal(r.diagnostics.find(item => item.sourceId === TOP_SOURCE)?.status, 'REPLACEMENT_REQUIRED'); });
+test('E29 — Bússola agosto certifica COMPETENCE:2026-08', async () => { const cert = await certify(TARGET_SOURCE, 'COMPETENCE:2026-08'); assert.equal(cert.scope, 'COMPETENCE:2026-08'); assert.equal(cert.replacementAuthority, 'TargetState.RcaTargets'); });
+test('E30 — TARGET é equivalente com/sem Bússola certificável', () => assert.equal(proveSourceReplacementEquivalence(TARGET_SOURCE, fullStages(), registryFixture(), targetFixture()).equivalent, true));
+test('E31 — Meta Indústria derivada dos TARGET permanece equivalente sem Bússola', () => { const stages = fullStages(); const a = materializeEffectiveTargetFacts(stages, targetFixture(), registryFixture()).facts.reduce((sum, fact) => sum + Number(fact.sales_target ?? 0), 0); const b = materializeEffectiveTargetFacts(stages.filter(stage => stage.source !== TARGET_SOURCE), targetFixture(), registryFixture()).facts.reduce((sum, fact) => sum + Number(fact.sales_target ?? 0), 0); assert.equal(a, b); assert.equal(a, 900); });
+test('E32 — Bússola 09 ausente continua requerida sem certificate 09', async () => { const cert = await certify(TARGET_SOURCE, 'COMPETENCE:2026-08'); const r = resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(fullStages('2026-09')), TARGET_SOURCE), replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.ok(r.replacementRequired.includes(TARGET_SOURCE)); });
+
+// E33–E34 — revoke
+
+test('E33 — revoke com físico presente reconstrói e reativa fonte física', async () => { const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); const h = await flowHarness({ initialState: replacementState(cert) }); const result = await revokeCertifiedSourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps); assert.equal(result.active.engineVersion, V21_ENGINE); assert.equal(h.read().state?.certificates.some(item => item.sourceId === LAUNCH_SOURCE), false); assert.equal(h.read().active?.motorBuildId, result.active.motorBuildId); });
+test('E34 — revoke sem físico é bloqueado e preserva estado/build anterior', async () => { const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); const old = await activeV21Fixture({ motorBuildId: 'OLD-E34' }); const h = await flowHarness({ initialState: replacementState(cert), initialActive: old, stored: omitStored(storedStages(), LAUNCH_SOURCE) }); await assert.rejects(() => revokeCertifiedSourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps), /SOURCE_REPLACEMENT_REVOKE_PHYSICAL_REQUIRED/); assert.deepEqual(h.read().state, replacementState(cert)); assert.equal(h.read().active?.motorBuildId, 'OLD-E34'); });
+
+// E35–E40 — identity
+
+test('E35 — manifest v2 é determinístico', async () => { const stages = storedStages(); assert.equal(await stagingManifestHashV2(stages, []), await stagingManifestHashV2([...stages].reverse(), [])); });
+test('E36 — PRESENT e REPLACED produzem identidades distintas', async () => { const stages = storedStages(); assert.notEqual(await stagingManifestHashV2(stages, []), await stagingManifestHashV2(stages, [LAUNCH_SOURCE])); assert.notDeepEqual(stagingManifestProjectionV2(stages, []), stagingManifestProjectionV2(stages, [LAUNCH_SOURCE])); });
+test('E37 — replacement proof é determinístico sob reordenação', async () => { const a = certificateFixture({ sourceId: RCA_SOURCE }); const b = certificateFixture({ sourceId: LAUNCH_SOURCE }); assert.equal(await sourceReplacementProofHash([a, b]), await sourceReplacementProofHash([b, a])); });
+test('E38 — certifiedAt é ignorado pela identidade semântica', async () => { const a = certificateFixture({ sourceId: RCA_SOURCE, certifiedAt: NOW }); const b = { ...a, certifiedAt: LATER }; assert.equal(await sourceReplacementProofHash([a]), await sourceReplacementProofHash([b])); });
+test('E39 — canonical input v3 muda quando proof muda', async () => assert.notEqual(await canonicalInputHashV3('S', 'A', 'T', 'P1'), await canonicalInputHashV3('S', 'A', 'T', 'P2')));
+test('E40 — mesmo replacement state semântico gera mesmo canonical input', async () => { const a = certificateFixture({ sourceId: LAUNCH_SOURCE, certifiedAt: NOW }); const b = { ...a, certifiedAt: LATER }; const p1 = await sourceReplacementProofHash([a]); const p2 = await sourceReplacementProofHash([b]); assert.equal(await canonicalInputHashV3('S', 'A', 'T', p1), await canonicalInputHashV3('S', 'A', 'T', p2)); });
+
+// E41–E42 — engine
+
+test('E41 — engine atual é exatamente browser-stage4-product-assortment-v21-source-replacement', () => assert.equal(CANONICAL_ENGINE_VERSION, 'browser-stage4-product-assortment-v21-source-replacement'));
+test('E42 — v20 é legacy e rebuilda para v21', async () => { const legacy = await activeV20Fixture({ motorBuildId: 'LEGACY-E42' }); let builds = 0; assert.equal(canonicalEngineNeedsRebuild(legacy, CANONICAL_ENGINE_VERSION), true); const rebuilt = await rebuildForCanonicalEngine(legacy, CANONICAL_ENGINE_VERSION, async () => { builds += 1; return activeV21Fixture({ motorBuildId: 'V21-E42' }); }); assert.equal(builds, 1); assert.equal(rebuilt.engineVersion, V21_ENGINE); });
+
+// E43–E49 — source import/orchestration
+
+test('E43 — Launch certificado permite ausência física', async () => { const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); const r = assertEffectiveSourceSetReady(resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(), LAUNCH_SOURCE), replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() })); assert.ok(r.omitted.includes(LAUNCH_SOURCE)); });
+test('E44 — Launch ausente sem certificate bloqueia', () => { const r = resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(), LAUNCH_SOURCE), replacementState: null, adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.throws(() => assertEffectiveSourceSetReady(r), /REPLACEMENT_REQUIRED/); });
+test('E45 — hard missing sempre rejeita', () => { const hard = HARD_REQUIRED_SOURCE_IDS[0]; const r = resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(), hard), replacementState: null, adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.throws(() => assertEffectiveSourceSetReady(r), /HARD_MISSING/); });
+test('E46 — Top certificate da competência correta permite ausência física', async () => { const cert = await certify(TOP_SOURCE, 'COMPETENCE:2026-08'); const r = assertEffectiveSourceSetReady(resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(), TOP_SOURCE), replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() })); assert.ok(r.omitted.includes(TOP_SOURCE)); });
+test('E47 — Top certificate de outra competência não permite ausência', async () => { const cert = await certify(TOP_SOURCE, 'COMPETENCE:2026-08'); const r = resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(fullStages('2026-09')), TOP_SOURCE), replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.throws(() => assertEffectiveSourceSetReady(r), /REPLACEMENT_REQUIRED/); });
+test('E48 — Target exige certificate da mesma competência', async () => { const cert = await certify(TARGET_SOURCE, 'COMPETENCE:2026-08'); const ok = assertEffectiveSourceSetReady(resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(), TARGET_SOURCE), replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() })); assert.ok(ok.omitted.includes(TARGET_SOURCE)); const wrong = resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(fullStages('2026-09')), TARGET_SOURCE), replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.throws(() => assertEffectiveSourceSetReady(wrong), /REPLACEMENT_REQUIRED/); });
+test('E49 — RCA GLOBAL certificate permite ausência física', async () => { const cert = await certify(RCA_SOURCE, 'GLOBAL'); const r = assertEffectiveSourceSetReady(resolveEffectiveSourceSet({ physicalStages: omitStored(storedStages(), RCA_SOURCE), replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() })); assert.ok(r.omitted.includes(RCA_SOURCE)); });
+
+// E50–E53 — source storage
+
+test('E50 — SourceStorage v1 real 19/19 é válido', () => { const snapshot = sourceStorageV1Fixture(); assert.equal(validateSourceStorageSnapshot(snapshot).staging.length, 19); });
+test('E51 — SourceStorage v2 com 15 hard é estruturalmente válido', () => { const snapshot = sourceStorageV2HardOnlyFixture(); assert.equal(validateSourceStorageSnapshot(snapshot).staging.length, 15); });
+test('E52 — SourceStorage v2 com hard faltante é inválido', () => { const present = HARD_REQUIRED_SOURCE_IDS.slice(1); assert.throws(() => validateSourceStorageSnapshot(sourceStorageV2Fixture({ presentSources: present })), /SYNC_SOURCES_INCOMPLETE/); });
+test('E53 — low-level v2 não infere certificate; orquestração exige prova para conditional ausente', () => { const snapshot = sourceStorageV2HardOnlyFixture(); assert.doesNotThrow(() => validateSourceStorageSnapshot(snapshot)); const r = resolveEffectiveSourceSet({ physicalStages: snapshot.staging, replacementState: null, adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.ok(r.replacementRequired.length > 0); });
+
+// E54–E60 — Cloud
+
+test('E54 — Cloud transporta SourceReplacementState explicitamente', async () => { const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); const state = replacementState(cert); const sources = sourceStorageV1Fixture(); const active = await activeV21Fixture(); const snapshot = cloudSyncTestHelpers.buildCloudSnapshot(active, sources, settings, null, NOW, registryFixture(), targetFixture(), state); assert.deepEqual(snapshot.sourceReplacementState, state); });
+test('E55 — snapshot Cloud legado sem ReplacementState continua válido com SourceStorage v1 19/19', async () => { const snapshot: CloudSnapshot = { format: 'blue-jacket-device-sync/v1', createdAt: NOW, active: null, sources: sourceStorageV1Fixture(), settings }; const encrypted = await cloudSyncTestHelpers.encrypt(identity, snapshot); const restored = await cloudSyncTestHelpers.decrypt(identity, encrypted); assert.equal(restored.sources.staging.length, 19); assert.equal('sourceReplacementState' in restored, false); });
+test('E56 — conditional ausente + certificate válido restaura por preflight v21', async () => { const registry = registryFixture(); const target = targetFixture(); const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); const state = replacementState(cert); const sources = sourceStorageV2Fixture({ presentSources: SUPPORTED_SOURCE_IDS.filter(source => source !== LAUNCH_SOURCE) }); const active = await activeForSnapshot(sources, state, registry, target, 'E56-REMOTE'); const snapshot = cloudSyncTestHelpers.buildCloudSnapshot(active, sources, settings, null, NOW, registry, target, state); let currentState: SourceReplacementState | null = null; let restores = 0; const deps: CloudRestoreDependencies = { exportSources: async () => sourceStorageV1Fixture(), loadSettings: () => settings, loadCompetence: () => null, loadAdminRegistry: async () => registry, loadTargetState: () => target, loadSourceReplacementState: () => currentState, restoreSources: async () => { restores += 1; }, restoreSettings: value => value as typeof settings, replaceCompetence: () => null, replaceAdminRegistry: async value => value, replaceTargetState: value => value, replaceSourceReplacementState: value => { currentState = value; return currentState; }, build: async () => active }; const rebuilt = await cloudSyncTestHelpers.applyCloudSnapshot(snapshot, deps); assert.equal(restores, 1); assert.deepEqual(currentState, state); assert.equal(rebuilt.motorBuildId, 'E56-REMOTE'); });
+test('E57 — certificate/proof inválido falha no Cloud preflight com ZERO mutação local', async () => { const sources = sourceStorageV2Fixture({ presentSources: SUPPORTED_SOURCE_IDS.filter(source => source !== LAUNCH_SOURCE) }); const bad = replacementState(certificateFixture({ sourceId: LAUNCH_SOURCE, coverageKeys: ['LAUNCH|WINTHOR:999|EAN:-'] })); const snapshot: CloudSnapshot = { format: 'blue-jacket-device-sync/v1', createdAt: NOW, active: null, sources, settings, adminRegistryState: emptyAdminRegistryState(NOW), targetState: targetFixture(), sourceReplacementState: bad }; let mutations = 0; const deps: CloudRestoreDependencies = { exportSources: async () => sourceStorageV1Fixture(), loadSettings: () => settings, loadCompetence: () => null, loadAdminRegistry: async () => registryFixture(), loadTargetState: () => targetFixture(), loadSourceReplacementState: () => null, restoreSources: async () => { mutations += 1; }, restoreSettings: value => { mutations += 1; return value as typeof settings; }, replaceCompetence: value => { mutations += 1; return value as any; }, replaceAdminRegistry: async value => { mutations += 1; return value; }, replaceTargetState: value => { mutations += 1; return value; }, replaceSourceReplacementState: value => { mutations += 1; return value; }, build: async () => { mutations += 1; return activeV21Fixture(); } }; await assert.rejects(() => cloudSyncTestHelpers.applyCloudSnapshot(snapshot, deps), /REPLACEMENT_COVERAGE_BROKEN/); assert.equal(mutations, 0); });
+test('E58 — proof/ReplacementState divergente durante capture faz PUT 0', async () => { const sources = sourceStorageV2Fixture(); const registry = registryFixture(); const target = targetFixture(); const active = await activeForSnapshot(sources, null, registry, target, 'E58-ACTIVE'); const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); let puts = 0; const deps: CloudUploadDependencies = { getActive: () => active, exportSources: async () => sources, sourceManifestHash: (snapshot, replaced = []) => stagingManifestHashV2(snapshot.staging, replaced), registryHash: canonicalAdminRegistryHash, targetHash: rcaTargetRegistryHash, replacementProofHash: replacementIdentityFor, inputHash: canonicalInputHashV3, loadSettings: () => settings, loadCompetence: () => null, loadAdminRegistry: async () => registry, loadTargetState: () => target, loadSourceReplacementState: () => replacementState(cert), encryptSnapshot: async () => new Uint8Array([1]), uploadPayload: async () => { puts += 1; return { updatedAt: NOW, bytes: 1 }; }, saveState: () => undefined, now: () => NOW }; await assert.rejects(() => cloudSyncTestHelpers.uploadCurrentDeviceSnapshotWithDependencies(identity, deps), /SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE/); assert.equal(puts, 0); });
+test('E59 — capture Cloud consistente executa exatamente 1 PUT', async () => { const sources = sourceStorageV2Fixture(); const registry = registryFixture(); const target = targetFixture(); const active = await activeForSnapshot(sources, null, registry, target, 'E59-ACTIVE'); let puts = 0; const deps: CloudUploadDependencies = { getActive: () => active, exportSources: async () => sources, sourceManifestHash: (snapshot, replaced = []) => stagingManifestHashV2(snapshot.staging, replaced), registryHash: canonicalAdminRegistryHash, targetHash: rcaTargetRegistryHash, replacementProofHash: replacementIdentityFor, inputHash: canonicalInputHashV3, loadSettings: () => settings, loadCompetence: () => null, loadAdminRegistry: async () => registry, loadTargetState: () => target, loadSourceReplacementState: () => null, encryptSnapshot: async () => new Uint8Array([1]), uploadPayload: async () => { puts += 1; return { updatedAt: NOW, bytes: 1 }; }, saveState: () => undefined, now: () => NOW }; await cloudSyncTestHelpers.uploadCurrentDeviceSnapshotWithDependencies(identity, deps); assert.equal(puts, 1); });
+test('E60 — falha posterior no restore Cloud restaura ReplacementState anterior', async () => { const registry = registryFixture(); const target = targetFixture(); const oldCert = certificateFixture({ sourceId: RCA_SOURCE, coverageKeys: ['RCA|CURRENT|10|PRINCIPAL'] }); const oldState = replacementState(oldCert); const remoteCert = await certify(LAUNCH_SOURCE, 'GLOBAL'); const remoteState = replacementState(remoteCert); const snapshot: CloudSnapshot = { format: 'blue-jacket-device-sync/v1', createdAt: NOW, active: null, sources: sourceStorageV2Fixture(), settings, adminRegistryState: registry, targetState: target, sourceReplacementState: remoteState }; let current = structuredClone(oldState); let builds = 0; const deps: CloudRestoreDependencies = { exportSources: async () => sourceStorageV1Fixture(), loadSettings: () => settings, loadCompetence: () => null, loadAdminRegistry: async () => registry, loadTargetState: () => target, loadSourceReplacementState: () => current, restoreSources: async () => undefined, restoreSettings: value => value as typeof settings, replaceCompetence: () => null, replaceAdminRegistry: async value => value, replaceTargetState: value => value, replaceSourceReplacementState: value => { current = value ? structuredClone(value) : null; return current; }, build: async () => { builds += 1; if (builds === 1) throw new Error('E60_BUILD_FAIL'); return activeV21Fixture({ motorBuildId: 'ROLLBACK-E60' }); } }; await assert.rejects(() => cloudSyncTestHelpers.applyCloudSnapshot(snapshot, deps), /E60_BUILD_FAIL/); assert.deepEqual(current, oldState); assert.equal(builds, 2); });
+
+// E61–E66 — Bundle
+
+test('E61 — Bundle v21 matching ativa compatível', async () => { const active = await activeV21Fixture({ motorBuildId: 'E61', sourceReplacementProofHash: EMPTY_SOURCE_REPLACEMENT_PROOF, sourceReplacements: [] }); let activated: ActiveCanonicalBundle | null = null; const result = await recoverTechnicalBundle({ currentEngineVersion: V21_ENGINE, inspectBundle: async () => prepared(active), persistBundle: async value => value as any, rebuildFromStaging: async () => { throw new Error('NO_REBUILD'); }, activate: value => { activated = value; }, localAdminRegistryHash: active.adminRegistryHash!, localRcaTargetRegistryHash: active.rcaTargetRegistryHash!, localSourceReplacementProofHash: EMPTY_SOURCE_REPLACEMENT_PROOF, localSourceReplacements: [] }); assert.equal(result.mode, 'COMPATIBLE'); assert.equal(activated?.motorBuildId, 'E61'); });
+test('E62 — Bundle proof mismatch não ativa imported M1–M4 e reconstrói local', async () => { const imported = await activeV21Fixture({ motorBuildId: 'E62-IMPORTED', sourceReplacementProofHash: sha256Fixture('foreign-proof'), sourceReplacements: [{ source: LAUNCH_SOURCE, scope: 'GLOBAL' }] }); const rebuilt = await activeV21Fixture({ motorBuildId: 'E62-LOCAL', adminRegistryHash: imported.adminRegistryHash, rcaTargetRegistryHash: imported.rcaTargetRegistryHash, sourceReplacementProofHash: EMPTY_SOURCE_REPLACEMENT_PROOF, sourceReplacements: [] }); let persisted = 0; let activated = ''; const result = await recoverTechnicalBundle({ currentEngineVersion: V21_ENGINE, inspectBundle: async () => prepared(imported), persistBundle: async value => { persisted += 1; return value as any; }, rebuildFromStaging: async () => rebuilt, activate: value => { activated = value.motorBuildId; }, localAdminRegistryHash: imported.adminRegistryHash!, localRcaTargetRegistryHash: imported.rcaTargetRegistryHash!, localSourceReplacementProofHash: EMPTY_SOURCE_REPLACEMENT_PROOF, localSourceReplacements: [] }); assert.equal(result.mode, 'REBUILT'); assert.equal(persisted, 0); assert.equal(activated, 'E62-LOCAL'); });
+test('E63 — Bundle v20 legacy rebuilda v21', async () => { const legacy = await activeV20Fixture({ motorBuildId: 'E63-V20' }); const rebuilt = await activeV21Fixture({ motorBuildId: 'E63-V21', adminRegistryHash: legacy.adminRegistryHash, rcaTargetRegistryHash: legacy.rcaTargetRegistryHash, sourceReplacementProofHash: EMPTY_SOURCE_REPLACEMENT_PROOF, sourceReplacements: [] }); const result = await recoverTechnicalBundle({ currentEngineVersion: V21_ENGINE, inspectBundle: async () => prepared(legacy), persistBundle: async value => value as any, rebuildFromStaging: async () => rebuilt, activate: () => undefined, localAdminRegistryHash: legacy.adminRegistryHash!, localRcaTargetRegistryHash: legacy.rcaTargetRegistryHash!, localSourceReplacementProofHash: EMPTY_SOURCE_REPLACEMENT_PROOF, localSourceReplacements: [], localLegacyStagingManifestHash: legacy.stagingManifestHash }); assert.equal(result.mode, 'REBUILT'); assert.equal(result.active.engineVersion, V21_ENGINE); });
+test('E64 — SourceReplacementState completo permanece fora do ZIP técnico', () => { const text = sourceText('../src/canonical/bundleStore.ts'); assert.doesNotMatch(text, /sourceReplacementState|SourceReplacementState/); assert.match(text, /sourceReplacementProofHash/); assert.match(text, /sourceReplacements/); });
+test('E65 — collision identity considera proof e replacements', () => { const text = sourceText('../src/canonical/bundleStore.ts'); const identityBody = text.match(/function manifestIdentityMatchesActive[\s\S]*?\n}/)?.[0] ?? text; assert.match(identityBody, /sourceReplacementProofHash/); assert.match(identityBody, /sourceReplacements/); });
+test('E66 — erro de persistência em recovery compatível não ativa novo Bundle', async () => { const active = await activeV21Fixture({ motorBuildId: 'E66' }); let activations = 0; await assert.rejects(() => recoverTechnicalBundle({ currentEngineVersion: V21_ENGINE, inspectBundle: async () => prepared(active), persistBundle: async () => { throw new Error('E66_PERSIST_FAIL'); }, rebuildFromStaging: async () => active, activate: () => { activations += 1; }, localAdminRegistryHash: active.adminRegistryHash!, localRcaTargetRegistryHash: active.rcaTargetRegistryHash!, localSourceReplacementProofHash: active.sourceReplacementProofHash!, localSourceReplacements: active.sourceReplacements ?? [] }), /E66_PERSIST_FAIL/); assert.equal(activations, 0); });
+
+// E67–E71 — transaction
+
+test('E67 — equivalence fail não cria certificate novo', async () => { const registry = registryFixture(); registry.launches = []; const h = await flowHarness({ registry }); await assert.rejects(() => activateCertifiedSourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps), /SOURCE_REPLACEMENT_EQUIVALENCE_FAILED|SOURCE_REPLACEMENT_NOT_READY/); assert.equal(h.read().state, null); assert.equal(h.read().active?.motorBuildId, 'BUILD-OLD'); });
+test('E68 — build fail preserva certificate/build anterior', async () => { const old = await activeV21Fixture({ motorBuildId: 'E68-OLD' }); const h = await flowHarness({ initialActive: old, failBuildAt: 2 }); await assert.rejects(() => activateCertifiedSourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps), /FLOW_BUILD_FAIL_2/); assert.equal(h.read().state, null); assert.equal(h.read().active?.motorBuildId, 'E68-OLD'); });
+test('E69 — sync fail após activate preserva novo certificate/build local', async () => { const h = await flowHarness({ paired: true, syncFails: true }); const result = await activateCertifiedSourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps); assert.equal(result.synced, false); assert.equal(h.read().state?.certificates.length, 1); assert.equal(h.read().active?.motorBuildId, result.active.motorBuildId); });
+test('E70 — lifecycle de Source Replacement sobrevive unsubscribe/remount', async () => { sourceReplacementLifecycle.reset(); const h = await flowHarness({ registry: { ...registryFixture(), launches: [] } }); let first = sourceReplacementLifecycle.getState(); const off = sourceReplacementLifecycle.subscribe(value => { first = value; }); await assert.rejects(() => activateCertifiedSourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps)); off(); let remount = sourceReplacementLifecycle.getState(); const off2 = sourceReplacementLifecycle.subscribe(value => { remount = value; }); assert.equal(first.phase, 'FAILED'); assert.equal(remount.phase, 'FAILED'); off2(); });
+test('E71 — SOURCE_REPLACEMENT_UPDATE participa do global single-flight nos dois sentidos', async () => { const a = createSystemDataOperationCoordinator(); let releaseA!: () => void; const pa = new Promise<void>(resolve => { releaseA = resolve; }); const runA = a.run('SOURCE_REPLACEMENT_UPDATE', async () => pa); await Promise.resolve(); assert.deepEqual(await a.run('BASE_UPDATE', async () => undefined), { status: 'BUSY', owner: 'SOURCE_REPLACEMENT_UPDATE' }); releaseA(); await runA; const b = createSystemDataOperationCoordinator(); let releaseB!: () => void; const pb = new Promise<void>(resolve => { releaseB = resolve; }); const runB = b.run('BASE_UPDATE', async () => pb); await Promise.resolve(); assert.deepEqual(await b.run('SOURCE_REPLACEMENT_UPDATE', async () => undefined), { status: 'BUSY', owner: 'BASE_UPDATE' }); releaseB(); await runB; });
+
+// RC1–RC6 — recertification
+
+test('RC1 — certificate A + physical B diferente resulta REVIEW_REQUIRED', async () => { const certA = await certify(LAUNCH_SOURCE, 'GLOBAL'); const stored = storedStages(); stored.find(stage => stage.source === LAUNCH_SOURCE)!.manifest.fileHash = sha256Fixture('RC1-B'); const result = resolveEffectiveSourceSet({ physicalStages: stored, replacementState: replacementState(certA), adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.equal(result.diagnostics.find(item => item.sourceId === LAUNCH_SOURCE)?.status, 'REVIEW_REQUIRED'); });
+test('RC2 — recertify B com sucesso substitui Certificate A e ativa Build B', async () => { const certA = await certify(LAUNCH_SOURCE, 'GLOBAL'); const stored = storedStages(); const hashB = sha256Fixture('RC2-B'); stored.find(stage => stage.source === LAUNCH_SOURCE)!.manifest.fileHash = hashB; const h = await flowHarness({ initialState: replacementState(certA), stored }); const result = await recertifySourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps); assert.equal(result.certificate.sourceFileHash, hashB); assert.notEqual(result.certificate.sourceFileHash, certA.sourceFileHash); assert.equal(h.read().state?.certificates.find(item => item.sourceId === LAUNCH_SOURCE)?.sourceFileHash, hashB); assert.equal(h.read().active?.motorBuildId, result.active.motorBuildId); });
+test('RC3 — baseline de recertificação usa physical B sem stale Certificate A', async () => { const certA = await certify(LAUNCH_SOURCE, 'GLOBAL'); const stored = storedStages(); stored.find(stage => stage.source === LAUNCH_SOURCE)!.manifest.fileHash = sha256Fixture('RC3-B'); const h = await flowHarness({ initialState: replacementState(certA), stored }); await recertifySourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps); const baselineState = h.read().buildStates[0]; assert.equal(baselineState?.certificates.some(item => item.sourceId === LAUNCH_SOURCE && item.scope === 'GLOBAL') ?? false, false); assert.notEqual(stored.find(stage => stage.source === LAUNCH_SOURCE)!.manifest.fileHash, certA.sourceFileHash); });
+test('RC4 — nova coverage não coberta falha e preserva Certificate A + Build A', async () => { const certA = await certify(LAUNCH_SOURCE, 'GLOBAL'); const old = await activeV21Fixture({ motorBuildId: 'RC4-OLD' }); const stagesB = fullStages('2026-08', true); const stored = storedStages(stagesB); stored.find(stage => stage.source === LAUNCH_SOURCE)!.manifest.fileHash = sha256Fixture('RC4-B'); const h = await flowHarness({ stages: stagesB, stored, initialState: replacementState(certA), initialActive: old }); await assert.rejects(() => recertifySourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps), /SOURCE_REPLACEMENT_EQUIVALENCE_FAILED|SOURCE_REPLACEMENT_NOT_READY|SOURCE_REPLACEMENT_COVERAGE_BROKEN/); assert.deepEqual(h.read().state, replacementState(certA)); assert.equal(h.read().active?.motorBuildId, 'RC4-OLD'); });
+test('RC5 — sync fail após recertify preserva Certificate B + Build B local', async () => { const certA = await certify(LAUNCH_SOURCE, 'GLOBAL'); const stored = storedStages(); const hashB = sha256Fixture('RC5-B'); stored.find(stage => stage.source === LAUNCH_SOURCE)!.manifest.fileHash = hashB; const h = await flowHarness({ initialState: replacementState(certA), stored, paired: true, syncFails: true }); const result = await recertifySourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps); assert.equal(result.synced, false); assert.equal(h.read().state?.certificates.find(item => item.sourceId === LAUNCH_SOURCE)?.sourceFileHash, hashB); assert.equal(h.read().active?.motorBuildId, result.active.motorBuildId); });
+test('RC6 — recertify preserva certificados de outras famílias bit-a-bit', async () => { const certA = await certify(LAUNCH_SOURCE, 'GLOBAL'); const other = certificateFixture({ sourceId: RCA_SOURCE, coverageKeys: ['RCA|CURRENT|10|PRINCIPAL'] }); const initial = withCertificate(replacementState(certA), other); const beforeOther = structuredClone(initial.certificates.find(item => item.sourceId === RCA_SOURCE)!); const stored = storedStages(); stored.find(stage => stage.source === LAUNCH_SOURCE)!.manifest.fileHash = sha256Fixture('RC6-B'); const h = await flowHarness({ initialState: initial, stored }); await recertifySourceReplacement(LAUNCH_SOURCE, 'GLOBAL', h.deps); assert.deepEqual(h.read().state?.certificates.find(item => item.sourceId === RCA_SOURCE), beforeOther); });
+
+// MG1–MG4 — migration
+
+test('MG1 — v20 sem certificates rebuilda v21 com EMPTY proof e sem auto-certificação', async () => { const legacy = await activeV20Fixture({ motorBuildId: 'MG1-V20' }); const rebuilt = await activeV21Fixture({ motorBuildId: 'MG1-V21', sourceReplacementProofHash: EMPTY_SOURCE_REPLACEMENT_PROOF, sourceReplacements: [] }); const result = await rebuildForCanonicalEngine(legacy, V21_ENGINE, async () => rebuilt); assert.equal(result.sourceReplacementProofHash, EMPTY_SOURCE_REPLACEMENT_PROOF); assert.deepEqual(result.sourceReplacements, []); });
+test('MG2 — v20 + ReplacementState válido rebuilda v21 com proof correspondente', async () => { const legacy = await activeV20Fixture({ motorBuildId: 'MG2-V20' }); const cert = certificateFixture({ sourceId: LAUNCH_SOURCE }); const proof = await sourceReplacementProofHash([cert]); const replacements = sourceReplacementsFromCertificates([cert]); const rebuilt = await activeV21Fixture({ motorBuildId: 'MG2-V21', sourceReplacementProofHash: proof, sourceReplacements: replacements }); const result = await rebuildForCanonicalEngine(legacy, V21_ENGINE, async () => rebuilt); assert.equal(result.sourceReplacementProofHash, proof); assert.deepEqual(result.sourceReplacements, replacements); });
+test('MG3 — ReplacementState REVIEW_REQUIRED/BROKEN bloqueia build e não cai para físico', async () => { const cert = await certify(LAUNCH_SOURCE, 'GLOBAL'); const reviewStages = storedStages(); reviewStages.find(stage => stage.source === LAUNCH_SOURCE)!.manifest.fileHash = sha256Fixture('MG3-B'); const review = resolveEffectiveSourceSet({ physicalStages: reviewStages, replacementState: replacementState(cert), adminRegistryState: registryFixture(), targetState: targetFixture() }); assert.throws(() => assertEffectiveSourceSetReady(review), /REPLACEMENT_REVIEW_REQUIRED/); const brokenRegistry = registryFixture(); brokenRegistry.launches = []; const broken = resolveEffectiveSourceSet({ physicalStages: storedStages(), replacementState: replacementState(cert), adminRegistryState: brokenRegistry, targetState: targetFixture() }); assert.throws(() => assertEffectiveSourceSetReady(broken), /REPLACEMENT_COVERAGE_BROKEN/); });
+test('MG4 — v21 já ativo não migra novamente', async () => { const active = await activeV21Fixture({ motorBuildId: 'MG4-V21' }); let builds = 0; const result = await rebuildForCanonicalEngine(active, V21_ENGINE, async () => { builds += 1; return activeV21Fixture({ motorBuildId: 'UNEXPECTED' }); }); assert.equal(builds, 0); assert.strictEqual(result, active); });
+
+// PV1–PV3 — provenance
+
+test('PV1 — JSON canônico contém sourceContractVersion, proof e replacements', async () => { const active = await activeV21Fixture({ sourceReplacementProofHash: 'PV-PROOF', sourceReplacements: [{ source: RCA_SOURCE, scope: 'GLOBAL' }] }); const payload = exportPayload(list('M3_MOVIMENTO_VENDAS'), active); assert.equal(payload.sourceContractVersion, 'v2'); assert.equal(payload.sourceReplacementProofHash, 'PV-PROOF'); assert.deepEqual(payload.sourceReplacements, [{ source: RCA_SOURCE, scope: 'GLOBAL' }]); });
+test('PV2 — Excel METADATA contém sourceContractVersion, proof e replacements determinísticos', async () => { const active = await activeV21Fixture({ sourceReplacementProofHash: 'PV-PROOF', sourceReplacements: [{ source: TOP_SOURCE, scope: 'COMPETENCE:2026-08' }, { source: RCA_SOURCE, scope: 'GLOBAL' }] }); const workbook = createExcelWorkbook(list('M3_MOVIMENTO_VENDAS'), active); const metadata = XLSX.utils.sheet_to_json(workbook.Sheets.METADATA, { header: 1 }) as unknown[][]; assert.ok(metadata.some(item => item[0] === 'sourceContractVersion' && item[1] === 'v2')); assert.ok(metadata.some(item => item[0] === 'sourceReplacementProofHash' && item[1] === 'PV-PROOF')); const expected = JSON.stringify(deterministicSourceReplacements(active.sourceReplacements)); assert.ok(metadata.some(item => item[0] === 'sourceReplacements' && item[1] === expected)); });
+test('PV3 — ListasCanonicasPage passa exatamente a identidade do activeCanonical sem fabricar EMPTY', () => { const text = sourceText('../src/pages/ListasCanonicasPage.tsx'); assert.match(text, /sourceContractVersion: activeCanonical\.sourceContractVersion/); assert.match(text, /sourceReplacementProofHash: activeCanonical\.sourceReplacementProofHash/); assert.match(text, /sourceReplacements: activeCanonical\.sourceReplacements/); assert.doesNotMatch(text, /EMPTY_SOURCE_REPLACEMENT_PROOF/); assert.equal(SOURCE_CONTRACT_VERSION, 'v2'); });
