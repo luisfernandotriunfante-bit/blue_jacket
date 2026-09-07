@@ -258,10 +258,10 @@ sb(68, 'archive validation fail ocorre antes da mutação operacional', () => as
 sb(69, 'history write fail remove created e não aplica operational', () => assert.match(source('../src/canonical/cloudSync.ts'), /deleteArchiveInternal/));
 sb(70, 'operational restore fail remove somente archives criados', () => assert.match(source('../src/canonical/cloudSync.ts'), /const created: string\[\]/));
 sb(71, 'archive preexistente sobrevive rollback', () => assert.match(source('../src/canonical/cloudSync.ts'), /if \(result === 'CREATED'\) created\.push/));
-sb(72, 'sync state atualizado somente após restore completo', () => { const cloud = source('../src/canonical/cloudSync.ts'); assert.ok(cloud.lastIndexOf('saveSyncState(identity') > cloud.lastIndexOf('applyCloudSnapshotV2WithHistory')); });
+sb(72, 'sync state atualizado somente após restore completo', () => { const cloud = source('../src/canonical/cloudSync.ts'); const restore = cloud.split('export async function restoreCurrentDeviceSnapshot')[1]?.split('export async function deviceSyncBackupStatus')[0] ?? ''; const apply = restore.indexOf('await applyCloudSnapshotV2WithHistory'); const save = restore.indexOf('saveSyncState(identity'); assert.ok(apply >= 0); assert.ok(save > apply); });
 
 // SB73–SB82 — Phase 8 / monthly closing integration
-sb(73, 'novo CLOSE auto-sync usa uploadCurrentDeviceSnapshot', () => assert.match(source('../src/pages/admin/monthlyClosingFlow.ts'), /uploadCurrentDeviceSnapshot/));
+sb(73, 'novo CLOSE auto-sync usa cadeia homologada até uploadCurrentDeviceSnapshot', () => { const closing = source('../src/pages/admin/monthlyClosingFlow.ts'); const autoSync = source('../src/pages/admin/baseAutoSync.ts'); assert.match(closing, /syncActiveBuildIfPaired/); assert.match(autoSync, /uploadCurrentDeviceSnapshot/); assert.match(autoSync, /upload: identity => uploadCurrentDeviceSnapshot\(identity\)/); });
 sb(74, 'history upload failure preserva CLOSE local', () => assert.match(source('../src/pages/admin/monthlyClosingFlow.ts'), /LOCAL_SUCCESS_SYNC_FAILED/));
 sb(75, 'history upload failure preserva archive local', () => assert.doesNotMatch(source('../src/pages/admin/monthlyClosingFlow.ts').split('LOCAL_SUCCESS_SYNC_FAILED')[1] ?? '', /deleteArchiveInternal/));
 sb(76, 'REOPEN não remove remote history', () => assert.doesNotMatch(source('../src/pages/admin/monthlyClosingFlow.ts'), /history-delete|historyDelete/));
