@@ -1,6 +1,5 @@
 import { useEffect, useState, type ChangeEvent } from 'react';
-import { canonicalAdminRegistryHash } from '../../canonical/adminRegistryIdentity';
-import { loadAdminRegistryState } from '../../canonical/adminRegistryIndexedDb';
+import { loadBundleRecoveryLocalIdentity } from '../../canonical/bundleRecoveryLocalIdentity';
 import { inspectCanonicalBundle, persistCanonicalBundle } from '../../canonical/bundleStore';
 import { recoverTechnicalBundle } from '../../canonical/bundleRecovery';
 import {
@@ -14,17 +13,12 @@ import {
   uploadCurrentDeviceSnapshot,
   type DeviceSyncIdentity,
 } from '../../canonical/cloudSync';
-import { buildCanonicalFromStoredSources, CANONICAL_ENGINE_VERSION, loadSourceStaging } from '../../canonical/sourceImport';
-import { SOURCE_LABELS, SUPPORTED_SOURCE_IDS } from '../../canonical/sourceContract';
-import { legacyStagingManifestHashV1 } from '../../canonical/sourceReplacementIdentity';
-import { assertEffectiveSourceSetReady, resolveEffectiveSourceSet } from '../../canonical/sourceReplacementRuntime';
-import { loadSourceReplacementState, sourceReplacementProofHash, sourceReplacementsFromCertificates } from '../../canonical/sourceReplacementState';
+import { buildCanonicalFromStoredSources, CANONICAL_ENGINE_VERSION } from '../../canonical/sourceImport';
+import { SOURCE_LABELS } from '../../canonical/sourceContract';
 import {
   systemDataOperationBusyMessage,
   systemDataOperationCoordinator,
 } from '../../canonical/systemDataOperationCoordinator';
-import { rcaTargetRegistryHash } from '../../canonical/targetIdentity';
-import { loadTargetState } from '../../canonical/targetStore';
 import { useData } from '../../store/DataContext';
 import { PanelAlert, PanelCard, PanelPage, PanelSectionHeader } from '../../ui/pattern/PanelVisual';
 
@@ -97,27 +91,14 @@ export function SincronizacaoPage() {
       setStatus('Validando e restaurando bundle técnico…');
       setError('');
       try {
-        const registry = await loadAdminRegistryState();
-        const targetState = loadTargetState();
-        const replacementState = loadSourceReplacementState();
-        const localRegistryHash = await canonicalAdminRegistryHash(registry);
-        const localTargetHash = await rcaTargetRegistryHash(targetState);
-        const stored = (await Promise.all(SUPPORTED_SOURCE_IDS.map(source => loadSourceStaging(source)))).filter((stage): stage is NonNullable<typeof stage> => Boolean(stage));
-        const effective = assertEffectiveSourceSetReady(resolveEffectiveSourceSet({ physicalStages: stored, replacementState, adminRegistryState: registry, targetState }));
-        const localProofHash = await sourceReplacementProofHash(effective.certificates);
-        const localReplacements = sourceReplacementsFromCertificates(effective.certificates);
-        const localLegacyHash = await legacyStagingManifestHashV1(stored);
+        const localIdentity = await loadBundleRecoveryLocalIdentity();
         const recovered = await recoverTechnicalBundle({
           currentEngineVersion: CANONICAL_ENGINE_VERSION,
           inspectBundle: () => inspectCanonicalBundle(file),
           persistBundle: prepared => persistCanonicalBundle(prepared),
           rebuildFromStaging: () => buildCanonicalFromStoredSources(),
           activate: activateCanonical,
-          localAdminRegistryHash: localRegistryHash,
-          localRcaTargetRegistryHash: localTargetHash,
-          localSourceReplacementProofHash: localProofHash,
-          localSourceReplacements: localReplacements,
-          localLegacyStagingManifestHash: localLegacyHash,
+          ...localIdentity,
         });
         setStatus(recovered.mode === 'COMPATIBLE'
           ? `Bundle ${recovered.active.motorBuildId} validado e ativado com a engine atual.`
