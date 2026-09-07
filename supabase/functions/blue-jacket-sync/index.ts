@@ -89,8 +89,8 @@ async function objectInfo(path: string) {
 
 async function uploadCreateOnly(path: string, payload: ArrayBuffer) {
   const response = await fetch(storageObjectUrl(path), {
-    method: 'PUT',
-    headers: serviceHeaders({ 'Content-Type': 'application/octet-stream' }),
+    method: 'POST',
+    headers: serviceHeaders({ 'Content-Type': 'application/octet-stream', 'x-upsert': 'false' }),
     body: payload,
   });
   if (response.ok) return 'CREATED' as const;
