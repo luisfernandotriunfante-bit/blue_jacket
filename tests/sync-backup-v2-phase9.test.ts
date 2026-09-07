@@ -320,3 +320,201 @@ sb(104, 'legacy current, current candidate e History mantêm semânticas distint
   assert.match(candidate, /method: 'PUT'/);
   assert.doesNotMatch(candidate, /x-upsert/);
 });
+
+// SB105–SB112 — Postgres History claim arbitration
+const historyClaimMigration = () => source('../supabase/migrations/20260907170728_blue_jacket_sync_history_objects.sql');
+
+async function runEdgeHistoryClaimRace() {
+  type EdgeHandler = (req: Request) => Promise<Response>;
+  type HistoryRow = {
+    workspace_id: string;
+    object_key: string;
+    state: 'PENDING' | 'READY';
+    claim_token: string;
+    payload_bytes: number | null;
+    created_at: string;
+    updated_at: string;
+  };
+  const globalWithDeno = globalThis as typeof globalThis & { Deno?: { env: { get(name: string): string | undefined }; serve(handler: EdgeHandler): void } };
+  const previousDeno = globalWithDeno.Deno;
+  const previousFetch = globalThis.fetch;
+  let handler: EdgeHandler | undefined;
+  let storageWrites = 0;
+  const historyRows = new Map<string, HistoryRow>();
+  const storage = new Map<string, Uint8Array>();
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identity.secret)));
+  const keyHash = Array.from(digest).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  const workspaceRow = {
+    workspace_id: identity.workspaceId,
+    key_hash: keyHash,
+    updated_at: '2026-09-07T00:00:00.000Z',
+    payload_bytes: 0,
+    protocol_version: 1,
+    revision: 0,
+    current_object: null,
+  };
+  const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  const historyKey = (workspaceId: string, objectKey: string) => `${workspaceId}:${objectKey}`;
+  const queryValue = (url: URL, name: string) => {
+    const raw = url.searchParams.get(name) ?? '';
+    return raw.startsWith('eq.') ? decodeURIComponent(raw.slice(3)) : raw;
+  };
+
+  globalWithDeno.Deno = {
+    env: {
+      get(name: string) {
+        if (name === 'SUPABASE_URL') return 'https://mock.supabase.co';
+        if (name === 'SUPABASE_SECRET_KEYS') return JSON.stringify({ default: 'mock-service-role' });
+        if (name === 'SUPABASE_SERVICE_ROLE_KEY') return 'mock-service-role';
+        return undefined;
+      },
+    },
+    serve(captured: EdgeHandler) { handler = captured; },
+  };
+
+  globalThis.fetch = async (input: string | URL | Request, init: RequestInit = {}) => {
+    const url = new URL(typeof input === 'string' || input instanceof URL ? input.toString() : input.url);
+    const method = (init.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    if (url.pathname === '/rest/v1/blue_jacket_sync_workspaces' && method === 'GET') return jsonResponse([workspaceRow]);
+
+    if (url.pathname === '/rest/v1/blue_jacket_sync_history_objects') {
+      if (method === 'POST') {
+        const body = JSON.parse(String(init.body)) as HistoryRow;
+        const key = historyKey(body.workspace_id, body.object_key);
+        if (historyRows.has(key)) return jsonResponse({ code: '23505', message: 'duplicate key value violates unique constraint' }, 409);
+        const now = '2026-09-07T00:00:00.000Z';
+        const row: HistoryRow = { ...body, created_at: now, updated_at: now };
+        historyRows.set(key, row);
+        return jsonResponse([row], 201);
+      }
+      const workspaceId = queryValue(url, 'workspace_id');
+      const objectKey = queryValue(url, 'object_key');
+      const key = historyKey(workspaceId, objectKey);
+      const row = historyRows.get(key);
+      if (method === 'GET') return jsonResponse(row ? [row] : []);
+      if (method === 'PATCH') {
+        if (!row || row.state !== 'PENDING') return jsonResponse([]);
+        const claimToken = queryValue(url, 'claim_token');
+        if (row.claim_token !== claimToken) return jsonResponse([]);
+        const patch = JSON.parse(String(init.body)) as Partial<HistoryRow>;
+        const next = { ...row, ...patch } as HistoryRow;
+        historyRows.set(key, next);
+        return jsonResponse([next]);
+      }
+      if (method === 'DELETE') {
+        if (row && row.state === 'PENDING' && row.claim_token === queryValue(url, 'claim_token')) historyRows.delete(key);
+        return new Response(null, { status: 204 });
+      }
+    }
+
+    if (url.pathname.startsWith('/storage/v1/object/blue-jacket-sync/')) {
+      const path = url.pathname.slice('/storage/v1/object/blue-jacket-sync/'.length);
+      if (method === 'POST') {
+        storageWrites += 1;
+        await new Promise(resolve => setTimeout(resolve, 25));
+        if (storage.has(path)) return jsonResponse({ message: 'Asset Already Exists' }, 409);
+        const bytes = new Uint8Array(init.body as ArrayBuffer);
+        storage.set(path, bytes.slice());
+        return jsonResponse({ Key: path }, 200);
+      }
+      if (method === 'HEAD') {
+        const bytes = storage.get(path);
+        return bytes ? new Response(null, { status: 200, headers: { 'content-length': String(bytes.byteLength) } }) : new Response(null, { status: 404 });
+      }
+      if (method === 'DELETE') {
+        storage.delete(path);
+        return new Response(null, { status: 200 });
+      }
+    }
+    throw new Error(`UNEXPECTED_FETCH ${method} ${url}`);
+  };
+
+  try {
+    const moduleUrl = new URL(`../supabase/functions/blue-jacket-sync/index.ts?claim-race=${Date.now()}-${Math.random()}`, import.meta.url);
+    await import(moduleUrl.href);
+    assert.ok(handler);
+    const objectKey = 'b'.repeat(64);
+    const payloadX = new TextEncoder().encode('history-claim-X');
+    const payloadY = new TextEncoder().encode('history-claim-Y-different');
+    const requestFor = (body: Uint8Array) => new Request('https://edge.mock/functions/v1/blue-jacket-sync', {
+      method: 'PUT',
+      headers: {
+        'x-blue-jacket-action': 'history-upload',
+        'x-blue-jacket-workspace': identity.workspaceId,
+        'x-blue-jacket-secret': identity.secret,
+        'x-blue-jacket-object-key': objectKey,
+      },
+      body,
+    });
+    const [responseX, responseY] = await Promise.all([handler(requestFor(payloadX)), handler(requestFor(payloadY))]);
+    const results = await Promise.all([responseX.json(), responseY.json()]) as Array<{ status: string; bytes: number }>;
+    const pairs = [
+      { response: responseX, result: results[0], payload: payloadX },
+      { response: responseY, result: results[1], payload: payloadY },
+    ];
+    const created = pairs.filter(item => item.response.status === 201 && item.result.status === 'CREATED');
+    const existing = pairs.filter(item => item.response.status === 200 && item.result.status === 'EXISTING');
+    const metadata = historyRows.get(historyKey(identity.workspaceId, objectKey));
+    const stored = storage.get(`${identity.workspaceId}/history/${objectKey}.bjh`);
+    return { storageWrites, created, existing, metadata, stored };
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousDeno === undefined) delete globalWithDeno.Deno;
+    else globalWithDeno.Deno = previousDeno;
+  }
+}
+
+sb(105, 'migration cria blue_jacket_sync_history_objects', () => {
+  assert.match(historyClaimMigration(), /create table public\.blue_jacket_sync_history_objects/);
+});
+sb(106, 'History metadata possui PK exata workspace_id + object_key e FK cascade', () => {
+  const sql = historyClaimMigration();
+  assert.match(sql, /primary key \(workspace_id, object_key\)/);
+  assert.match(sql, /references public\.blue_jacket_sync_workspaces\(workspace_id\)[\s\S]*on delete cascade/);
+  assert.match(sql, /object_key ~ '\^\[0-9a-f\]\{64\}\$'/);
+  assert.match(sql, /state in \('PENDING', 'READY'\)/);
+});
+sb(107, 'History metadata possui RLS, revoke client e deny policy', () => {
+  const sql = historyClaimMigration();
+  assert.match(sql, /enable row level security/);
+  assert.match(sql, /revoke all on table public\.blue_jacket_sync_history_objects from anon, authenticated/);
+  assert.match(sql, /for all[\s\S]*to anon, authenticated[\s\S]*using \(false\)[\s\S]*with check \(false\)/);
+});
+sb(108, 'Edge adquire claim Postgres antes de autorizar o owner a escrever Storage', () => {
+  const body = edge().split('async function resolveHistoryUpload')[1]?.split('async function uploadCurrentCandidate')[0] ?? '';
+  assert.ok(body.indexOf('claimHistoryObject') >= 0);
+  assert.ok(body.indexOf('claimHistoryObject') < body.indexOf('ownerHistoryUpload'));
+  const owner = edge().split('async function ownerHistoryUpload')[1]?.split('async function resolveHistoryUpload')[0] ?? '';
+  assert.match(owner, /uploadCreateOnly/);
+});
+sb(109, 'dois contenders simultâneos produzem um owner, um reuse e uma única escrita Storage', async () => {
+  const race = await runEdgeHistoryClaimRace();
+  assert.equal(race.created.length, 1);
+  assert.equal(race.existing.length, 1);
+  assert.equal(race.storageWrites, 1);
+  assert.equal(race.metadata?.state, 'READY');
+  assert.deepEqual(race.stored, race.created[0].payload);
+});
+sb(110, 'READY duplicate retorna EXISTING sem reabrir Storage', () => {
+  const body = edge().split('async function resolveHistoryUpload')[1]?.split('async function uploadCurrentCandidate')[0] ?? '';
+  assert.match(body, /existing\.state === 'READY'[\s\S]*validateReadyHistoryObject\(existing, path\)/);
+  assert.match(edge(), /outcome\.status === 'CREATED' \? 201 : 200/);
+});
+sb(111, 'owner só conclui depois de Storage verificado e metadata READY; rollback remove Storage antes da claim', () => {
+  const owner = edge().split('async function ownerHistoryUpload')[1]?.split('async function resolveHistoryUpload')[0] ?? '';
+  assert.ok(owner.indexOf('uploadCreateOnly') < owner.indexOf('objectInfo'));
+  assert.ok(owner.indexOf('objectInfo') < owner.indexOf('markHistoryReady'));
+  assert.ok(owner.indexOf('markHistoryReady') < owner.indexOf("return { status: storageOutcome"));
+  assert.ok(owner.indexOf('await removeObject(path)') < owner.indexOf('releaseHistoryClaim'));
+});
+sb(112, 'History claim mantém contratos públicos e current v1/v2 separados', () => {
+  const text = edge();
+  const historyStorage = text.split('async function uploadCreateOnly')[1]?.split('async function historyMetadata')[0] ?? '';
+  const currentCandidate = text.split('async function uploadCurrentCandidate')[1]?.split('async function listStorageFolder')[0] ?? '';
+  assert.match(text, /action === 'history-upload' && req\.method === 'PUT'/);
+  assert.match(historyStorage, /method: 'POST'/);
+  assert.match(historyStorage, /'x-upsert': 'false'/);
+  assert.match(text, /legacyCurrentPath[\s\S]*method: 'PUT'[\s\S]*'x-upsert': 'true'/);
+  assert.match(currentCandidate, /method: 'PUT'/);
+  assert.match(text, /casCurrentSnapshot/);
+});
