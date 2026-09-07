@@ -40,12 +40,12 @@ export const globalAuditProductionDependencies: GlobalAuditInputDependencies = {
   loadReportSettings: () => loadReportSettings(),
 };
 
-async function safeAsync<T>(reader: () => Promise<T>): Promise<AuditLoadResult<T>> {
+async function safeAsync<T>(reader: () => Promise<T | null>): Promise<AuditLoadResult<T>> {
   try { return { value: await reader(), error: null }; }
   catch (reason) { return { value: null, error: reasonText(reason) }; }
 }
 
-function safeSync<T>(reader: () => T): AuditLoadResult<T> {
+function safeSync<T>(reader: () => T | null): AuditLoadResult<T> {
   try { return { value: reader(), error: null }; }
   catch (reason) { return { value: null, error: reasonText(reason) }; }
 }
@@ -55,7 +55,7 @@ const sameActive = (before: ActiveCanonicalBundle | null, after: ActiveCanonical
 async function readOnce(deps: GlobalAuditInputDependencies): Promise<{ input: GlobalAuditInputs; activeBefore: ActiveCanonicalBundle | null; activeAfter: ActiveCanonicalBundle | null }> {
   const activeBefore = deps.loadActive();
   const listEntries = await Promise.all(LIST_IDS.map(async id => [id, await safeAsync(() => deps.loadList(id))] as const));
-  const stageEntries = await Promise.all(SUPPORTED_SOURCE_IDS.map(async source => [source, await safeAsync(() => deps.loadStage(source))] as const));
+  const stageEntries = await Promise.all(SUPPORTED_SOURCE_IDS.map(async source => [source, await safeAsync(() => deps.loadStage(source).then(value => value ?? null))] as const));
   const [registry, target, competence, replacement, reportSettings] = await Promise.all([
     safeAsync(() => deps.loadRegistry()),
     Promise.resolve(safeSync(() => deps.loadTarget())),
