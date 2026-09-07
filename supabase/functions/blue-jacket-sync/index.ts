@@ -108,6 +108,26 @@ async function objectInfo(path: string) {
   return { exists: true, bytes: Number.isFinite(bytes) && bytes >= 0 ? bytes : 0 };
 }
 
+async function storageResponseMeansMissing(response: Response) {
+  if (response.status === 404) return true;
+  if (response.status !== 400) return false;
+  const text = await response.text().catch(() => '');
+  let body: Record<string, unknown> = {};
+  try { body = JSON.parse(text) as Record<string, unknown>; } catch { /* non-JSON 400 remains an infrastructure/error response */ }
+  const code = String(body.code ?? '');
+  const error = String(body.error ?? '');
+  const statusCode = String(body.statusCode ?? '');
+  const message = String(body.message ?? text).trim().toLowerCase();
+  return code === 'NoSuchKey' || error === 'not_found' || statusCode === '404' || message === 'object not found';
+}
+
+async function downloadHistoryStorageObject(path: string) {
+  const response = await fetch(storageObjectUrl(path), { headers: serviceHeaders() });
+  if (response.ok) return { status: 'READY' as const, payload: await response.arrayBuffer() };
+  if (await storageResponseMeansMissing(response)) return { status: 'MISSING' as const };
+  return { status: 'ERROR' as const };
+}
+
 async function uploadCreateOnly(path: string, payload: ArrayBuffer) {
   const response = await fetch(storageObjectUrl(path), {
     method: 'POST',
@@ -373,10 +393,13 @@ Deno.serve(async req => {
     }
 
     if (action === 'history-download' && req.method === 'GET') {
-      const object = await fetch(storageObjectUrl(historyPath), { headers: serviceHeaders() });
-      if (object.status === 404) return fail(req, 404, 'SYNC_REMOTE_HISTORY_OBJECT_MISSING');
-      if (!object.ok) return fail(req, 502, 'SYNC_HISTORY_DOWNLOAD_FAILED');
-      return reply(req, object.body, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' } });
+      const metadata = await historyMetadata(verified.workspaceId, objectKey);
+      if (!metadata || metadata.state !== 'READY') return fail(req, 404, 'SYNC_REMOTE_HISTORY_OBJECT_MISSING');
+      const object = await downloadHistoryStorageObject(historyPath);
+      if (object.status === 'MISSING') return fail(req, 404, 'SYNC_REMOTE_HISTORY_OBJECT_MISSING');
+      if (object.status === 'ERROR') return fail(req, 502, 'SYNC_HISTORY_DOWNLOAD_FAILED');
+      if (metadata.payload_bytes === null || Number(metadata.payload_bytes) !== object.payload.byteLength) return fail(req, 409, 'SYNC_REMOTE_HISTORY_OBJECT_CORRUPT');
+      return reply(req, object.payload, { headers: { 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' } });
     }
 
     if (action === 'delete' && req.method === 'DELETE') {
