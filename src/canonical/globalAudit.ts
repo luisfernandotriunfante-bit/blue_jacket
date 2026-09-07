@@ -6,8 +6,9 @@ import { buildSellOutViewModel, type SellOutViewModel, type ViewAudit } from './
 import type { ReportSettings } from './reportSettings';
 import { hasCompleteCanonicalInputIdentityV21, type ActiveCanonicalBundle } from './runtime';
 import { buildSellOutDashboardModel, type SellOutDashboardModel } from './sellOutDashboardModel';
+import { canonicalSellOutCompetence } from './sellOutRules';
 import { CANONICAL_ENGINE_VERSION, isSourceStageCurrent, type StoredStage } from './sourceImport';
-import { HARD_REQUIRED_SOURCE_IDS, REPLACEABLE_SOURCE_IDS, SOURCE_CONTRACT_VERSION, SOURCE_LABELS, SUPPORTED_SOURCE_IDS } from './sourceContract';
+import { REPLACEABLE_SOURCE_IDS, SOURCE_LABELS, SUPPORTED_SOURCE_IDS, sourceContractIntegrity } from './sourceContract';
 import { canonicalInputHashV3, stagingManifestHashV2 } from './sourceReplacementIdentity';
 import { resolveEffectiveSourceSet, type SourceBuildDiagnostic } from './sourceReplacementRuntime';
 import { sourceReplacementProofHash, sourceReplacementsFromCertificates, type SourceReplacementState } from './sourceReplacementState';
@@ -295,13 +296,8 @@ function rowAndFactCountFindings(input: GlobalAuditInputs) {
 
 async function sourceAndIdentityFindings(input: GlobalAuditInputs) {
   const out: GlobalAuditFinding[] = [];
-  const integrity = {
-    supported: SUPPORTED_SOURCE_IDS.length,
-    hard: HARD_REQUIRED_SOURCE_IDS.length,
-    conditional: REPLACEABLE_SOURCE_IDS.length,
-    union: new Set([...HARD_REQUIRED_SOURCE_IDS, ...REPLACEABLE_SOURCE_IDS]).size,
-  };
-  const contractOk = integrity.supported === 19 && integrity.hard === 15 && integrity.conditional === 4 && integrity.union === 19;
+  const integrity = sourceContractIntegrity();
+  const contractOk = integrity.supportedCount === 19 && integrity.hardRequiredCount === 15 && integrity.replaceableCount === 4 && integrity.unionMatchesSupported && integrity.duplicateUnionEntries === 0;
   out.push(finding({ code: 'SOURCE_CONTRACT_19_15_4', status: contractOk ? 'PASS' : 'BLOCKER', domain: 'SOURCES', title: 'Contrato de fontes v21', message: contractOk ? 'Contrato operacional contém 19 suportadas, 15 hard-required e 4 condicionais.' : 'O contrato operacional v21 não fecha 19/15/4.', action: contractOk ? 'Nenhuma ação necessária.' : 'Revisar sourceContract.ts antes de confiar no build.', technicalDetails: integrity }));
 
   const effective = resolveEffectiveSourceSet({
@@ -447,11 +443,19 @@ function targetFindings(input: GlobalAuditInputs, sellOut: SellOutViewModel | nu
   return out;
 }
 
+function observedSellOutCompetence(input: GlobalAuditInputs) {
+  const m3 = input.lists.M3_MOVIMENTO_VENDAS.value;
+  if (!m3) return null;
+  const hasSale = m3.records.some(record => record.fact_type === 'SALE');
+  if (!hasSale) return null;
+  return canonicalSellOutCompetence(m3.records, null);
+}
+
 function competenceFindings(input: GlobalAuditInputs, sellOut: SellOutViewModel | null) {
   if (input.competence.error) return [];
   const state = input.competence.value;
   const official = state?.currentCompetence ?? null;
-  const observed = sellOut?.competence ?? null;
+  const observed = sellOut ? observedSellOutCompetence(input) : null;
   const compatibility = compareOfficialCompetence(official, observed);
   const messages: Record<CompetenceCompatibility, string> = {
     MATCH: 'Competência oficial e competência observada no Sell Out correspondem.',
@@ -459,7 +463,7 @@ function competenceFindings(input: GlobalAuditInputs, sellOut: SellOutViewModel 
     MISMATCH: `Competência oficial ${official ?? '—'} diverge da observada ${observed ?? '—'}.`,
     OBSERVED_MIXED: 'O Sell Out observou mais de uma competência.',
     OBSERVED_UNRESOLVED: 'A competência observada não pôde ser resolvida.',
-    NO_OBSERVED_DATA: 'Não há dados observados para comparar com a competência oficial.',
+    NO_OBSERVED_DATA: 'Não há dados SALE observados para comparar com a competência oficial.',
   };
   const status = compatibility === 'MATCH' ? 'PASS' : 'BLOCKER';
   const out = [finding({ code: compatibility === 'MATCH' ? 'COMPETENCE_MATCH' : compatibility, status, domain: 'COMPETENCE', title: 'Compatibilidade de competência', message: messages[compatibility], action: status === 'PASS' ? 'Nenhuma ação necessária.' : 'Revisar Administração → Competências e as fontes mensais.', competence: official ?? undefined, technicalDetails: { official, observed, compatibility } })];
@@ -494,9 +498,10 @@ function sellOutAndNetworkFindings(input: GlobalAuditInputs) {
 
   const financialOk = moneyClose(dashboard.totals.invoiced + dashboard.totals.toInvoice, dashboard.totals.realized);
   out.push(finding({ code: financialOk ? 'SELL_OUT_FINANCIAL_RECONCILIATION_OK' : 'SELL_OUT_FINANCIAL_RECONCILIATION_MISMATCH', status: financialOk ? 'PASS' : 'BLOCKER', domain: 'SELL_OUT', title: 'Faturado + A faturar', message: financialOk ? 'Faturado + A faturar reconcilia com o realizado do dashboard oficial.' : 'Faturado + A faturar diverge do realizado do dashboard oficial.', action: financialOk ? 'Nenhuma ação necessária.' : 'Revisar o view-model oficial antes de usar o Sell Out.', technicalDetails: { invoiced: dashboard.totals.invoiced, toInvoice: dashboard.totals.toInvoice, realized: dashboard.totals.realized } }));
-  const lineTotal = dashboard.lineRows.reduce((sum, row) => sum + row.realized, 0);
+  const classifiedLineTotal = dashboard.lineRows.reduce((sum, row) => sum + row.realized, 0);
+  const lineTotal = classifiedLineTotal + dashboard.lineUnclassifiedValue;
   const linesOk = moneyClose(lineTotal, dashboard.totals.realized);
-  out.push(finding({ code: linesOk ? 'SELL_OUT_LINE_RECONCILIATION_OK' : 'SELL_OUT_LINE_RECONCILIATION_MISMATCH', status: linesOk ? 'PASS' : 'BLOCKER', domain: 'SELL_OUT', title: 'Reconciliação das linhas comerciais', message: linesOk ? 'Linhas + não classificado reconciliam com o total.' : 'Linhas + não classificado divergem do total.', action: linesOk ? 'Nenhuma ação necessária.' : 'Revisar o dashboard oficial.', technicalDetails: { lineTotal, realized: dashboard.totals.realized } }));
+  out.push(finding({ code: linesOk ? 'SELL_OUT_LINE_RECONCILIATION_OK' : 'SELL_OUT_LINE_RECONCILIATION_MISMATCH', status: linesOk ? 'PASS' : 'BLOCKER', domain: 'SELL_OUT', title: 'Reconciliação das linhas comerciais', message: linesOk ? 'Cinco linhas + não classificado reconciliam com o total.' : 'Cinco linhas + não classificado divergem do total.', action: linesOk ? 'Nenhuma ação necessária.' : 'Revisar o dashboard oficial.', technicalDetails: { classifiedLineTotal, lineUnclassifiedValue: dashboard.lineUnclassifiedValue, lineTotal, realized: dashboard.totals.realized } }));
   const vendorTotal = base.vendorRows.reduce((sum, row) => sum + row.realized, 0);
   const supervisorTotal = base.supervisorRows.reduce((sum, row) => sum + row.realized, 0);
   const managerialOk = moneyClose(vendorTotal, dashboard.totals.realized) && moneyClose(supervisorTotal, dashboard.totals.realized);
@@ -613,4 +618,4 @@ export function exportGlobalAuditJson(report: GlobalAuditReport) {
   return JSON.stringify(semantic, null, 2);
 }
 
-export const globalAuditTestHelpers = { summarize, splitAuditFlags, aggregateCanonicalAudits, recordFlagFindings, moneyClose, technicalDetails };
+export const globalAuditTestHelpers = { summarize, splitAuditFlags, aggregateCanonicalAudits, recordFlagFindings, moneyClose, technicalDetails, observedSellOutCompetence };
