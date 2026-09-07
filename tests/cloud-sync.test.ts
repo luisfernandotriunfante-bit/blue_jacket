@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { cloudSyncTestHelpers, type CloudSnapshot, type DeviceSyncIdentity } from '../src/canonical/cloudSync.ts';
+import { sourceStorageV1Fixture } from './phase5b-fixtures.ts';
 
 const identity: DeviceSyncIdentity = {
   workspaceId: '7a7a7a7a-7a7a-4a7a-8a7a-7a7a7a7a7a7a',
@@ -11,8 +12,8 @@ const snapshot: CloudSnapshot = {
   format: 'blue-jacket-device-sync/v1',
   createdAt: '2026-09-03T00:00:00.000Z',
   active: null,
-  sources: { format: 'blue-jacket-source-storage/v1', exportedAt: '2026-09-03T00:00:00.000Z', staging: [] },
-  settings: { networkTargetByCompetence: {}, networkAllocationByCompetence: {}, sellOutTarget: null, positivityTarget: null },
+  sources: sourceStorageV1Fixture(),
+  settings: { networkTargetByCompetence: {}, networkAllocationByCompetence: {}, sellOutTargetByCompetence: {}, positivityTargetByCompetence: {}, legacySellOutTarget: null, legacyPositivityTarget: null, inboundForecastByInvoice: {} },
 };
 
 test('pairing code carries a valid workspace identity and rejects malformed input', () => {

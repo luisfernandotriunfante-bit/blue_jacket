@@ -1,4 +1,4 @@
-import { SOURCE_IDS, parseSource } from './parsers';
+import { parseSource } from './parsers';
 import { buildCanonicalBundleFromStaging } from './motors';
 import { materializeTopRetailRouteInM2 } from './topRetailM2';
 import { applyAdminRegistryCanonicalAuthority } from './adminRegistryCanonicalAuthority';
@@ -6,11 +6,28 @@ import { canonicalAdminRegistryHash } from './adminRegistryIdentity';
 import { loadAdminRegistryState } from './adminRegistryIndexedDb';
 import type { AdminRegistryState } from './adminRegistry';
 import { applyTargetAuthorityToM3 } from './targetAuthority';
-import { canonicalInputHashV2, rcaTargetRegistryHash } from './targetIdentity';
+import { rcaTargetRegistryHash } from './targetIdentity';
 import { bootstrapTargetStateFromReportSettings, loadTargetState, type TargetState } from './targetStore';
 import { loadReportSettings } from './reportSettings';
 import type { ActiveCanonicalBundle } from './runtime';
 import type { CanonicalList, ParsedSource } from './types';
+import {
+  HARD_REQUIRED_SOURCE_IDS,
+  LEGACY_V20_REQUIRED_SOURCE_IDS,
+  REPLACEABLE_SOURCE_IDS,
+  SOURCE_CONTRACT_VERSION,
+  SOURCE_LABELS,
+  SUPPORTED_SOURCE_IDS,
+} from './sourceContract';
+import { canonicalInputHashV3, stagingManifestHashV2 } from './sourceReplacementIdentity';
+import { assertEffectiveSourceSetReady, resolveEffectiveSourceSet, type SourceBuildDiagnostic } from './sourceReplacementRuntime';
+import {
+  EMPTY_SOURCE_REPLACEMENT_PROOF,
+  loadSourceReplacementState,
+  sourceReplacementProofHash,
+  sourceReplacementsFromCertificates,
+  type SourceReplacementState,
+} from './sourceReplacementState';
 
 const DB_NAME = 'blue-jacket-v4-source-import';
 const DB_VERSION = 1;
@@ -27,37 +44,14 @@ const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   'CARTEIRA 24.08.xlsx': 'browser-v5-portfolio-current-snapshot',
 };
 const SCHEMA_VERSION = 'v1';
-/**
- * A versão do motor é também o contrato de migração do build salvo no navegador.
- * v20 acrescenta somente a autoridade temporal das metas RCA à identidade canônica.
- */
-export const CANONICAL_ENGINE_VERSION = 'browser-stage4-product-assortment-v20-targets-by-competence';
+/** v21 changes the effective physical-source contract and canonical input identity. */
+export const CANONICAL_ENGINE_VERSION = 'browser-stage4-product-assortment-v21-source-replacement';
 const parserVersionFor = (source: string) => SOURCE_PARSER_VERSIONS[source] ?? DEFAULT_PARSER_VERSION;
 export const isSourceStageCurrent = (manifest: SourceStageManifest | undefined) => Boolean(manifest && manifest.parserVersion === parserVersionFor(manifest.source) && manifest.schemaVersion === SCHEMA_VERSION);
 
-export const REQUIRED_SOURCE_IDS = [...new Set(SOURCE_IDS)];
-
-export const SOURCE_LABELS: Record<string, string> = {
-  'cadastro-itens-286.xls': 'Cadastro de itens 286',
-  'posicao-estoque-105.xls': 'Posição de estoque 105',
-  'estoque-8013.xls': 'Estoque / logística 8013',
-  'pctabpr 13.xlsx': 'PCTABPR',
-  'Lista_de_Preco (8).xlsx': 'Lista de Preço',
-  'lançamentos.xlsx': 'Lançamentos',
-  "Sortimento Recomendado - Q3'26.xlsx": 'Sortimento Q3',
-  'Nova Base de Premissas - Q3.xlsx': 'Premissas',
-  'NOVOS RCAS.xlsx': 'Novos RCAs',
-  'relatorio_carteira_clientes.xls': 'Carteira / Base de Clientes',
-  "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'Roteiro Top',
-  'vendas-8022.xls': 'Vendas 8022',
-  'CARTEIRA 24.08.xlsx': 'Carteira Colgate',
-  'entrada-notas-218.xls': 'Recebimentos 218',
-  'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx': 'Bússola',
-  '379 25.txt': '379 — 2025',
-  '379 26.txt': '379 — 2026',
-  '310 total 2026.txt': '310 total 2026',
-  '12.322.txt': '12.322',
-};
+/** Legacy v20 compatibility only. New v21 logic uses SUPPORTED/HARD/REPLACEABLE + runtime context. */
+export const REQUIRED_SOURCE_IDS = [...LEGACY_V20_REQUIRED_SOURCE_IDS];
+export { HARD_REQUIRED_SOURCE_IDS, REPLACEABLE_SOURCE_IDS, SOURCE_LABELS, SUPPORTED_SOURCE_IDS };
 
 export type SourceStageStatus = 'VALID' | 'UNCHANGED' | 'REJECTED';
 export type SourceStageManifest = {
@@ -73,7 +67,7 @@ export type SourceStageManifest = {
   status: 'VALID';
 };
 
-type StoredStage = { source: string; manifest: SourceStageManifest; parsed: ParsedSource };
+export type StoredStage = { source: string; manifest: SourceStageManifest; parsed: ParsedSource };
 type StoredBuild = {
   id: string;
   active: ActiveCanonicalBundle;
@@ -82,6 +76,7 @@ type StoredBuild = {
   stagingManifestHash?: string;
   adminRegistryHash?: string;
   rcaTargetRegistryHash?: string;
+  sourceReplacementProofHash?: string;
   canonicalInputHash?: string;
 };
 type StoredList = { id: string; buildId: string; listId: CanonicalList['id']; list: CanonicalList };
@@ -101,11 +96,17 @@ type PortfolioContinuitySnapshot = {
   updatedAt: string;
 };
 
-export type SourceStorageSnapshot = {
+export type SourceStorageSnapshotV1 = {
   format: 'blue-jacket-source-storage/v1';
   exportedAt: string;
   staging: StoredStage[];
 };
+export type SourceStorageSnapshotV2 = {
+  format: 'blue-jacket-source-storage/v2';
+  exportedAt: string;
+  staging: StoredStage[];
+};
+export type SourceStorageSnapshot = SourceStorageSnapshotV1 | SourceStorageSnapshotV2;
 
 function rowTyped(row: ParsedSource['rows'][number], field: string) {
   const cell = row[field];
@@ -183,6 +184,13 @@ export type SourceUpdateResult = {
   rejected: Array<{ source: string; fileName: string; errors: string[] }>;
   missing: string[];
   manifests: SourceStageManifest[];
+  sourceDiagnostics?: SourceBuildDiagnostic[];
+  blocking?: {
+    hardMissing: string[];
+    replacementRequired: string[];
+    reviewRequired: string[];
+    coverageBroken: string[];
+  };
 };
 
 export type IncrementalBase = {
@@ -240,12 +248,15 @@ async function idbGetAll<T>(store: string): Promise<T[]> {
   } finally { database.close(); }
 }
 
-function validateSourceStorageSnapshot(snapshot: SourceStorageSnapshot) {
-  if (snapshot?.format !== 'blue-jacket-source-storage/v1' || !Array.isArray(snapshot.staging)) throw new Error('SYNC_SOURCE_SNAPSHOT_INVALID');
+export function validateSourceStorageSnapshot(snapshot: SourceStorageSnapshot) {
+  if (!snapshot || (snapshot.format !== 'blue-jacket-source-storage/v1' && snapshot.format !== 'blue-jacket-source-storage/v2') || !Array.isArray(snapshot.staging)) throw new Error('SYNC_SOURCE_SNAPSHOT_INVALID');
   if (snapshot.staging.some(entry => !entry?.source || !entry.manifest?.fileHash || !entry.parsed?.source)) throw new Error('SYNC_SOURCE_SNAPSHOT_INVALID');
+  if (snapshot.staging.some(entry => !SUPPORTED_SOURCE_IDS.includes(entry.source))) throw new Error('SYNC_SOURCE_SNAPSHOT_INVALID');
   if (new Set(snapshot.staging.map(entry => entry.source)).size !== snapshot.staging.length) throw new Error('SYNC_SOURCE_SNAPSHOT_INVALID');
-  if (REQUIRED_SOURCE_IDS.some(source => !snapshot.staging.some(stage => stage.source === source))) throw new Error('SYNC_SOURCES_INCOMPLETE');
+  const required = snapshot.format === 'blue-jacket-source-storage/v1' ? REQUIRED_SOURCE_IDS : HARD_REQUIRED_SOURCE_IDS;
+  if (required.some(source => !snapshot.staging.some(stage => stage.source === source))) throw new Error('SYNC_SOURCES_INCOMPLETE');
   if (snapshot.staging.some(stage => stage.manifest.status !== 'VALID' || stage.manifest.parserVersion !== parserVersionFor(stage.source) || stage.manifest.schemaVersion !== SCHEMA_VERSION)) throw new Error('SYNC_SOURCE_SNAPSHOT_OUTDATED');
+  return snapshot;
 }
 
 async function replaceSourceStorage(snapshot: SourceStorageSnapshot) {
@@ -265,9 +276,9 @@ async function replaceSourceStorage(snapshot: SourceStorageSnapshot) {
   } finally { database.close(); }
 }
 
-export async function exportSourceStorageSnapshot(): Promise<SourceStorageSnapshot> {
+export async function exportSourceStorageSnapshot(): Promise<SourceStorageSnapshotV2> {
   const staging = await idbGetAll<StoredStage>(STAGING_STORE);
-  const snapshot: SourceStorageSnapshot = { format: 'blue-jacket-source-storage/v1', exportedAt: new Date().toISOString(), staging };
+  const snapshot: SourceStorageSnapshotV2 = { format: 'blue-jacket-source-storage/v2', exportedAt: new Date().toISOString(), staging };
   validateSourceStorageSnapshot(snapshot);
   return snapshot;
 }
@@ -319,7 +330,7 @@ export function detectSourceForFileName(fileName: string) {
 
 export async function loadSourceStagingManifests() {
   const stages = await idbGetAll<StoredStage>(STAGING_STORE);
-  return stages.map(stage => stage.manifest).sort((a, b) => REQUIRED_SOURCE_IDS.indexOf(a.source) - REQUIRED_SOURCE_IDS.indexOf(b.source));
+  return stages.map(stage => stage.manifest).sort((a, b) => SUPPORTED_SOURCE_IDS.indexOf(a.source) - SUPPORTED_SOURCE_IDS.indexOf(b.source));
 }
 
 export async function loadSourceStaging(source: string) { return idbGet<StoredStage>(STAGING_STORE, source); }
@@ -368,7 +379,7 @@ async function stageOne(source: string, file: File, onProgress?: (progress: Sour
   return { status: 'VALID' as const, manifest };
 }
 
-/** Physical-source identity. This algorithm is intentionally unchanged from v18/v19. */
+/** Legacy v20 physical identity retained only for migration/tests. */
 async function stagingManifestHash(stages: StoredStage[]) {
   const compact = REQUIRED_SOURCE_IDS.map(source => {
     const stage = stages.find(candidate => candidate.source === source);
@@ -386,18 +397,25 @@ function factTypeCounts(m3: CanonicalList) {
   return counts;
 }
 
+function sameSourceReplacements(a: ActiveCanonicalBundle['sourceReplacements'], b: ActiveCanonicalBundle['sourceReplacements']) {
+  return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
 function completeIdentityMatches(a: ActiveCanonicalBundle, b: ActiveCanonicalBundle) {
   return a.motorBuildId === b.motorBuildId
     && a.stagingManifestHash === b.stagingManifestHash
     && a.adminRegistryHash === b.adminRegistryHash
     && a.rcaTargetRegistryHash === b.rcaTargetRegistryHash
+    && a.sourceContractVersion === b.sourceContractVersion
+    && a.sourceReplacementProofHash === b.sourceReplacementProofHash
+    && sameSourceReplacements(a.sourceReplacements, b.sourceReplacements)
     && a.canonicalInputHash === b.canonicalInputHash
     && a.engineVersion === b.engineVersion
     && a.schemaVersion === b.schemaVersion;
 }
 
 async function saveGeneratedBuild(active: ActiveCanonicalBundle, lists: Record<CanonicalList['id'], CanonicalList>, sourceHashes: Record<string, string>) {
-  if (!active.adminRegistryHash || !active.rcaTargetRegistryHash || !active.canonicalInputHash || active.engineVersion !== CANONICAL_ENGINE_VERSION) throw new Error('CANONICAL_BUILD_IDENTITY_INCOMPLETE');
+  if (!active.adminRegistryHash || !active.rcaTargetRegistryHash || !active.canonicalInputHash || active.sourceContractVersion !== SOURCE_CONTRACT_VERSION || !active.sourceReplacementProofHash || !Array.isArray(active.sourceReplacements) || active.engineVersion !== CANONICAL_ENGINE_VERSION) throw new Error('CANONICAL_BUILD_IDENTITY_INCOMPLETE');
   const build: StoredBuild = {
     id: active.motorBuildId,
     active,
@@ -406,6 +424,7 @@ async function saveGeneratedBuild(active: ActiveCanonicalBundle, lists: Record<C
     stagingManifestHash: active.stagingManifestHash,
     adminRegistryHash: active.adminRegistryHash,
     rcaTargetRegistryHash: active.rcaTargetRegistryHash,
+    sourceReplacementProofHash: active.sourceReplacementProofHash,
     canonicalInputHash: active.canonicalInputHash,
   };
   await idbPut(BUILDS_STORE, build);
@@ -417,14 +436,26 @@ async function saveGeneratedBuild(active: ActiveCanonicalBundle, lists: Record<C
     || verified.stagingManifestHash !== active.stagingManifestHash
     || verified.adminRegistryHash !== active.adminRegistryHash
     || verified.rcaTargetRegistryHash !== active.rcaTargetRegistryHash
+    || verified.sourceReplacementProofHash !== active.sourceReplacementProofHash
     || verified.canonicalInputHash !== active.canonicalInputHash) throw new Error('CANONICAL_BUILD_STORAGE_VERIFY_FAILED');
 }
 
-function activeFromLists(lists: Record<CanonicalList['id'], CanonicalList>, sourceHash: string, registryHash: string, targetHash: string, inputHash: string) {
+function activeFromLists(
+  lists: Record<CanonicalList['id'], CanonicalList>,
+  sourceHash: string,
+  registryHash: string,
+  targetHash: string,
+  inputHash: string,
+  replacementProofHash = EMPTY_SOURCE_REPLACEMENT_PROOF,
+  sourceReplacements: Array<{ source: string; scope: string }> = [],
+) {
   const motorBuildId = `motor-browser-${Date.now()}-${inputHash.slice(0, 10)}`;
   const rowCounts = Object.fromEntries(Object.entries(lists).map(([id, list]) => [id, list.records.length])) as ActiveCanonicalBundle['rowCounts'];
   return {
     status: 'ACTIVE', motorBuildId, stagingManifestHash: sourceHash, adminRegistryHash: registryHash, rcaTargetRegistryHash: targetHash, canonicalInputHash: inputHash,
+    sourceContractVersion: SOURCE_CONTRACT_VERSION,
+    sourceReplacementProofHash: replacementProofHash,
+    sourceReplacements,
     schemaVersion: SCHEMA_VERSION, engineVersion: CANONICAL_ENGINE_VERSION,
     approvedAt: new Date().toISOString(), rowCounts, factTypeCounts: factTypeCounts(lists.M3_MOVIMENTO_VENDAS),
   } satisfies ActiveCanonicalBundle;
@@ -433,15 +464,15 @@ function activeFromLists(lists: Record<CanonicalList['id'], CanonicalList>, sour
 async function currentStages() {
   const stages: StoredStage[] = [];
   const outdated: string[] = [];
-  for (const source of REQUIRED_SOURCE_IDS) {
+  for (const source of SUPPORTED_SOURCE_IDS) {
     const stage = await loadSourceStaging(source);
     if (stage?.manifest.status === 'VALID') {
       if (stage.manifest.parserVersion !== parserVersionFor(source) || stage.manifest.schemaVersion !== SCHEMA_VERSION) outdated.push(source);
       else stages.push(stage);
     }
   }
-  const missing = REQUIRED_SOURCE_IDS.filter(source => !stages.some(stage => stage.source === source) && !outdated.includes(source));
-  return { stages, outdated, missing };
+  const hardMissing = HARD_REQUIRED_SOURCE_IDS.filter(source => !stages.some(stage => stage.source === source) && !outdated.includes(source));
+  return { stages, outdated, hardMissing };
 }
 
 async function registryForBuild(override?: AdminRegistryState | null) {
@@ -455,8 +486,25 @@ function targetForBuild(override?: TargetState | null) {
   return bootstrapTargetStateFromReportSettings(loadReportSettings()).state;
 }
 
-async function buildIncrementalPortfolioUpdate(base: IncrementalBase, changedStages: StoredStage[], allStages: StoredStage[], registry: AdminRegistryState | null, registryHash: string, targetState: TargetState | null, targetHash: string) {
-  if (base.active.engineVersion !== CANONICAL_ENGINE_VERSION || base.active.adminRegistryHash !== registryHash || base.active.rcaTargetRegistryHash !== targetHash || !base.active.canonicalInputHash) throw new Error('INCREMENTAL_BASE_IDENTITY_MISMATCH');
+function replacementForBuild(override?: SourceReplacementState | null) {
+  return override === undefined ? loadSourceReplacementState() : override;
+}
+
+async function buildIncrementalPortfolioUpdate(
+  base: IncrementalBase,
+  changedStages: StoredStage[],
+  allStages: StoredStage[],
+  registry: AdminRegistryState | null,
+  registryHash: string,
+  targetState: TargetState | null,
+  targetHash: string,
+  replacementState: SourceReplacementState | null,
+) {
+  if (base.active.engineVersion !== CANONICAL_ENGINE_VERSION || base.active.adminRegistryHash !== registryHash || base.active.rcaTargetRegistryHash !== targetHash || !base.active.canonicalInputHash || base.active.sourceContractVersion !== SOURCE_CONTRACT_VERSION || !base.active.sourceReplacementProofHash) throw new Error('INCREMENTAL_BASE_IDENTITY_MISMATCH');
+  const effective = assertEffectiveSourceSetReady(resolveEffectiveSourceSet({ physicalStages: allStages, replacementState, adminRegistryState: registry, targetState }));
+  const proofHash = await sourceReplacementProofHash(effective.certificates);
+  const replacements = sourceReplacementsFromCertificates(effective.certificates);
+  if (base.active.sourceReplacementProofHash !== proofHash || !sameSourceReplacements(base.active.sourceReplacements, replacements)) throw new Error('INCREMENTAL_BASE_IDENTITY_MISMATCH');
   const changed = new Set(changedStages.map(stage => stage.source));
   const patch = buildCanonicalBundleFromStaging(changedStages.map(stage => stage.parsed)).lists;
   const m3 = base.lists.M3_MOVIMENTO_VENDAS;
@@ -481,34 +529,61 @@ async function buildIncrementalPortfolioUpdate(base: IncrementalBase, changedSta
     M3_MOVIMENTO_VENDAS: { ...m3, records: m3Records, generatedAt },
     M4_HISTORICO_TRANSICAO: { ...m4, records: m4Records, generatedAt },
   };
-  const sourceHash = await stagingManifestHash(allStages);
-  const inputHash = await canonicalInputHashV2(sourceHash, registryHash, targetHash);
-  const active = activeFromLists(lists, sourceHash, registryHash, targetHash, inputHash);
+  const sourceHash = await stagingManifestHashV2(allStages, effective.omitted);
+  const inputHash = await canonicalInputHashV3(sourceHash, registryHash, targetHash, proofHash);
+  const active = activeFromLists(lists, sourceHash, registryHash, targetHash, inputHash, proofHash, replacements);
   await saveGeneratedBuild(active, lists, Object.fromEntries(allStages.map(stage => [stage.source, stage.manifest.fileHash])));
   return active;
 }
 
-export async function buildCanonicalFromStoredSources(onProgress?: (progress: SourceUpdateProgress) => void, registryOverride?: AdminRegistryState | null, targetOverride?: TargetState | null) {
-  const { stages, outdated, missing } = await currentStages();
-  if (outdated.length) throw new Error(`SOURCES_OUTDATED:${outdated.join('|')}`);
-  if (missing.length) throw new Error(`SOURCES_MISSING:${missing.join('|')}`);
-  onProgress?.({ source: 'ALL', label: 'Motores canônicos', index: REQUIRED_SOURCE_IDS.length, total: REQUIRED_SOURCE_IDS.length, phase: 'BUILDING', message: 'Gerando M1, M2, M3 e M4 das 19 fontes + Admin Registry + Target Registry validados' });
+export async function buildCanonicalFromStoredSources(
+  onProgress?: (progress: SourceUpdateProgress) => void,
+  registryOverride?: AdminRegistryState | null,
+  targetOverride?: TargetState | null,
+  replacementOverride?: SourceReplacementState | null,
+) {
+  const current = await currentStages();
+  if (current.outdated.length) throw new Error(`SOURCES_OUTDATED:${current.outdated.join('|')}`);
+  if (current.hardMissing.length) throw new Error(`HARD_MISSING:${current.hardMissing.join('|')}`);
 
   const registry = await registryForBuild(registryOverride);
   const targetState = targetForBuild(targetOverride);
-  const sourceHash = await stagingManifestHash(stages);
+  const replacementState = replacementForBuild(replacementOverride);
+  const effective = assertEffectiveSourceSetReady(resolveEffectiveSourceSet({ physicalStages: current.stages, replacementState, adminRegistryState: registry, targetState }));
+  const proofHash = await sourceReplacementProofHash(effective.certificates);
+  const replacements = sourceReplacementsFromCertificates(effective.certificates);
+  const sourceHash = await stagingManifestHashV2(current.stages, effective.omitted);
   const registryHash = await canonicalAdminRegistryHash(registry);
   const targetHash = await rcaTargetRegistryHash(targetState);
-  const inputHash = await canonicalInputHashV2(sourceHash, registryHash, targetHash);
-  const parsedSources = stages.map(stage => stage.parsed);
+  const inputHash = await canonicalInputHashV3(sourceHash, registryHash, targetHash, proofHash);
+
+  onProgress?.({ source: 'ALL', label: 'Motores canônicos', index: SUPPORTED_SOURCE_IDS.length, total: SUPPORTED_SOURCE_IDS.length, phase: 'BUILDING', message: `Gerando M1–M4 v21 com ${HARD_REQUIRED_SOURCE_IDS.length} hard-required e ${replacements.length} substituição(ões) certificada(s)` });
+  const parsedSources = effective.canonicalStages.map(stage => stage.parsed);
   const bundle = buildCanonicalBundleFromStaging(parsedSources);
   applyAdminRegistryCanonicalAuthority(bundle, parsedSources, registry);
   bundle.lists.M3_MOVIMENTO_VENDAS = applyTargetAuthorityToM3(bundle.lists.M3_MOVIMENTO_VENDAS, parsedSources, targetState, registry);
   bundle.lists.M2_CLIENTE_RCA = materializeTopRetailRouteInM2(bundle.lists.M2_CLIENTE_RCA, parsedSources, registry);
   const lists = bundle.lists;
-  const active = activeFromLists(lists, sourceHash, registryHash, targetHash, inputHash);
-  await saveGeneratedBuild(active, lists, Object.fromEntries(stages.map(stage => [stage.source, stage.manifest.fileHash])));
+  const active = activeFromLists(lists, sourceHash, registryHash, targetHash, inputHash, proofHash, replacements);
+  await saveGeneratedBuild(active, lists, Object.fromEntries(current.stages.map(stage => [stage.source, stage.manifest.fileHash])));
   return active;
+}
+
+export async function requiredSourcesForBuild(
+  registryOverride?: AdminRegistryState | null,
+  targetOverride?: TargetState | null,
+  replacementOverride?: SourceReplacementState | null,
+) {
+  const current = await currentStages();
+  const registry = await registryForBuild(registryOverride);
+  const targetState = targetForBuild(targetOverride);
+  const replacementState = replacementForBuild(replacementOverride);
+  const effective = resolveEffectiveSourceSet({ physicalStages: current.stages, replacementState, adminRegistryState: registry, targetState });
+  return {
+    hardRequired: [...HARD_REQUIRED_SOURCE_IDS],
+    conditionalRequired: effective.diagnostics.filter(item => item.status === 'PHYSICAL' || item.status === 'REPLACEMENT_REQUIRED').map(item => item.sourceId),
+    diagnostics: effective.diagnostics,
+  };
 }
 
 export async function processSourceUpdates(filesBySource: Partial<Record<string, File>>, onProgress?: (progress: SourceUpdateProgress) => void, incrementalBase?: IncrementalBase): Promise<SourceUpdateResult> {
@@ -521,33 +596,50 @@ export async function processSourceUpdates(filesBySource: Partial<Record<string,
     else if (staged.status === 'UNCHANGED') unchanged.push(source);
     else rejected.push({ source, fileName: file.name, errors: staged.errors });
   }
+
+  const current = await currentStages();
   const manifests = await loadSourceStagingManifests();
-  const missing = REQUIRED_SOURCE_IDS.filter(source => !manifests.some(manifest => manifest.source === source && manifest.status === 'VALID'));
-  if (rejected.length || missing.length) return { active: null, updated, unchanged, rejected, missing, manifests };
+  if (rejected.length || current.outdated.length || current.hardMissing.length) {
+    const missing = [...current.hardMissing, ...current.outdated];
+    return { active: null, updated, unchanged, rejected, missing, manifests, blocking: { hardMissing: missing, replacementRequired: [], reviewRequired: [], coverageBroken: [] } };
+  }
 
   const registry = await loadAdminRegistryState();
   const targetState = targetForBuild();
+  const replacementState = replacementForBuild();
+  const effective = resolveEffectiveSourceSet({ physicalStages: current.stages, replacementState, adminRegistryState: registry, targetState });
+  const blocking = {
+    hardMissing: effective.hardMissing,
+    replacementRequired: effective.replacementRequired,
+    reviewRequired: effective.reviewRequired,
+    coverageBroken: effective.coverageBroken,
+  };
+  const missing = [...blocking.hardMissing, ...blocking.replacementRequired, ...blocking.reviewRequired, ...blocking.coverageBroken];
+  if (missing.length) return { active: null, updated, unchanged, rejected, missing, manifests, sourceDiagnostics: effective.diagnostics, blocking };
+
   const registryHash = await canonicalAdminRegistryHash(registry);
   const targetHash = await rcaTargetRegistryHash(targetState);
+  const proofHash = await sourceReplacementProofHash(effective.certificates);
+  const replacements = sourceReplacementsFromCertificates(effective.certificates);
   const canPatchActivePortfolio = Boolean(incrementalBase)
     && selected.length > 0
     && selected.every(([source]) => INCREMENTAL_PORTFOLIO_SOURCES.has(source))
     && incrementalBase!.active.engineVersion === CANONICAL_ENGINE_VERSION
     && incrementalBase!.active.adminRegistryHash === registryHash
-    && incrementalBase!.active.rcaTargetRegistryHash === targetHash;
+    && incrementalBase!.active.rcaTargetRegistryHash === targetHash
+    && incrementalBase!.active.sourceReplacementProofHash === proofHash
+    && sameSourceReplacements(incrementalBase!.active.sourceReplacements, replacements);
 
   let active: ActiveCanonicalBundle;
   if (canPatchActivePortfolio) {
-    const all = await currentStages();
-    if (all.outdated.length || all.missing.length) throw new Error('INCREMENTAL_REQUIRES_COMPLETE_CURRENT_STAGING');
-    onProgress?.({ source: 'ALL', label: 'Carteira', index: selected.length, total: selected.length, phase: 'BUILDING', message: 'Atualizando Carteira, 218 e 12.322 sobre build v20 com Admin Registry e RCA Target Registry idênticos' });
-    const changedStages = await Promise.all(selected.map(([source]) => loadSourceStaging(source))) as StoredStage[];
-    active = await buildIncrementalPortfolioUpdate(incrementalBase!, changedStages, all.stages, registry, registryHash, targetState, targetHash);
+    onProgress?.({ source: 'ALL', label: 'Carteira', index: selected.length, total: selected.length, phase: 'BUILDING', message: 'Atualizando Carteira, 218 e 12.322 sobre build v21 com identidade de substituição inalterada' });
+    const changedStages = (await Promise.all(selected.map(([source]) => loadSourceStaging(source)))).filter((stage): stage is StoredStage => Boolean(stage));
+    active = await buildIncrementalPortfolioUpdate(incrementalBase!, changedStages, current.stages, registry, registryHash, targetState, targetHash, replacementState);
   } else {
-    active = await buildCanonicalFromStoredSources(onProgress, registry, targetState);
+    active = await buildCanonicalFromStoredSources(onProgress, registry, targetState, replacementState);
   }
   onProgress?.({ source: 'ALL', label: 'Atualização', index: selected.length, total: selected.length, phase: 'DONE', message: `Novo build ${active.motorBuildId} pronto para ativação` });
-  return { active, updated, unchanged, rejected, missing, manifests: await loadSourceStagingManifests() };
+  return { active, updated, unchanged, rejected, missing: [], manifests: await loadSourceStagingManifests(), sourceDiagnostics: effective.diagnostics, blocking };
 }
 
 export async function loadGeneratedCanonicalBuild(buildId: string) { return idbGet<StoredBuild>(BUILDS_STORE, buildId); }
@@ -580,6 +672,9 @@ export async function loadGeneratedCanonicalManifest(buildId: string) {
     stagingManifestHash: build.active.stagingManifestHash,
     adminRegistryHash: build.active.adminRegistryHash ?? null,
     rcaTargetRegistryHash: build.active.rcaTargetRegistryHash ?? null,
+    sourceContractVersion: build.active.sourceContractVersion ?? null,
+    sourceReplacementProofHash: build.active.sourceReplacementProofHash ?? null,
+    sourceReplacements: build.active.sourceReplacements ?? [],
     canonicalInputHash: build.active.canonicalInputHash ?? null,
     schemaVersion: build.active.schemaVersion,
     engineVersion: build.active.engineVersion,
@@ -594,6 +689,8 @@ export const sourceImportTestHelpers = {
   snapshotDateFromFile,
   normalizeOrderNumber,
   stagingManifestHash,
+  stagingManifestHashV2,
   activeFromLists,
   completeIdentityMatches,
+  currentStages,
 };

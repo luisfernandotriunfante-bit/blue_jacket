@@ -28,6 +28,14 @@ const appendSource = (sources: string[], source: string) => sources.includes(sou
 const isRegistryAuthority = (authority: string) => authority === 'MANUAL_REGISTRY' || authority === 'ADMIN_REGISTRY';
 const isRcaAudit = (audit: CanonicalAudit) => audit.code === 'AMBIGUOUS_RCA_CODE' || audit.code === 'RCA_UNRESOLVED' || audit.code.startsWith('ADMIN_REGISTRY_RCA_') || audit.code === 'ADMIN_REGISTRY_VALIDITY_UNRESOLVED';
 
+/** Removes only the stale RCA_UNRESOLVED token after final authority resolved the RCA. */
+function removeResolvedRcaResidualAudit(input: unknown) {
+  if (input === null || input === undefined || input === '') return input ?? null;
+  const tokens = String(input).split(/[|;,]/).map(token => token.trim()).filter(Boolean);
+  const remaining = tokens.filter(token => token !== 'RCA_UNRESOLVED');
+  return remaining.length ? remaining.join('|') : null;
+}
+
 function rcaAudit(resolution: RcaResolution, source: string): CanonicalAudit | null {
   if (!resolution.auditCode) return null;
   const candidates = resolution.candidateCurrentCodes.length ? ` Candidatos: ${resolution.candidateCurrentCodes.join(', ')}.` : '';
@@ -101,7 +109,9 @@ function applyRcaAuthority(bundle: CanonicalBundle, sources: ParsedSource[], reg
         rca_canonical_id: resolution.canonicalId,
         mapping_status: resolution.canonicalId ? resolution.status : (record.row_type === 'AGG_310' && !resolution.inputCode ? record.mapping_status : resolution.status),
         source_lineage: lineage,
-        audit_flags: resolution.inputCode && !resolution.canonicalId ? resolution.status : record.audit_flags,
+        audit_flags: resolution.canonicalId
+          ? removeResolvedRcaResidualAudit(record.audit_flags)
+          : resolution.inputCode ? resolution.status : record.audit_flags,
       };
     });
     return replaceListAudits({ ...list, records, sources: usedRegistry ? appendSource(list.sources, 'AdminRegistry:RCAs') : list.sources }, audits);
@@ -201,4 +211,4 @@ export function applyAdminRegistryCanonicalAuthority(bundle: CanonicalBundle, so
   return bundle;
 }
 
-export const adminRegistryCanonicalAuthorityTestHelpers = { appendLineage, importedLaunchIndexes, launchStatus, validCompetence };
+export const adminRegistryCanonicalAuthorityTestHelpers = { appendLineage, importedLaunchIndexes, launchStatus, validCompetence, removeResolvedRcaResidualAudit };
