@@ -24,6 +24,7 @@ import { emptySourceReplacementState, sourceReplacementProofHash } from '../src/
 import { canonicalInputHashV3, stagingManifestHashV2 } from '../src/canonical/sourceReplacementIdentity';
 import { CANONICAL_ENGINE_VERSION, type StoredStage } from '../src/canonical/sourceImport';
 import { HARD_REQUIRED_SOURCE_IDS, REPLACEABLE_SOURCE_IDS, SUPPORTED_SOURCE_IDS } from '../src/canonical/sourceContract';
+import { ADMIN_TABS } from '../src/navigation';
 import type { ActiveCanonicalBundle } from '../src/canonical/runtime';
 import type { CanonicalAudit, CanonicalList, ParsedSource } from '../src/canonical/types';
 import type { CompetenceState } from '../src/canonical/competenceStore';
@@ -108,7 +109,7 @@ test('GA26 — REVIEW_REQUIRED mapeia para BLOCKER', () => assert.match(sourceTe
 test('GA27 — COVERAGE_BROKEN mapeia para BLOCKER', () => assert.match(sourceText('../src/canonical/globalAudit.ts'), /COVERAGE_BROKEN: 'BLOCKER'/));
 test('GA28 — staging parser/schema antigo vira blocker', async () => { const input = await inputs(); input.stages[0].manifest.parserVersion = 'old'; assert.equal(has(await buildGlobalAuditReport(input, NOW), 'SOURCE_STAGING_OUTDATED', 'BLOCKER'), true); });
 test('GA29 — as 19 fontes aparecem na matriz', async () => { const r = await report(); assert.equal(SUPPORTED_SOURCE_IDS.length, 19); assert.equal(r.findings.filter(f => /^SOURCE_(HARD_PRESENT|PHYSICAL|REPLACED|HARD_MISSING|REPLACEMENT_REQUIRED|REVIEW_REQUIRED|COVERAGE_BROKEN)$/.test(f.code)).length, 19); });
-test('GA30 — Global Audit não usa REQUIRED_SOURCE_IDS legado', () => assert.doesNotMatch(sourceText('../src/canonical/globalAudit.ts'), /REQUIRED_SOURCE_IDS/));
+test('GA30 — Global Audit não usa REQUIRED_SOURCE_IDS legado', () => assert.doesNotMatch(sourceText('../src/canonical/globalAudit.ts'), /\bREQUIRED_SOURCE_IDS\b/));
 
 // GA31–GA40 — parser/canonical audits
 
@@ -189,7 +190,7 @@ test('GA86 — filtros não alteram report/findings', async () => { const r = aw
 test('GA87 — summary counts reconciliam exatamente com findings', async () => { const r = await report(); assert.equal(r.summary.total, r.findings.length); assert.equal(r.summary.blockers + r.summary.warnings + r.summary.info + r.summary.pass, r.summary.total); });
 test('GA88 — JSON inclui provenance+summary+findings sem raw canonical/admin/target', async () => { const json = exportGlobalAuditJson(await report()); assert.match(json, /"technicalDetails"/); assert.match(json, /"summary"/); assert.match(json, /"findings"/); assert.doesNotMatch(json, /"records"\s*:/); assert.doesNotMatch(json, /"rcas"\s*:/); assert.doesNotMatch(json, /"rcaTargets"\s*:/); });
 test('GA89 — Auditoria não importa mutators/rebuild/seed/certify', () => { const text = sourceText('../src/canonical/globalAudit.ts') + sourceText('../src/pages/AuditoriaPage.tsx'); assert.doesNotMatch(text, /\b(withManual|replaceTarget|replaceAdmin|processSourceUpdates|activateCanonical|certifySource|revokeCertified|recertifySource|applyRegistrySeed|buildCanonicalFromStoredSources)\b/); });
-test('GA90 — shell segue sete abas, engine v21 e Cloud/Bundle não são tocados pela auditoria', () => { const admin = sourceText('../src/pages/admin/AdminPage.tsx'); const audit = sourceText('../src/canonical/globalAudit.ts') + sourceText('../src/canonical/globalAuditInputs.ts'); assert.equal((admin.match(/id:'/g) ?? []).length >= 7, true); assert.match(sourceText('../src/canonical/sourceImport.ts'), /browser-stage4-product-assortment-v21-source-replacement/); assert.doesNotMatch(audit, /cloudSync|bundleStore|recoverTechnicalBundle/); });
+test('GA90 — shell segue sete abas, engine v21 e Cloud/Bundle não são tocados pela auditoria', () => { const audit = sourceText('../src/canonical/globalAudit.ts') + sourceText('../src/canonical/globalAuditInputs.ts'); assert.equal(ADMIN_TABS.length, 7); assert.deepEqual(ADMIN_TABS.map(tab => tab.id), ['bases', 'cadastros', 'metas', 'competencias', 'auditoria', 'canonical', 'sync']); assert.match(sourceText('../src/canonical/sourceImport.ts'), /browser-stage4-product-assortment-v21-source-replacement/); assert.doesNotMatch(audit, /cloudSync|bundleStore|recoverTechnicalBundle/); });
 
 // Race + future gate
 
