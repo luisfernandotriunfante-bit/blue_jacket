@@ -4,6 +4,7 @@ export type SystemDataOperationOwner =
   | 'TARGET_UPDATE'
   | 'SOURCE_REPLACEMENT_UPDATE'
   | 'ENGINE_MIGRATION'
+  | 'MONTHLY_CLOSE'
   | 'SYNC_SEND'
   | 'SYNC_RESTORE'
   | 'SYNC_CREATE_AND_SEND'
@@ -23,8 +24,9 @@ const idleState = (): SystemDataOperationState => ({ busy: false, owner: null })
 /**
  * Application-lifetime mutual exclusion for operations that read or mutate
  * source staging, the active canonical build, Admin Registry, TargetState,
- * SourceReplacementState, encrypted cloud snapshots, or technical bundle recovery.
- * There is intentionally no queue: a second action is rejected as BUSY.
+ * SourceReplacementState, monthly closing evidence, encrypted cloud snapshots,
+ * or technical bundle recovery. There is intentionally no queue: a second
+ * action is rejected as BUSY.
  */
 export function createSystemDataOperationCoordinator() {
   let state = idleState();
@@ -57,14 +59,15 @@ export function createSystemDataOperationCoordinator() {
 export const systemDataOperationCoordinator = createSystemDataOperationCoordinator();
 
 export function systemDataOperationBusyMessage(owner: SystemDataOperationOwner | null) {
-  if (owner === 'BASE_UPDATE') return 'Há uma atualização de bases em andamento. Aguarde a conclusão antes de iniciar outra operação de sincronização, cadastro, metas ou recuperação.';
-  if (owner === 'REGISTRY_UPDATE') return 'Há uma alteração de Cadastros sendo aplicada ao motor canônico. Aguarde a conclusão antes de atualizar bases, metas, substituições, sincronizar ou recuperar bundle.';
-  if (owner === 'TARGET_UPDATE') return 'Há uma alteração de Metas em andamento. Aguarde a conclusão antes de atualizar bases, cadastros, substituições, sincronizar ou recuperar bundle.';
-  if (owner === 'SOURCE_REPLACEMENT_UPDATE') return 'Há uma substituição certificada de fonte sendo verificada/aplicada. Aguarde a conclusão antes de alterar bases, cadastros, metas, sincronizar ou recuperar bundle.';
+  if (owner === 'BASE_UPDATE') return 'Há uma atualização de bases em andamento. Aguarde a conclusão antes de iniciar outra operação de sincronização, cadastro, metas, fechamento ou recuperação.';
+  if (owner === 'REGISTRY_UPDATE') return 'Há uma alteração de Cadastros sendo aplicada ao motor canônico. Aguarde a conclusão antes de atualizar bases, metas, substituições, fechar competência, sincronizar ou recuperar bundle.';
+  if (owner === 'TARGET_UPDATE') return 'Há uma alteração de Metas em andamento. Aguarde a conclusão antes de atualizar bases, cadastros, substituições, fechar competência, sincronizar ou recuperar bundle.';
+  if (owner === 'SOURCE_REPLACEMENT_UPDATE') return 'Há uma substituição certificada de fonte sendo verificada/aplicada. Aguarde a conclusão antes de alterar bases, cadastros, metas, fechar competência, sincronizar ou recuperar bundle.';
   if (owner === 'ENGINE_MIGRATION') return 'O build canônico está sendo migrado para a engine atual. Aguarde a conclusão antes de iniciar outra operação de dados.';
-  if (owner === 'SYNC_SEND') return 'Há um envio da cópia atual em andamento. Aguarde a conclusão antes de atualizar bases, alterar cadastros ou metas, restaurar ou recuperar bundle.';
+  if (owner === 'MONTHLY_CLOSE') return 'Há um fechamento ou reabertura mensal em andamento. Aguarde a conclusão antes de alterar bases, cadastros, metas, substituições, sincronizar ou recuperar bundle.';
+  if (owner === 'SYNC_SEND') return 'Há um envio da cópia atual em andamento. Aguarde a conclusão antes de atualizar bases, alterar cadastros ou metas, fechar competência, restaurar ou recuperar bundle.';
   if (owner === 'SYNC_RESTORE' || owner === 'SYNC_PAIR_AND_RESTORE' || owner === 'STARTUP_REMOTE_RESTORE') return 'Há uma restauração sincronizada em andamento. Aguarde a conclusão antes de iniciar outra operação de dados.';
   if (owner === 'SYNC_CREATE_AND_SEND') return 'A sincronização entre aparelhos está sendo criada e a cópia inicial ainda está em envio. Aguarde a conclusão.';
-  if (owner === 'BUNDLE_RECOVERY') return 'Há uma recuperação de Bundle Canônico em andamento. Aguarde a conclusão antes de atualizar bases, alterar cadastros, metas ou substituições, ou sincronizar.';
+  if (owner === 'BUNDLE_RECOVERY') return 'Há uma recuperação de Bundle Canônico em andamento. Aguarde a conclusão antes de atualizar bases, alterar cadastros, metas, substituições, fechar competência ou sincronizar.';
   return 'Há outra operação de dados em andamento. Aguarde a conclusão e tente novamente.';
 }
