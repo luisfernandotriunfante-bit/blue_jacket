@@ -1,5 +1,11 @@
 import { deviceSyncIdentity } from '../../canonical/cloudSync';
 import {
+  closeReferencesArchive,
+  ensureCanonicalBuildArchived,
+  indexedDbCanonicalHistoryRepository,
+  type CanonicalHistoryArchive,
+} from '../../canonical/canonicalHistory';
+import {
   closeCompetenceInState,
   loadCompetenceState,
   reopenCompetenceInState,
@@ -25,6 +31,7 @@ import {
   nextCloseRevision,
   replaceMonthlyClosingState,
   validateMonthlyClosingState,
+  type MonthlyClosingBuildIdentity,
   type MonthlyClosingCloseEvent,
   type MonthlyClosingReopenEvent,
   type MonthlyClosingState,
@@ -86,6 +93,7 @@ export function createMonthlyClosingCoordinator() {
 
 export const monthlyClosingCoordinator = createMonthlyClosingCoordinator();
 
+export type MonthlyClosingArchiveResult = { status: 'CREATED' | 'EXISTING'; archive: CanonicalHistoryArchive };
 export type MonthlyClosingFlowDependencies = {
   loadCompetence: () => CompetenceState | null;
   replaceCompetence: (state: CompetenceState | null) => CompetenceState | null;
@@ -93,6 +101,8 @@ export type MonthlyClosingFlowDependencies = {
   replaceClosing: (state: MonthlyClosingState | null) => MonthlyClosingState | null;
   loadAudit: () => Promise<GlobalAuditReport>;
   getActive: () => ActiveCanonicalBundle | null;
+  ensureArchive: (identity: MonthlyClosingBuildIdentity) => Promise<MonthlyClosingArchiveResult>;
+  deleteArchiveInternal: (archiveId: string) => Promise<void>;
   sync: (active: ActiveCanonicalBundle | null) => Promise<BaseAutoSyncResult>;
   now: () => string;
 };
@@ -104,6 +114,8 @@ const defaults: MonthlyClosingFlowDependencies = {
   replaceClosing: replaceMonthlyClosingState,
   loadAudit: loadGlobalAuditReport,
   getActive: resolveActiveCanonicalBundle,
+  ensureArchive: ensureCanonicalBuildArchived,
+  deleteArchiveInternal: archiveId => indexedDbCanonicalHistoryRepository.deleteArchiveInternal(archiveId),
   sync: async active => {
     if (!deviceSyncIdentity()) return { status: 'NOT_PAIRED' };
     if (!active) throw new Error('SYNC_NO_ACTIVE_BUILD');
@@ -179,6 +191,14 @@ export async function executeMonthlyCloseTransaction(input: ExecuteMonthlyCloseI
   const closingRecheck = dependencies.loadClosing();
   if (!same(closingRecheck, closingBefore)) throw new Error('MONTHLY_CLOSE_HISTORY_CHANGED');
 
+  let archiveResult: MonthlyClosingArchiveResult;
+  try {
+    archiveResult = await dependencies.ensureArchive(preview.activeBuildIdentity!);
+  } catch (reason) {
+    const detail = reason instanceof Error ? reason.message : String(reason);
+    throw new Error(`MONTHLY_CLOSE_HISTORY_ARCHIVE_FAILED:${detail}`);
+  }
+
   const occurredAt = dependencies.now();
   const revision = nextCloseRevision(closingBefore, input.competence);
   const evidence = await buildMonthlyClosingEvidence(report);
@@ -203,6 +223,9 @@ export async function executeMonthlyCloseTransaction(input: ExecuteMonthlyCloseI
     if (!localCommitted) {
       try { dependencies.replaceClosing(closingBefore); } catch { /* original error */ }
       try { dependencies.replaceCompetence(competenceBefore); } catch { /* original error */ }
+      if (archiveResult.status === 'CREATED' && !closeReferencesArchive(closingBefore, archiveResult.archive.archiveId)) {
+        try { await dependencies.deleteArchiveInternal(archiveResult.archive.archiveId); } catch { /* preserve original transaction failure */ }
+      }
     }
     throw reason;
   }
