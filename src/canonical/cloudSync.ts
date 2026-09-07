@@ -8,6 +8,15 @@ import {
   validateCompetenceState,
   type CompetenceState,
 } from './competenceStore';
+import { monthlyClosingSyncHash } from './monthlyClosingIdentity';
+import {
+  assertMonthlyClosingCompetenceConsistency,
+  emptyMonthlyClosingState,
+  loadMonthlyClosingState,
+  replaceMonthlyClosingState,
+  validateMonthlyClosingState,
+  type MonthlyClosingState,
+} from './monthlyClosingState';
 import {
   buildCanonicalFromStoredSources,
   exportSourceStorageSnapshot,
@@ -52,6 +61,7 @@ export type CloudSnapshot = {
   sources: SourceStorageSnapshot;
   settings: ReportSettings;
   competenceState?: CompetenceState;
+  monthlyClosingState?: MonthlyClosingState;
   adminRegistryState?: AdminRegistryState;
   targetState?: TargetState;
   sourceReplacementState?: SourceReplacementState;
@@ -61,12 +71,14 @@ export type CloudRestoreDependencies = {
   exportSources: () => Promise<SourceStorageSnapshot>;
   loadSettings: () => ReportSettings;
   loadCompetence: () => CompetenceState | null;
+  loadMonthlyClosingState?: () => MonthlyClosingState | null;
   loadAdminRegistry?: () => Promise<AdminRegistryState | null>;
   loadTargetState?: () => TargetState | null;
   loadSourceReplacementState?: () => SourceReplacementState | null;
   restoreSources: (snapshot: SourceStorageSnapshot) => Promise<void>;
   restoreSettings: (value: unknown) => ReportSettings;
   replaceCompetence: (value: unknown | null) => CompetenceState | null;
+  replaceMonthlyClosingState?: (value: MonthlyClosingState | null) => MonthlyClosingState | null;
   replaceAdminRegistry?: (value: AdminRegistryState | null) => Promise<AdminRegistryState | null>;
   replaceTargetState?: (value: TargetState | null) => TargetState | null;
   replaceSourceReplacementState?: (value: SourceReplacementState | null) => SourceReplacementState | null;
@@ -82,8 +94,10 @@ export type CloudUploadDependencies = {
   targetHash: (state: TargetState | null) => Promise<string>;
   replacementProofHash: (state: SourceReplacementState | null, sources: SourceStorageSnapshot, registry: AdminRegistryState | null, target: TargetState | null) => Promise<{ proofHash: string; replacements: Array<{ source: string; scope: string }>; replacedSourceIds: string[] }>;
   inputHash: (sourceHash: string, registryHash: string, targetHash: string, proofHash: string) => Promise<string>;
+  closingSyncHash?: (competence: CompetenceState | null, closing: MonthlyClosingState | null) => Promise<string>;
   loadSettings: () => ReportSettings;
   loadCompetence: () => CompetenceState | null;
+  loadMonthlyClosingState?: () => MonthlyClosingState | null;
   loadAdminRegistry: () => Promise<AdminRegistryState | null>;
   loadTargetState: () => TargetState | null;
   loadSourceReplacementState: () => SourceReplacementState | null;
@@ -152,6 +166,14 @@ async function encrypt(identity: DeviceSyncIdentity, snapshot: CloudSnapshot) {
   return result;
 }
 
+function validateClosingSnapshotConsistency(snapshot: CloudSnapshot) {
+  if (snapshot.monthlyClosingState === undefined) return;
+  const closing = validateMonthlyClosingState(snapshot.monthlyClosingState);
+  snapshot.monthlyClosingState = closing;
+  if (closing.events.length > 0 && snapshot.competenceState === undefined) throw new Error('MONTHLY_CLOSING_COMPETENCE_INCONSISTENT');
+  assertMonthlyClosingCompetenceConsistency(snapshot.competenceState ?? null, closing);
+}
+
 async function decrypt(identity: DeviceSyncIdentity, payload: Uint8Array) {
   if (payload.length <= MAGIC.length + 12 || !MAGIC.every((value, index) => payload[index] === value)) throw new Error('SYNC_PAYLOAD_INVALID');
   const iv = payload.slice(MAGIC.length, MAGIC.length + 12); const encrypted = payload.slice(MAGIC.length + 12);
@@ -161,6 +183,7 @@ async function decrypt(identity: DeviceSyncIdentity, payload: Uint8Array) {
   if (snapshot?.format !== 'blue-jacket-device-sync/v1' || !snapshot.sources || !snapshot.settings || typeof snapshot.settings !== 'object') throw new Error('SYNC_PAYLOAD_INVALID');
   try { validateSourceStorageSnapshot(snapshot.sources); } catch { throw new Error('SYNC_PAYLOAD_INVALID'); }
   if (snapshot.competenceState !== undefined) { try { snapshot.competenceState = validateCompetenceState(snapshot.competenceState); } catch { throw new Error('SYNC_PAYLOAD_INVALID'); } }
+  if (snapshot.monthlyClosingState !== undefined) { try { validateClosingSnapshotConsistency(snapshot); } catch { throw new Error('SYNC_PAYLOAD_INVALID'); } }
   if (snapshot.adminRegistryState !== undefined) { try { snapshot.adminRegistryState = validateAdminRegistryState(snapshot.adminRegistryState); } catch { throw new Error('SYNC_PAYLOAD_INVALID'); } }
   if (snapshot.targetState !== undefined) { try { snapshot.targetState = validateTargetState(snapshot.targetState); } catch { throw new Error('SYNC_PAYLOAD_INVALID'); } }
   if (snapshot.sourceReplacementState !== undefined) { try { snapshot.sourceReplacementState = validateSourceReplacementState(snapshot.sourceReplacementState); } catch { throw new Error('SYNC_PAYLOAD_INVALID'); } }
@@ -176,26 +199,32 @@ function buildCloudSnapshot(
   adminRegistryState: AdminRegistryState | null = null,
   targetState: TargetState | null = null,
   sourceReplacementState: SourceReplacementState | null = null,
+  monthlyClosingState: MonthlyClosingState | null = null,
 ): CloudSnapshot {
-  return {
+  const snapshot: CloudSnapshot = {
     format: 'blue-jacket-device-sync/v1', createdAt, active, sources, settings,
     ...(competenceState ? { competenceState: validateCompetenceState(competenceState) } : {}),
+    ...(monthlyClosingState ? { monthlyClosingState: validateMonthlyClosingState(monthlyClosingState) } : {}),
     ...(adminRegistryState ? { adminRegistryState: validateAdminRegistryState(adminRegistryState) } : {}),
     ...(targetState ? { targetState: validateTargetState(targetState) } : {}),
     ...(sourceReplacementState ? { sourceReplacementState: validateSourceReplacementState(sourceReplacementState) } : {}),
   };
+  validateClosingSnapshotConsistency(snapshot);
+  return snapshot;
 }
 
 const defaultRestoreDependencies: CloudRestoreDependencies = {
   exportSources: exportSourceStorageSnapshot,
   loadSettings: loadReportSettings,
   loadCompetence: loadCompetenceState,
+  loadMonthlyClosingState,
   loadAdminRegistry: loadAdminRegistryState,
   loadTargetState,
   loadSourceReplacementState,
   restoreSources: restoreSourceStorageSnapshot,
   restoreSettings: restoreReportSettings,
   replaceCompetence: replaceCompetenceState,
+  replaceMonthlyClosingState,
   replaceAdminRegistry: replaceAdminRegistryState,
   replaceTargetState,
   replaceSourceReplacementState,
@@ -232,6 +261,7 @@ async function prospectiveCloudIdentity(snapshot: CloudSnapshot, dependencies: C
 
 async function applyCloudSnapshot(snapshot: CloudSnapshot, dependencies: CloudRestoreDependencies = defaultRestoreDependencies) {
   if (snapshot.competenceState !== undefined) validateCompetenceState(snapshot.competenceState);
+  if (snapshot.monthlyClosingState !== undefined) validateClosingSnapshotConsistency(snapshot);
   if (snapshot.adminRegistryState !== undefined) validateAdminRegistryState(snapshot.adminRegistryState);
   if (snapshot.targetState !== undefined) validateTargetState(snapshot.targetState);
   if (snapshot.sourceReplacementState !== undefined) validateSourceReplacementState(snapshot.sourceReplacementState);
@@ -239,17 +269,22 @@ async function applyCloudSnapshot(snapshot: CloudSnapshot, dependencies: CloudRe
   const previousSources = await dependencies.exportSources().catch(() => null);
   const previousSettings = dependencies.loadSettings();
   const previousCompetence = dependencies.loadCompetence();
+  const previousClosing = dependencies.loadMonthlyClosingState ? dependencies.loadMonthlyClosingState() : null;
   const previousAdminRegistry = dependencies.loadAdminRegistry ? await dependencies.loadAdminRegistry() : null;
   const previousTarget = dependencies.loadTargetState ? dependencies.loadTargetState() : null;
   const previousReplacement = dependencies.loadSourceReplacementState ? dependencies.loadSourceReplacementState() : null;
 
   // Mandatory preflight before any local mutation.
   const prospective = await prospectiveCloudIdentity(snapshot, dependencies, previousAdminRegistry, previousTarget);
-  let registryTouched = false; let targetTouched = false; let replacementTouched = false;
+  let closingTouched = false; let registryTouched = false; let targetTouched = false; let replacementTouched = false;
   try {
     await dependencies.restoreSources(snapshot.sources);
     const restoredSettings = dependencies.restoreSettings(snapshot.settings);
     if (snapshot.competenceState !== undefined) dependencies.replaceCompetence(snapshot.competenceState);
+    if (snapshot.monthlyClosingState !== undefined) {
+      if (!dependencies.replaceMonthlyClosingState) throw new Error('SYNC_MONTHLY_CLOSING_STATE_UNAVAILABLE');
+      dependencies.replaceMonthlyClosingState(snapshot.monthlyClosingState); closingTouched = true;
+    }
     if (snapshot.adminRegistryState !== undefined) {
       if (!dependencies.replaceAdminRegistry) throw new Error('SYNC_ADMIN_REGISTRY_UNAVAILABLE');
       await dependencies.replaceAdminRegistry(snapshot.adminRegistryState); registryTouched = true;
@@ -281,6 +316,7 @@ async function applyCloudSnapshot(snapshot: CloudSnapshot, dependencies: CloudRe
       if (previousSources) await dependencies.restoreSources(previousSources);
       dependencies.restoreSettings(previousSettings);
       dependencies.replaceCompetence(previousCompetence);
+      if (closingTouched && dependencies.replaceMonthlyClosingState) dependencies.replaceMonthlyClosingState(previousClosing);
       if (registryTouched && dependencies.replaceAdminRegistry) await dependencies.replaceAdminRegistry(previousAdminRegistry);
       if (targetTouched && dependencies.replaceTargetState) dependencies.replaceTargetState(previousTarget);
       if (replacementTouched && dependencies.replaceSourceReplacementState) dependencies.replaceSourceReplacementState(previousReplacement);
@@ -320,8 +356,10 @@ const defaultUploadDependencies: CloudUploadDependencies = {
   targetHash: rcaTargetRegistryHash,
   replacementProofHash: defaultReplacementProof,
   inputHash: canonicalInputHashV3,
+  closingSyncHash: monthlyClosingSyncHash,
   loadSettings: loadReportSettings,
   loadCompetence: loadCompetenceState,
+  loadMonthlyClosingState,
   loadAdminRegistry: loadAdminRegistryState,
   loadTargetState,
   loadSourceReplacementState,
@@ -335,6 +373,10 @@ async function uploadCurrentDeviceSnapshotWithDependencies(identity: DeviceSyncI
   const activeBefore = dependencies.getActive();
   if (!activeBefore) throw new Error('SYNC_NO_ACTIVE_BUILD');
   const createdAt = dependencies.now();
+  const competenceBefore = dependencies.loadCompetence();
+  const closingBefore = dependencies.loadMonthlyClosingState?.() ?? null;
+  const closingHash = dependencies.closingSyncHash ?? monthlyClosingSyncHash;
+  const closingSyncHashBefore = await closingHash(competenceBefore, closingBefore);
   const [sources, adminRegistryState] = await Promise.all([dependencies.exportSources(), dependencies.loadAdminRegistry()]);
   const targetState = dependencies.loadTargetState();
   const replacementState = dependencies.loadSourceReplacementState();
@@ -344,6 +386,9 @@ async function uploadCurrentDeviceSnapshotWithDependencies(identity: DeviceSyncI
   const exportedRcaTargetRegistryHash = await dependencies.targetHash(targetState);
   const exportedCanonicalInputHash = await dependencies.inputHash(exportedSourcesManifestHash, exportedAdminRegistryHash, exportedRcaTargetRegistryHash, replacementIdentity.proofHash);
   const activeAfter = dependencies.getActive();
+  const competenceAfter = dependencies.loadCompetence();
+  const closingAfter = dependencies.loadMonthlyClosingState?.() ?? null;
+  const closingSyncHashAfter = await closingHash(competenceAfter, closingAfter);
 
   if (!activeAfter
     || activeBefore.engineVersion !== 'browser-stage4-product-assortment-v21-source-replacement'
@@ -361,9 +406,12 @@ async function uploadCurrentDeviceSnapshotWithDependencies(identity: DeviceSyncI
     || exportedRcaTargetRegistryHash !== activeBefore.rcaTargetRegistryHash
     || replacementIdentity.proofHash !== activeBefore.sourceReplacementProofHash
     || JSON.stringify(replacementIdentity.replacements) !== JSON.stringify(activeBefore.sourceReplacements ?? [])
-    || exportedCanonicalInputHash !== activeBefore.canonicalInputHash) throw new Error('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE');
+    || exportedCanonicalInputHash !== activeBefore.canonicalInputHash
+    || closingSyncHashBefore !== closingSyncHashAfter) throw new Error('SYNC_SNAPSHOT_CHANGED_DURING_CAPTURE');
 
-  const snapshot = buildCloudSnapshot(activeBefore, sources, dependencies.loadSettings(), dependencies.loadCompetence(), createdAt, adminRegistryState, targetState, replacementState);
+  const closingForSnapshot = closingBefore ?? emptyMonthlyClosingState(createdAt);
+  assertMonthlyClosingCompetenceConsistency(competenceBefore, closingForSnapshot);
+  const snapshot = buildCloudSnapshot(activeBefore, sources, dependencies.loadSettings(), competenceBefore, createdAt, adminRegistryState, targetState, replacementState, closingForSnapshot);
   const payload = await dependencies.encryptSnapshot(identity, snapshot);
   const status = await dependencies.uploadPayload(identity, payload);
   dependencies.saveState(identity, status.updatedAt);
@@ -384,4 +432,5 @@ export const cloudSyncTestHelpers = {
   applyCloudSnapshot,
   uploadCurrentDeviceSnapshotWithDependencies,
   defaultReplacementProof,
+  validateClosingSnapshotConsistency,
 };
