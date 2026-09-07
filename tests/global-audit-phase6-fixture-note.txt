@@ -1,0 +1,1 @@
+Phase 6 Global Audit tests are implemented in tests/global-audit-phase6.test.ts. This marker is temporary and should not be merged.
