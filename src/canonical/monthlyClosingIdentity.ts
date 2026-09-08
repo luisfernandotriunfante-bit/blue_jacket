@@ -116,7 +116,11 @@ export function monthlyClosingSyncProjection(competenceState: CompetenceState | 
 export const monthlyClosingSyncHash = (competenceState: CompetenceState | null, closingState: MonthlyClosingState | null) => sha256(monthlyClosingSyncProjection(competenceState, closingState));
 
 export function warningEvidence(report: GlobalAuditReport): MonthlyClosingWarningEvidence[] {
-  return report.findings.filter(item => item.status === 'WARNING').map(item => ({ id: item.id, code: item.code, domain: item.domain, count: item.count, message: item.message })).sort((a, b) => a.id.localeCompare(b.id));
+  const warningsById = new Map<string, MonthlyClosingWarningEvidence>();
+  for (const item of sortGlobalAuditFindings(report.findings.filter(finding => finding.status === 'WARNING'))) {
+    if (!warningsById.has(item.id)) warningsById.set(item.id, { id: item.id, code: item.code, domain: item.domain, count: item.count, message: item.message });
+  }
+  return [...warningsById.values()];
 }
 
 export async function buildMonthlyClosingEvidence(report: GlobalAuditReport): Promise<MonthlyClosingEvidence> {
@@ -151,7 +155,7 @@ export type MonthlyClosingPreview = {
 export async function previewMonthlyClosing(report: GlobalAuditReport, competenceState: CompetenceState | null, competence: string, acknowledgement?: MonthlyClosingAcknowledgement): Promise<MonthlyClosingPreview> {
   const blockers = report.findings.filter(item => item.status === 'BLOCKER');
   const warnings = report.findings.filter(item => item.status === 'WARNING');
-  const warningIds = warnings.map(item => item.id).sort();
+  const warningIds = sortIds(warnings.map(item => item.id));
   let activeBuildIdentity: MonthlyClosingBuildIdentity | null = null;
   let auditSemanticHash: string | null = null;
   try { activeBuildIdentity = monthlyClosingBuildIdentity(report.activeBuild); auditSemanticHash = await monthlyClosingAuditHash(report); }
