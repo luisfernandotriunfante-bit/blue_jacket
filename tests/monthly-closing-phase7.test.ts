@@ -59,6 +59,16 @@ test('MC15 — BLOCKER não possui override', async () => { const preview = awai
 test('MC16 — HEALTHY pode fechar', async () => assert.equal((await previewMonthlyClosing(report(), openCompetence(), '2026-08')).canClose, true));
 test('MC17 — ATTENTION sem acknowledgement bloqueia', async () => assert.equal((await previewMonthlyClosing(report({ warnings: [finding('WARNING', 'W1')] }), openCompetence(), '2026-08')).reason, 'MONTHLY_CLOSE_WARNINGS_ACK_REQUIRED'));
 test('MC18 — ATTENTION com acknowledgement exato permite', async () => assert.equal((await previewMonthlyClosing(report({ warnings: [finding('WARNING', 'W1')] }), openCompetence(), '2026-08', { reviewed: true, warningIds: ['W1'], note: 'Revisei.' })).canClose, true));
+test('MC18A — IDs repetidos de warning são reconhecidos uma única vez', async () => {
+  const audit = report({ warnings: [finding('WARNING', 'W1'), finding('WARNING', 'W1')] });
+  const preview = await previewMonthlyClosing(audit, openCompetence(), '2026-08', { reviewed: true, warningIds: ['W1'], note: 'Revisei.' });
+  assert.equal(preview.canClose, true);
+  assert.deepEqual(preview.warningIds, ['W1']);
+  const h = flowHarness({ audit });
+  const completion = await executeMonthlyCloseTransaction(await closeInput(audit, 'Revisei.'), controls, h.dependencies);
+  assert.equal(completion.phase, 'SUCCESS');
+  assert.deepEqual(h.read().closing?.events[0].evidence.warningIds, ['W1']);
+});
 test('MC19 — warning note obrigatória', async () => assert.equal((await previewMonthlyClosing(report({ warnings: [finding('WARNING', 'W1')] }), openCompetence(), '2026-08', { reviewed: true, warningIds: ['W1'], note: '  ' })).reason, 'MONTHLY_CLOSE_WARNING_NOTE_REQUIRED'));
 test('MC20 — meta zero continua valor válido', async () => { const audit = report(); audit.findings.push({ ...finding('PASS', 'SELL_OUT_TARGET_PRESENT'), technicalDetails: { value: 0 } }); audit.summary.total += 1; audit.summary.pass += 1; assert.equal((await previewMonthlyClosing(audit, openCompetence(), '2026-08')).warnings.some(item => item.code.includes('TARGET_MISSING')), false); });
 test('MC21 — audit partial bloqueia', async () => assert.equal((await previewMonthlyClosing(report({ partial: true }), openCompetence(), '2026-08')).reason, 'MONTHLY_CLOSE_AUDIT_PARTIAL'));
