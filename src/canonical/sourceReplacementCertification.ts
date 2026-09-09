@@ -9,6 +9,7 @@ import {
   type SourceReplacementCertificate,
 } from './sourceReplacementState';
 import { replacementCertificateCoverageValid } from './sourceReplacementRuntime';
+import { resolveBussolaRca } from './targetAuthority';
 import type { TargetState } from './targetStore';
 import type { ParsedSource, RawTyped } from './types';
 
@@ -80,7 +81,7 @@ async function coverageKeysForV21(sourceId: string, scope: SourceReplacementScop
     const keys: string[] = [];
     for (const row of physical.rows) {
       if (String(typed(row, 'pasta_type') ?? '').trim().toUpperCase() !== 'MCD' || String(typed(row, 'industry_name') ?? '').trim().toUpperCase() !== 'COLGATE') continue;
-      const resolution = resolver.resolveLegacy(typed(row, 'target_rca_code'), typed(row, 'target_rca_name'), competence);
+      const resolution = resolveBussolaRca(resolver, row, competence);
       if (resolution.canonicalId) keys.push(`TARGET|${competence}|${resolution.canonicalId}`);
     }
     return keys.sort();

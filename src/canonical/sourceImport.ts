@@ -40,7 +40,7 @@ const SOURCE_PARSER_VERSIONS: Record<string, string> = {
   '310 total 2026.txt': 'browser-v2-rca310',
   "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v3-route-monthly-meta',
   'entrada-notas-218.xls': 'browser-v3-invoice-items-physical-layout',
-  'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx': 'browser-v2-bussola-header-layout',
+  'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx': 'browser-v3-bussola-current-code-context',
   "Sortimento Recomendado - Q3'26.xlsx": 'browser-v4-jul-optional-blank-before-ean',
   'CARTEIRA 24.08.xlsx': 'browser-v5-portfolio-current-snapshot',
 };

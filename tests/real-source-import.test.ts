@@ -27,7 +27,8 @@ test('Bússola setembro usa o layout real deslocado e materializa metas Colgate'
   const bytes=XLSX.write(workbook,{type:'array',bookType:'xlsx'}) as ArrayBuffer;
   const parsed=await parseBussola(new File([bytes],'Bussola de Metas SETEMBRO - 2026 - MCD.xlsx'));
   assert.equal(parsed.audits.length,0);assert.equal(parsed.rows.length,1);
-  assert.equal(parsed.rows[0].industry_name.typed,'Colgate');assert.equal(parsed.rows[0].sales_target_pna.typed,75000);assert.equal(parsed.rows[0].positivity_target.typed,34);
+  assert.equal(parsed.rows[0].target_rca_code.typed,'1076');assert.equal(parsed.rows[0].target_rca_code_context.typed,'CURRENT');
+  assert.equal(parsed.rows[0].industry_winthor_code.typed,'17770');assert.equal(parsed.rows[0].industry_name.typed,'Colgate');assert.equal(parsed.rows[0].sales_target_pna.typed,75000);assert.equal(parsed.rows[0].positivity_target.typed,34);
 });
 
 test('staging legado da Bússola exige reimportação após correção do layout',()=>{

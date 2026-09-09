@@ -15,6 +15,15 @@ type TargetResolution = {
 };
 
 const value = (row: Record<string, RawTyped>, field: string) => row[field]?.typed ?? null;
+const bussolaContext = (row: Record<string, RawTyped>) => String(value(row, 'target_rca_code_context') ?? 'LEGACY').trim().toUpperCase();
+
+export function resolveBussolaRca(resolver: ReturnType<typeof createRcaResolver>, row: Record<string, RawTyped>, competence?: string | null) {
+  const code = value(row, 'target_rca_code');
+  const name = value(row, 'target_rca_name');
+  return bussolaContext(row) === 'CURRENT'
+    ? resolver.resolveCurrent(code, name, competence)
+    : resolver.resolveLegacy(code, name, competence);
+}
 const semantic = (record: RcaTargetRecord) => JSON.stringify({
   competence: record.competence,
   rcaCanonicalId: record.rcaCanonicalId,
@@ -59,7 +68,7 @@ function physicalTargetRows(sources: ParsedSource[], registry: AdminRegistryStat
     .filter(row => String(value(row, 'pasta_type') ?? '').trim().toUpperCase() === 'MCD' && String(value(row, 'industry_name') ?? '').trim().toUpperCase() === 'COLGATE')
     .map(row => {
       const code = value(row, 'target_rca_code');
-      const resolution = resolver.resolveLegacy(code, value(row, 'target_rca_name'), competence);
+      const resolution = resolveBussolaRca(resolver, row, competence);
       return { row, code, competence, resolution };
     });
   return { competence, rows };
@@ -92,7 +101,7 @@ function bussolaFact(row: Record<string, RawTyped>, code: unknown, competence: s
     sales_target: value(row, 'sales_target_pna'),
     positivity_target: value(row, 'positivity_target'),
     target_assignment_status: resolution.status,
-    source_lineage: 'Bússola: Metas | MCD + COLGATE | NOVOS RCAS:LEGACY',
+    source_lineage: `Bússola: Metas | MCD + COLGATE | NOVOS RCAS:${bussolaContext(row)}`,
     audit_flags: resolution.canonicalId ? null : resolution.status,
   };
 }

@@ -3,6 +3,7 @@ import { createRcaResolver, type RcaResolution } from './rcaResolver';
 import type { CanonicalAudit, CanonicalBundle, CanonicalList, ParsedSource, RawTyped } from './types';
 import { ASSORTMENT_CHANNELS } from './assortment';
 import { competenceFromParsedSource } from './competence';
+import { resolveBussolaRca } from './targetAuthority';
 
 type Id = CanonicalList['id'];
 type Schema = { field: string; type: string }[];
@@ -281,10 +282,10 @@ export function buildM3(sources: ParsedSource[]) {
   for (const row of rows(sources, 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) {
     if (String(value(row, 'pasta_type') ?? '').trim().toUpperCase() !== 'MCD' || String(value(row, 'industry_name') ?? '').trim().toUpperCase() !== 'COLGATE') continue;
     const code = value(row, 'target_rca_code');
-    const rca = resolver.resolveLegacy(code, value(row, 'target_rca_name'));
+    const rca = resolveBussolaRca(resolver, row, targetComp);
     registerRcaAudit(rcaAudits, rca, 'Bússola');
     const out = blank('M3_MOVIMENTO_VENDAS');
-    Object.assign(out, { fact_type: 'TARGET', competence: targetComp, transaction_rca_code: code, rca_canonical_id: rca.canonicalId, sales_target: value(row, 'sales_target_pna'), positivity_target: value(row, 'positivity_target'), target_assignment_status: rca.status, source_lineage: 'Bússola: Metas | MCD + COLGATE | NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status });
+    Object.assign(out, { fact_type: 'TARGET', competence: targetComp, transaction_rca_code: code, rca_canonical_id: rca.canonicalId, sales_target: value(row, 'sales_target_pna'), positivity_target: value(row, 'positivity_target'), target_assignment_status: rca.status, source_lineage: `Bússola: Metas | MCD + COLGATE | NOVOS RCAS:${String(value(row, 'target_rca_code_context') ?? 'LEGACY')}`, audit_flags: rca.canonicalId ? null : rca.status });
     records.push(out);
   }
   return list('M3_MOVIMENTO_VENDAS', records, ['vendas-8022.xls', 'CARTEIRA 24.08.xlsx', 'entrada-notas-218.xls', 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'], materializeRcaAudits(rcaAudits), comp);
@@ -417,7 +418,7 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   }
   bundle.lists.M2_CLIENTE_RCA = list('M2_CLIENTE_RCA', [...m2.values()], ['Nova Base de Premissas - Q3.xlsx', 'NOVOS RCAS.xlsx', 'relatorio_carteira_clientes.xls', "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx"], materializeRcaAudits(m2RcaAudits), comp);
 
-  // M3 — 8022 é contexto ATUAL; Bússola homologada é contexto LEGADO com nome para desambiguar.
+  // M3 — 8022 é contexto ATUAL; a Bússola declara CURRENT no layout de setembro e LEGACY nos layouts anteriores.
   const m3RcaAudits = new Map<string, RcaAuditBucket>();
   const m3: Record<string, unknown>[] = [];
   for (const row of rows(parsedSources, 'vendas-8022.xls')) {
@@ -429,8 +430,8 @@ export function buildCanonicalBundleFromStaging(parsedSources: ParsedSource[]): 
   for (const row of rows(parsedSources, 'entrada-notas-218.xls')) m3.push(fieldOnly('M3_MOVIMENTO_VENDAS', { fact_id: `218:${value(row, '__source_row')}`, fact_type: 'RECEIPT', source: '218', competence: comp, receipt_date: value(row, 'receipt_date'), invoice_issue_date: value(row, 'invoice_issue_date'), invoice_number: value(row, 'invoice_raw'), invoice_series: value(row, 'invoice_series'), winthor_product_code: value(row, 'receipt_item_code + description'), received_units: value(row, 'received_units'), receipt_unit_price: value(row, 'receipt_unit_price'), receipt_invoice_value: value(row, 'invoice_total'), current_financial_cost: value(row, 'current_financial_cost'), fiscal_code: value(row, 'fiscal_code'), operation_code: value(row, 'operation_code'), receipt_scope: value(row, '__receipt_scope') ?? 'ITEM', source_lineage: value(row, '__receipt_scope') === 'INVOICE' ? '218:NF' : '218:ITEM' }));
   for (const row of rows(parsedSources, 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx')) {
     if (String(value(row, 'pasta_type') ?? '').trim().toUpperCase() !== 'MCD' || String(value(row, 'industry_name') ?? '').trim().toUpperCase() !== 'COLGATE') continue;
-    const code = value(row, 'target_rca_code'); const rca = resolver.resolveLegacy(code, value(row, 'target_rca_name')); registerRcaAudit(m3RcaAudits, rca, 'Bússola');
-    m3.push(fieldOnly('M3_MOVIMENTO_VENDAS', { fact_id: `BUSSOLA:${value(row, '__source_row')}`, fact_type: 'TARGET', source: 'BUSSOLA', competence: targetComp, transaction_rca_code: code, rca_canonical_id: rca.canonicalId, sales_target: value(row, 'sales_target_pna'), positivity_target: value(row, 'positivity_target'), target_assignment_status: rca.status, source_lineage: 'Bússola: Metas | MCD + COLGATE | NOVOS RCAS:LEGACY', audit_flags: rca.canonicalId ? null : rca.status }));
+    const code = value(row, 'target_rca_code'); const rca = resolveBussolaRca(resolver, row, targetComp); registerRcaAudit(m3RcaAudits, rca, 'Bússola');
+    m3.push(fieldOnly('M3_MOVIMENTO_VENDAS', { fact_id: `BUSSOLA:${value(row, '__source_row')}`, fact_type: 'TARGET', source: 'BUSSOLA', competence: targetComp, transaction_rca_code: code, rca_canonical_id: rca.canonicalId, sales_target: value(row, 'sales_target_pna'), positivity_target: value(row, 'positivity_target'), target_assignment_status: rca.status, source_lineage: `Bússola: Metas | MCD + COLGATE | NOVOS RCAS:${String(value(row, 'target_rca_code_context') ?? 'LEGACY')}`, audit_flags: rca.canonicalId ? null : rca.status }));
   }
   bundle.lists.M3_MOVIMENTO_VENDAS = list('M3_MOVIMENTO_VENDAS', m3, ['vendas-8022.xls', 'CARTEIRA 24.08.xlsx', 'entrada-notas-218.xls', 'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'], materializeRcaAudits(m3RcaAudits), comp);
 
