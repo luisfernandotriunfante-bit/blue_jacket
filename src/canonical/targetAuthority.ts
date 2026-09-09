@@ -1,5 +1,5 @@
 import type { AdminRegistryState } from './adminRegistry';
-import { competenceFromParsedSource } from './competence';
+import { competenceFromParsedSource, isValidCompetenceId } from './competence';
 import { createRcaResolver, type RcaResolution } from './rcaResolver';
 import type { TargetState, RcaTargetRecord } from './targetStore';
 import type { CanonicalAudit, CanonicalList, ParsedSource, RawTyped } from './types';
@@ -158,7 +158,11 @@ export function materializeEffectiveTargetFacts(sources: ParsedSource[], targetS
 
 /** Replaces every provisional physical TARGET in M3 with the single effective authority result. SALE/INBOUND/RECEIPT remain byte-for-byte records. */
 export function applyTargetAuthorityToM3(m3: CanonicalList, sources: ParsedSource[], targetState: TargetState | null, registry: AdminRegistryState | null): CanonicalList {
-  const effective = materializeEffectiveTargetFacts(sources, targetState, registry);
+  const operationalCompetence = isValidCompetenceId(m3.competence) ? m3.competence : null;
+  const scopedTargetState = operationalCompetence && targetState
+    ? { ...targetState, records: targetState.records.filter(record => record.competence === operationalCompetence) }
+    : targetState;
+  const effective = materializeEffectiveTargetFacts(sources, scopedTargetState, registry);
   const nonTargets = m3.records.filter(record => record.fact_type !== 'TARGET');
   const previousNonTargetWarnings = m3.warnings.filter(audit => audit.source !== 'Bússola' && audit.source !== 'AdminTargetRegistry');
   const previousNonTargetErrors = m3.errors.filter(audit => audit.source !== 'Bússola' && audit.source !== 'AdminTargetRegistry');
