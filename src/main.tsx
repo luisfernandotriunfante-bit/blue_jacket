@@ -60,7 +60,7 @@ function App() {
 
   const sidebarItems = MAIN_SECTIONS.map(section => ({
     ...section,
-    description: section.id === 'pex' ? 'Em construção' : undefined,
+    description: undefined,
     active: activeTab === section.id,
     onSelect: () => selectSection(section.id),
   }))

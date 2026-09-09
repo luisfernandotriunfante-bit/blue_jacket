@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectSourceForFileName, REQUIRED_SOURCE_IDS } from '../src/canonical/sourceImport.ts';
+import * as XLSX from 'xlsx';
+import { parseBussola } from '../src/canonical/parsers.ts';
+import { detectSourceForFileName, isSourceStageCurrent, REQUIRED_SOURCE_IDS } from '../src/canonical/sourceImport.ts';
 import { activateCanonicalBundleReference, resolveActiveCanonicalBundle, type ActiveCanonicalBundle } from '../src/canonical/runtime.ts';
 
 class MemoryStorage { values=new Map<string,string>(); getItem(key:string){return this.values.get(key)??null} setItem(key:string,value:string){this.values.set(key,value)} removeItem(key:string){this.values.delete(key)} }
@@ -17,6 +19,19 @@ test('file-name detection covers the operational source families without mixing 
   assert.equal(detectSourceForFileName("Sortimento Recomendado - Q3'26.xlsx"),"Sortimento Recomendado - Q3'26.xlsx");
   assert.equal(detectSourceForFileName('Bússola de Metas AGOSTO - 2026 DEFINITIVA.xlsx'),'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx');
   assert.equal(detectSourceForFileName('qualquer-arquivo.xlsx'),null);
+});
+
+test('Bússola setembro usa o layout real deslocado e materializa metas Colgate',async()=>{
+  const matrix:unknown[][]=[[],[],['Supervisor','St','Pas.','','Nome','Cidade','CNPJ','COD WINTHOR','Indústria','Gerente','Meta PNA','Faturado','A Faturar','Real PNA','%','Meta. Pos. Ind.','Pos. % Car','Faturado','A faturar','Real Pos. Ind.','%','Carteira','Meta Global nova'],['Sup',1076,2,'MCD','ADENIS','Campo Grande','00000000000000',17770,'Colgate','Gerente',75000,0,0,0,0,34,0,0,0,0,0,50,75000]];
+  const workbook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet(matrix),'Metas');
+  const bytes=XLSX.write(workbook,{type:'array',bookType:'xlsx'}) as ArrayBuffer;
+  const parsed=await parseBussola(new File([bytes],'Bussola de Metas SETEMBRO - 2026 - MCD.xlsx'));
+  assert.equal(parsed.audits.length,0);assert.equal(parsed.rows.length,1);
+  assert.equal(parsed.rows[0].industry_name.typed,'Colgate');assert.equal(parsed.rows[0].sales_target_pna.typed,75000);assert.equal(parsed.rows[0].positivity_target.typed,34);
+});
+
+test('staging legado da Bússola exige reimportação após correção do layout',()=>{
+  assert.equal(isSourceStageCurrent({source:'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx',fileName:'Bussola.xlsx',fileHash:'x',parserVersion:'browser-v1',schemaVersion:'v1',parsedRows:1,warnings:0,errors:0,updatedAt:'2026-09-01T00:00:00.000Z',status:'VALID'}),false);
 });
 
 test('runtime accepts a validated dynamic browser build pointer instead of locking one motor id',()=>{

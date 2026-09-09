@@ -25,6 +25,7 @@ export function AuditoriaPage() {
   const [statusFilter, setStatusFilter] = useState<'ALL' | GlobalAuditFindingStatus>('ALL');
   const [domainFilter, setDomainFilter] = useState<'ALL' | GlobalAuditDomain>('ALL');
   const [query, setQuery] = useState('');
+  const [exportStatus, setExportStatus] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -45,15 +46,19 @@ export function AuditoriaPage() {
   const visible = useMemo(() => report ? filterGlobalAuditFindings(report.findings, { status: statusFilter, domain: domainFilter, query }) : [], [report, statusFilter, domainFilter, query]);
   const exportJson = () => {
     if (!report) return;
+    const fileName = `blue-jacket-auditoria-${report.generatedAt.slice(0, 19).replace(/[:T]/g, '-')}.json`;
     const blob = new Blob([exportGlobalAuditJson(report)], { type: 'application/json;charset=utf-8' });
     const href = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = href;
-    anchor.download = `blue-jacket-auditoria-${report.generatedAt.slice(0, 19).replace(/[:T]/g, '-')}.json`;
+    anchor.download = fileName;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    URL.revokeObjectURL(href);
+    // Chrome may resolve the blob after the click task. Revoking immediately
+    // makes the download intermittent, especially in an automated proof.
+    window.setTimeout(() => URL.revokeObjectURL(href), 30_000);
+    setExportStatus(`DOWNLOAD SOLICITADO — ${fileName}`);
   };
 
   return <PanelPage title="Auditoria" eyebrow="ADMINISTRAÇÃO">
@@ -61,6 +66,7 @@ export function AuditoriaPage() {
       {pageError ? <PanelAlert tone="error">Não foi possível concluir uma leitura consistente da Auditoria Global: {pageError}. Nenhum dado foi alterado.</PanelAlert> : null}
       {report?.partial ? <PanelAlert tone="warning">Auditoria parcial — um ou mais subsistemas não puderam ser carregados. As demais verificações foram mantidas e o erro de leitura aparece como BLOCKER.</PanelAlert> : null}
       {loading && !report ? <PanelAlert>Carregando os inputs atuais sem reprocessar M1–M4…</PanelAlert> : null}
+      {exportStatus ? <PanelAlert tone="success">{exportStatus}</PanelAlert> : null}
 
       {report ? <>
         <PanelCard>

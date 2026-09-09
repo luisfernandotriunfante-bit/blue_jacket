@@ -62,5 +62,16 @@ test('218 materializa a NF mesmo sem depender do bloco de itens', async () => {
 });
 
 test('mudança do parser invalida o staging antigo do 218', () => {
-  assert.equal(sourceImportTestHelpers.parserVersionFor(SOURCE), 'browser-v2-invoice-registry');
+  assert.equal(sourceImportTestHelpers.parserVersionFor(SOURCE), 'browser-v3-invoice-items-physical-layout');
+});
+
+test('218 lê quantidade física em P e descrição em E/F', async () => {
+  const header=Array(24).fill('');header[0]='Dt. Entrada';
+  const invoice=Array(24).fill('');invoice[0]=new Date('2026-09-04T12:00:00Z');invoice[4]='*2954241';invoice[21]=33509;
+  const itemHeader=Array(24).fill('');itemHeader[4]='Código';itemHeader[5]='Produto';
+  const item=Array(24).fill('');item[4]=1791;item[5]='ENXAG PLAX FR MINT';item[15]=240;item[17]=20.226083;item[18]=18.2606;item[20]=18.623011;item[21]=2102;item[23]='E';
+  const workbook=XLSX.utils.book_new();XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet([header,invoice,itemHeader,item]),'Report');
+  const bytes=XLSX.write(workbook,{bookType:'xlsx',type:'array'});const parsed=await parse218(new File([bytes],SOURCE));
+  const parsedItem=parsed.rows.find(row=>row.__receipt_scope?.typed==='ITEM')!;assert.equal(parsedItem.received_units.typed,240);assert.equal(parsedItem['receipt_item_code + description'].typed,'1791 · ENXAG PLAX FR MINT');
+  const receipt=buildM3([parsed]).records.find(row=>row.receipt_scope==='ITEM')!;assert.equal(receipt.received_units,240);assert.equal(receipt.winthor_product_code,'1791 · ENXAG PLAX FR MINT');
 });

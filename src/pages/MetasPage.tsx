@@ -95,7 +95,8 @@ function recordForEditing(state: TargetState | null, competence: string, rcaCano
 }
 
 function previewLabel(preview: TargetSeedPreview) {
-  return `Novos ${preview.counts.new} · Atualizáveis ${preview.counts.updatable} · Iguais ${preview.counts.equal} · MANUAL protegidos ${preview.counts.manualProtected} · Conflitos ${preview.counts.conflicts} · RCA não resolvido ${preview.counts.rcaUnresolved} · Competência divergente ${preview.counts.competenceMismatch} · Ausentes na fonte ${preview.counts.missingFromSource}`;
+  const general=preview.generalTargets;
+  return `Novos ${preview.counts.new} · Atualizáveis ${preview.counts.updatable} · Iguais ${preview.counts.equal} · MANUAL protegidos ${preview.counts.manualProtected} · Conflitos ${preview.counts.conflicts} · RCA não resolvido ${preview.counts.rcaUnresolved} · Competência divergente ${preview.counts.competenceMismatch} · Ausentes na fonte ${preview.counts.missingFromSource} · Gerais: T&C ${general.sellOutTarget?.toLocaleString('pt-BR') ?? '—'}, Positivação ${general.positivityTarget?.toLocaleString('pt-BR') ?? '—'}, Redes ${general.networkTarget?.toLocaleString('pt-BR') ?? '—'}`;
 }
 
 export function MetasPage() {
@@ -255,7 +256,7 @@ export function MetasPage() {
           <input className="panel-input" style={{ minWidth: 300 }} placeholder="Buscar nome, código atual/antigo ou supervisor" value={search} onChange={event => setSearch(event.target.value)} />
           <button className="panel-secondary-button" disabled={!editable || mutationBusy || previewBusy} onClick={() => void previewBussola()}>{previewBusy ? 'Lendo staging…' : 'PRÉ-VISUALIZAR BÚSSOLA'}</button>
         </div>
-        {preview ? <PanelAlert tone={preview.counts.conflicts || preview.counts.rcaUnresolved || preview.counts.competenceMismatch ? 'warning' : 'info'}><strong>Preview passivo — nenhuma gravação foi feita.</strong><br />{previewLabel(preview)}<br />{preview.sourceCompetence && preview.sourceCompetence !== competence ? `A Bússola pertence a ${formatCompetenceId(preview.sourceCompetence)} e não pode alimentar metas de ${formatCompetenceId(competence)}.` : null}<br /><button className="panel-button" disabled={!editable || mutationBusy || preview.sourceCompetence !== competence} onClick={() => void applyPreview()}>APLICAR ITENS SEGUROS</button></PanelAlert> : null}
+        {preview ? <PanelAlert tone={preview.counts.conflicts || preview.counts.rcaUnresolved || preview.counts.competenceMismatch ? 'warning' : 'info'}><strong>Preview passivo — nenhuma gravação foi feita.</strong><br />{previewLabel(preview)}<br />As metas gerais ausentes também serão preenchidas pelas somas oficiais da Bússola e do Roteiro Top; valores já cadastrados são preservados.<br />{preview.sourceCompetence && preview.sourceCompetence !== competence ? `A Bússola pertence a ${formatCompetenceId(preview.sourceCompetence)} e não pode alimentar metas de ${formatCompetenceId(competence)}.` : null}<br /><button className="panel-button" disabled={!editable || mutationBusy || preview.sourceCompetence !== competence} onClick={() => void applyPreview()}>APLICAR ITENS SEGUROS</button></PanelAlert> : null}
 
         {rcaForm.rcaCanonicalId ? <div style={{ borderTop: '1px solid var(--panel-border, #ddd)', paddingTop: 16, marginBottom: 16 }}>
           <strong>{catalog.find(row => row.rcaCanonicalId === rcaForm.rcaCanonicalId)?.name ?? rcaForm.rcaCanonicalId}</strong>

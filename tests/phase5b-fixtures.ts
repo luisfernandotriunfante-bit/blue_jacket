@@ -20,7 +20,8 @@ const PARSER_VERSIONS: Record<string, string> = {
   'cadastro-itens-286.xls': 'browser-v2-286-physical-column-layout',
   '310 total 2026.txt': 'browser-v2-rca310',
   "08.26 Roteiro Ativo Top Varejistas Ago'26 - Final.xlsx": 'browser-v3-route-monthly-meta',
-  'entrada-notas-218.xls': 'browser-v2-invoice-registry',
+  'entrada-notas-218.xls': 'browser-v3-invoice-items-physical-layout',
+  'Bussola de Metas AGOSTO - 2026 DEFINITIVA.xlsx': 'browser-v2-bussola-header-layout',
   "Sortimento Recomendado - Q3'26.xlsx": 'browser-v4-jul-optional-blank-before-ean',
   'CARTEIRA 24.08.xlsx': 'browser-v5-portfolio-current-snapshot',
 };
