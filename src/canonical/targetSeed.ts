@@ -14,6 +14,7 @@ export type TargetSeedPreview = {
   sourceCompetence: string | null;
   editedCompetence: string;
   counts: { new: number; updatable: number; equal: number; manualProtected: number; conflicts: number; rcaUnresolved: number; competenceMismatch: number; missingFromSource: number };
+  generalTargets: { sellOutTarget: number | null; positivityTarget: number | null; networkTarget: number | null };
   items: TargetSeedPreviewItem[];
 };
 
@@ -40,6 +41,14 @@ export async function previewBussolaTargetSeed(editedCompetence: string, state: 
   const registry = await dependencies.loadRegistry();
   const resolver = createRcaResolver([], registry);
   const rawRows = stage.parsed.rows.filter(row => String(typed(row, 'pasta_type') ?? '').trim().toUpperCase() === 'MCD' && String(typed(row, 'industry_name') ?? '').trim().toUpperCase() === 'COLGATE');
+  const sourceSalesTargets = rawRows.map(row => numberTarget(typed(row, 'sales_target_pna'))).filter((value): value is number => value !== null);
+  const sourcePositivityTargets = rawRows.map(row => numberTarget(typed(row, 'positivity_target'))).filter((value): value is number => value !== null);
+  const topTargets = registry?.topRetailers.filter(record => record.active && record.competence === editedCompetence && record.topTarget !== null).map(record => record.topTarget as number) ?? [];
+  const generalTargets = {
+    sellOutTarget: sourceSalesTargets.length ? sourceSalesTargets.reduce((sum, value) => sum + value, 0) : null,
+    positivityTarget: sourcePositivityTargets.length ? sourcePositivityTargets.reduce((sum, value) => sum + value, 0) : null,
+    networkTarget: topTargets.length ? topTargets.reduce((sum, value) => sum + value, 0) : null,
+  };
   const items: TargetSeedPreviewItem[] = [];
   const candidateGroups = new Map<string, TargetSeedCandidate[]>();
 
@@ -106,7 +115,7 @@ export async function previewBussolaTargetSeed(editedCompetence: string, state: 
     competenceMismatch: items.filter(item => item.status === 'COMPETENCE_MISMATCH').length,
     missingFromSource: items.filter(item => item.status === 'MISSING_SOURCE').length,
   };
-  return { source: BUSSOLA_SOURCE_ID, sourceCompetence, editedCompetence, counts, items };
+  return { source: BUSSOLA_SOURCE_ID, sourceCompetence, editedCompetence, counts, generalTargets, items };
 }
 
 export function applyBussolaTargetSeedPreview(current: TargetState | null, preview: TargetSeedPreview, now = new Date().toISOString()) {
@@ -117,6 +126,9 @@ export function applyBussolaTargetSeedPreview(current: TargetState | null, previ
     competence = { competence: preview.editedCompetence, sellOutTarget: null, positivityTarget: null, networkTarget: null, rcaTargets: [], createdAt: now, updatedAt: now };
     state.records.push(competence);
   }
+  if (competence.sellOutTarget === null && preview.generalTargets.sellOutTarget !== null) competence.sellOutTarget = preview.generalTargets.sellOutTarget;
+  if (competence.positivityTarget === null && preview.generalTargets.positivityTarget !== null) competence.positivityTarget = preview.generalTargets.positivityTarget;
+  if (competence.networkTarget === null && preview.generalTargets.networkTarget !== null) competence.networkTarget = preview.generalTargets.networkTarget;
   for (const item of preview.items.filter(item => item.status === 'NEW' || item.status === 'UPDATABLE')) {
     if (!item.candidate) continue;
     const existing = item.recordId ? competence.rcaTargets.find(record => record.id === item.recordId) : undefined;

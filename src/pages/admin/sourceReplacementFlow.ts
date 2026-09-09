@@ -11,9 +11,12 @@ import {
   withCertificate,
   withoutCertificate,
   certificateFor,
+  sourceReplacementProofHash,
+  sourceReplacementsFromCertificates,
   type SourceReplacementState,
 } from '../../canonical/sourceReplacementState';
 import { semanticBusinessEquivalent } from '../../canonical/sourceDependencyContract';
+import { resolveEffectiveSourceSet } from '../../canonical/sourceReplacementRuntime';
 import { systemDataOperationCoordinator } from '../../canonical/systemDataOperationCoordinator';
 import { loadTargetState } from '../../canonical/targetStore';
 import type { CanonicalList } from '../../canonical/types';
@@ -161,6 +164,47 @@ export async function activateCertifiedSourceReplacement(sourceId: string, scope
     } catch (reason) {
       if (!activated) await rollback(beforeState, beforeActive, deps);
       publish({ phase: 'FAILED', sourceId, scope, message: 'A substituição não foi ativada.', active: beforeActive, error: String(reason) });
+      throw reason;
+    }
+  });
+  if (gate.status === 'BUSY') throw new Error(`SYSTEM_DATA_OPERATION_BUSY:${gate.owner ?? 'UNKNOWN'}`);
+  return gate.value;
+}
+
+/** Rebuilds an already-certified replacement into the active v21 identity. */
+export async function reconcileCertifiedSourceReplacement(sourceId: string, scope: SourceReplacementScope, overrides: Partial<SourceReplacementFlowDependencies> = {}) {
+  const deps = { ...defaultDependencies, ...overrides };
+  const gate = await systemDataOperationCoordinator.run('SOURCE_REPLACEMENT_UPDATE', async () => {
+    const beforeState = deps.loadReplacement();
+    const beforeActive = deps.getActive();
+    const certificate = certificateFor(beforeState, sourceId, scope);
+    if (!certificate) throw new Error('SOURCE_REPLACEMENT_CERTIFICATE_NOT_FOUND');
+    let activated = false;
+    try {
+      publish({ phase: 'CHECKING', sourceId, scope, message: 'Revalidando o certificado já persistido contra as autoridades atuais.', active: beforeActive, error: null });
+      const [storedStages, registry] = await Promise.all([deps.loadStages(), deps.loadRegistry()]);
+      const target = deps.loadTarget();
+      const effective = resolveEffectiveSourceSet({ physicalStages: storedStages, replacementState: beforeState, adminRegistryState: registry, targetState: target });
+      const diagnostic = effective.diagnostics.find(item => item.sourceId === sourceId && item.scope === scope);
+      if (diagnostic?.status !== 'REPLACED' || !effective.certificates.some(item => item.id === certificate.id)) throw new Error(`SOURCE_REPLACEMENT_RECONCILIATION_NOT_READY:${diagnostic?.status ?? 'MISSING'}`);
+
+      publish({ phase: 'BUILDING_REPLACED', sourceId, scope, message: 'Reconstruindo o build v21 com o certificado persistido no input canônico.', active: beforeActive, error: null });
+      const candidate = await deps.build(undefined, registry, target, beforeState);
+      const expectedProof = await sourceReplacementProofHash(effective.certificates);
+      const expectedReplacements = sourceReplacementsFromCertificates(effective.certificates);
+      const hasReplacement = candidate.sourceReplacements?.some(item => item.source === sourceId && item.scope === scope);
+      if (!candidate.sourceReplacementProofHash || candidate.sourceReplacementProofHash !== expectedProof || JSON.stringify(candidate.sourceReplacements ?? []) !== JSON.stringify(expectedReplacements) || !hasReplacement) throw new Error('SOURCE_REPLACEMENT_BUILD_EVIDENCE_MISSING');
+
+      publish({ phase: 'ACTIVATING', sourceId, scope, message: 'Ativando o build reconciliado.', active: candidate, error: null });
+      deps.activate(candidate);
+      activated = true;
+      const synced = await syncAfterActivation(sourceId, scope, candidate, 'CERTIFICADO APLICADO AO MOTOR — proof e uso efetivo materializados.', 'O build reconciliado permanece ativo localmente; sincronização falhou.', deps);
+      return { active: candidate, certificate, synced };
+    } catch (reason) {
+      if (!activated) {
+        if (beforeActive) deps.activate(beforeActive); else deps.deactivate();
+      }
+      publish({ phase: 'FAILED', sourceId, scope, message: 'O certificado foi preservado, mas não foi aplicado ao motor.', active: beforeActive, error: String(reason) });
       throw reason;
     }
   });

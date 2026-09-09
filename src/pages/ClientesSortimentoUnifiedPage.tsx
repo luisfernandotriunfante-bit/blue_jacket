@@ -1,14 +1,29 @@
-import { MigrationPage } from '../ui/pattern/MigrationEmptyState';
+import { useEffect, useMemo, useState } from 'react';
+import { parseAssortmentPresence } from '../canonical/assortment';
+import { loadCandidateList } from '../canonical/candidateLists';
+import type { CanonicalList } from '../canonical/types';
+import { useData } from '../store/DataContext';
+import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader, PanelStat } from '../ui/pattern/PanelVisual';
 
 export type ClientesSortimentoView = 'overview' | 'assortment' | 'launches' | 'promotions';
+type Data={m1:CanonicalList;m2:CanonicalList;m3:CanonicalList};
+const text=(value:unknown)=>String(value??'').trim();
+const money=new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'});
 
 export function ClientesSortimentoPage({ view = 'overview' }: { view?: ClientesSortimentoView }) {
-  const details = view === 'assortment'
-    ? { heading: 'Sortimento por CNPJ', columns: ['Produto', 'Classificação', 'Comprou / histórico', 'Disponível', 'Carteira', 'Oportunidade', 'Ação', 'Preço'] }
-    : view === 'launches'
-      ? { heading: 'Adoção de lançamentos', columns: ['Produto', 'Classificação', 'Adotado', 'Disponibilidade', 'Carteira', 'Status'] }
-      : view === 'promotions'
-        ? { heading: 'Promoções elegíveis', columns: ['Promoção', 'Produto', 'Elegibilidade', 'Vigência', 'Benefício'] }
-        : { heading: 'Inteligência Comercial por CNPJ', columns: ['Indicador', 'Valor', 'Situação'] };
-  return <MigrationPage title="Clientes & Sortimento" heading={details.heading} columns={details.columns} kpis={['Clientes conhecidos', 'Assortment oficial', 'Assortment executável', 'Oportunidades']} description="Os filtros e a ficha visual permanecem reservados; não há cliente, sortimento, preço, promoção ou histórico ativo." />;
+  const {activeCanonical}=useData();
+  const [data,setData]=useState<Data|null>(null);const [error,setError]=useState('');const [query,setQuery]=useState('');
+  useEffect(()=>{if(!activeCanonical){setData(null);return}let live=true;Promise.all([loadCandidateList('M1_ITEM_ESTOQUE'),loadCandidateList('M2_CLIENTE_RCA'),loadCandidateList('M3_MOVIMENTO_VENDAS')]).then(([m1,m2,m3])=>{if(live){setData({m1,m2,m3});setError('')}}).catch(reason=>{if(live)setError(String(reason))});return()=>{live=false}},[activeCanonical?.motorBuildId]);
+  const model=useMemo(()=>{if(!data)return null;const products:Array<Record<string,unknown>&{channels:ReturnType<typeof parseAssortmentPresence>}>=data.m1.records.map(record=>({...record,channels:parseAssortmentPresence(record.recommendation_json)}));const salesCustomers=new Set(data.m3.records.filter(record=>record.fact_type==='SALE').map(record=>text(record.customer_canonical_id)).filter(Boolean));return{clients:data.m2.records,products,assortment:products.filter(product=>product.channels.length),launches:products.filter(product=>product.is_launch===true),promotions:products.filter(product=>/PROMO/i.test(text(product.lifecycle_status))),salesCustomers}},[data]);
+  if(!activeCanonical)return <PanelPage title="Clientes & Sortimento"><PanelEmptyState variant="page" title="Sem build canônico ativo" description="Atualize as bases para consultar clientes e sortimento."/></PanelPage>;
+  if(error)return <PanelPage title="Clientes & Sortimento"><PanelAlert tone="error">{error}</PanelAlert></PanelPage>;
+  if(!model)return <PanelPage title="Clientes & Sortimento"><PanelAlert>Lendo M1, M2 e M3 do build ativo…</PanelAlert></PanelPage>;
+  const normalizedQuery=query.toLocaleLowerCase();
+  const productRows=(view==='launches'?model.launches:view==='promotions'?model.promotions:model.assortment).filter(record=>!normalizedQuery||[record.description_internal,record.winthor_code,record.internal_ean,record.brand,record.subbrand].some(value=>text(value).toLocaleLowerCase().includes(normalizedQuery)));
+  const clientRows=model.clients.filter(record=>!normalizedQuery||[record.customer_name,record.trade_name,record.cnpj,record.city,record.rca_name,record.top_network].some(value=>text(value).toLocaleLowerCase().includes(normalizedQuery)));
+  return <PanelPage title="Clientes & Sortimento" metricLabel="Build" metricValue={activeCanonical.motorBuildId}><div className="panel-stack">
+    <div className="panel-stat-grid"><PanelStat label="Clientes conhecidos" value={model.clients.length}/><PanelStat label="Com vendas" value={model.salesCustomers.size}/><PanelStat label="Itens com sortimento" value={model.assortment.length}/><PanelStat label="Lançamentos" value={model.launches.length}/></div>
+    <PanelCard><PanelSectionHeader eyebrow="DADOS CANÔNICOS ATIVOS" title={view==='overview'?'Inteligência comercial por CNPJ':view==='assortment'?'Sortimento executável':view==='launches'?'Adoção de lançamentos':'Promoções identificadas'} description="Consulta operacional derivada diretamente de M1, M2 e M3; não existe estado paralelo."/><input value={query} onChange={event=>setQuery(event.target.value)} placeholder="Buscar nome, CNPJ, produto, código ou EAN" style={{width:'100%',marginBottom:12}}/>
+    {view==='overview'?<div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>CNPJ</th><th>Cliente</th><th>Cidade</th><th>RCA</th><th>Rede Top</th><th>Venda no build</th></tr></thead><tbody>{clientRows.map((record,index)=><tr key={text(record.customer_canonical_id)||index}><td>{text(record.cnpj)||'—'}</td><td>{text(record.trade_name||record.customer_name)||'—'}</td><td>{text(record.city)||'—'}</td><td>{text(record.rca_name||record.rca_current_code)||'—'}</td><td>{text(record.top_network)||'—'}</td><td>{model.salesCustomers.has(text(record.customer_canonical_id))?'SIM':'NÃO'}</td></tr>)}</tbody></table></div>:productRows.length?<div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Código</th><th>Produto</th><th>Marca</th><th>Faixas / canais</th><th>Preço</th><th>Status</th></tr></thead><tbody>{productRows.map((record,index)=><tr key={text(record.item_canonical_id)||index}><td>{text(record.winthor_code)||'—'}</td><td>{text(record.description_internal)||'—'}</td><td>{[text(record.brand),text(record.subbrand)].filter(Boolean).join(' · ')||'—'}</td><td>{record.channels.map(channel=>channel.range||channel.label).join(', ')||'—'}</td><td>{typeof record.pVenda1_region11==='number'?money.format(record.pVenda1_region11):'—'}</td><td>{record.is_launch===true?'LANÇAMENTO':text(record.lifecycle_status)||'ATIVO'}</td></tr>)}</tbody></table></div>:<PanelEmptyState title={query?'Nenhum item corresponde aos filtros':view==='promotions'?'Nenhuma promoção identificada no contrato v21':'Nenhum item materializado'} description={view==='promotions'?'O build não inventa promoções: somente registros com marcação promocional explícita são exibidos.':'Ajuste a busca para consultar outros registros.'}/>}</PanelCard>
+  </div></PanelPage>;
 }

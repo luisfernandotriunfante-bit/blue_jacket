@@ -7,8 +7,7 @@ import { evaluateSourceReplacementReadinessV21 } from '../../canonical/sourceRep
 import {
   detectSourceForFileName,
   isSourceStageCurrent,
-  loadSourceStaging,
-  loadSourceStagingManifests,
+  loadSourceStagingSnapshot,
   processSourceUpdates,
   requestPersistentSourceStorage,
   type SourceStageManifest,
@@ -35,6 +34,7 @@ import {
 } from './baseUpdateFlow';
 import {
   activateCertifiedSourceReplacement,
+  reconcileCertifiedSourceReplacement,
   recertifySourceReplacement,
   revokeCertifiedSourceReplacement,
   sourceReplacementLifecycle,
@@ -81,6 +81,7 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   const [pageStatus, setPageStatus] = useState('');
   const [selected, setSelected] = useState<Partial<Record<string, File>>>({});
   const [manifests, setManifests] = useState<SourceStageManifest[]>([]);
+  const [inventoryState, setInventoryState] = useState<'LOADING' | 'READY' | 'ERROR'>('LOADING');
   const [dependencyReadiness, setDependencyReadiness] = useState<SourceReplacementReadiness[]>([]);
   const [sourceDiagnostics, setSourceDiagnostics] = useState<SourceBuildDiagnostic[]>([]);
   const [replacementState, setReplacementState] = useState<SourceReplacementState | null>(null);
@@ -92,22 +93,21 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   const diagnosticBySource = useMemo(() => new Map(sourceDiagnostics.map(item => [item.sourceId, item])), [sourceDiagnostics]);
 
   const refresh = async () => {
+    setInventoryState('LOADING');
     try {
-      const [value, registry, target, ...storedRaw] = await Promise.all([
-        loadSourceStagingManifests(), loadAdminRegistryState(), Promise.resolve(loadTargetState()),
-        ...SUPPORTED_SOURCE_IDS.map(source => loadSourceStaging(source)),
-      ]);
-      const stored = storedRaw.filter((item): item is NonNullable<typeof item> => Boolean(item));
+      const [snapshot, registry, target] = await Promise.all([loadSourceStagingSnapshot(), loadAdminRegistryState(), Promise.resolve(loadTargetState())]);
+      const stored = snapshot.stages;
       const stages = stored.map(item => item.parsed);
       const replacements = loadSourceReplacementState();
       const competence = operationalCompetenceFromPhysicalStages(stored);
-      setManifests(value);
+      setManifests(snapshot.manifests);
       setDependencyReadiness(evaluateSourceReplacementReadinessV21(stages, registry, target));
       setSourceDiagnostics(resolveEffectiveSourceSet({ physicalStages: stored, replacementState: replacements, adminRegistryState: registry, targetState: target }).diagnostics);
       setReplacementState(replacements);
       setOperationalCompetence(competence);
       setPageError('');
-    } catch (reason) { setPageError(sourceError(reason)); }
+      setInventoryState('READY');
+    } catch (reason) { setInventoryState('ERROR'); setPageError(sourceError(reason)); }
   };
 
   useEffect(() => baseUpdateCoordinator.subscribe(setUpdateState), []);
@@ -193,6 +193,17 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
     } catch (reason) { setPageError(sourceError(reason)); }
   };
 
+  const reconcileReplacement = async (source: string) => {
+    const scope = sourceScopeFor(source, operationalCompetence);
+    if (!scope) { setPageError('Não há escopo operacional inequívoco para aplicar este certificado ao motor.'); return; }
+    setPageError(''); setPageStatus('');
+    try {
+      const result = await reconcileCertifiedSourceReplacement(source, scope, { activate: activateCanonical, deactivate: deactivateCanonical });
+      setPageStatus(`CERTIFICADO APLICADO AO MOTOR — ${SOURCE_LABELS[source] ?? source} (${scopeLabel(scope)}). Build: ${result.active.motorBuildId}.`);
+      await refresh();
+    } catch (reason) { setPageError(sourceError(reason)); }
+  };
+
   const revokeReplacement = async (source: string) => {
     const scope = sourceScopeFor(source, operationalCompetence);
     if (!scope) { setPageError('Não há escopo operacional inequívoco para revogar esta substituição mensal.'); return; }
@@ -208,7 +219,11 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
   const globallyBusy = operationState.busy;
   const processLabel = processing ? updateState.phase === 'SYNCING' ? 'Sincronizando…' : updateState.phase === 'ACTIVATING' ? 'Ativando…' : 'Processando…' : selectedCount ? 'PROCESSAR E ATUALIZAR SISTEMA' : 'REPROCESSAR MOTOR ATUAL';
 
-  return <PanelPage title="Bases" metricLabel="Fontes físicas disponíveis" metricValue={`${validCount}/19`}>
+  const inventoryMetric = inventoryState === 'LOADING' ? 'CARREGANDO…' : inventoryState === 'ERROR' ? 'ERRO DE LEITURA' : `${validCount}/19`;
+
+  return <PanelPage title="Bases" metricLabel="Fontes físicas disponíveis" metricValue={inventoryMetric}>
+    {inventoryState === 'LOADING' ? <PanelAlert tone="info">Lendo o inventário persistente de fontes…</PanelAlert> : null}
+    {inventoryState === 'ERROR' ? <PanelAlert tone="error">A leitura do inventário falhou. O sistema não reinterpretou essa falha como 0/19.</PanelAlert> : null}
     <PanelAlert tone="info"><strong>19 fontes suportadas · 15 sempre obrigatórias · 4 condicionalmente substituíveis.</strong><br />As quatro fontes condicionais só podem faltar quando existe certificado válido para o escopo exato. Não interrompa o fornecimento de nenhum arquivo apenas por existir uma authority administrativa.</PanelAlert>
     {activeCanonical ? <PanelAlert tone="success">Build ativo: {activeCanonical.motorBuildId}<br />Uso efetivo: {activeCanonical.sourceReplacements?.length ?? 0} substituição(ões) certificada(s).</PanelAlert> : <PanelAlert tone="info">Sem build ativo. As 15 fontes hard-required são sempre físicas; cada candidata adicional exige fonte física ou certificado válido.</PanelAlert>}
 
@@ -236,20 +251,21 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
           const scope = sourceScopeFor(source, operationalCompetence);
           const certificates = replacementState?.certificates.filter(item => item.sourceId === source) ?? [];
           const currentCertificate = scope ? certificates.find(item => item.scope === scope) : null;
+          const effectiveInActiveBuild = Boolean(scope && activeCanonical?.sourceReplacements?.some(item => item.source === source && item.scope === scope));
           const detail = scope === 'GLOBAL' ? readiness?.details.find(item => item.competence === null) ?? readiness?.details[0] : scope ? readiness?.details.find(item => `COMPETENCE:${item.competence}` === scope) : undefined;
           const ready = detail?.status === 'READY';
-          const certification = diagnostic?.status === 'REPLACED'
+          const certification = diagnostic?.status === 'REPLACED' && effectiveInActiveBuild
             ? 'SUBSTITUIÇÃO ATIVA'
             : diagnostic?.status === 'REVIEW_REQUIRED'
               ? 'REVISÃO NECESSÁRIA — NOVA VERSÃO DA FONTE DETECTADA'
               : diagnostic?.status === 'COVERAGE_BROKEN'
                 ? 'COBERTURA INTERNA QUEBRADA'
                 : currentCertificate
-                  ? 'ATIVA — fora do build atual'
+                  ? 'ATIVA — REBUILD NECESSÁRIO'
                   : certificates.length
                     ? `ATIVA: ${certificates.map(item => scopeLabel(item.scope)).join(', ')}`
                     : 'NÃO ATIVA';
-          const motorUse = diagnostic?.status === 'REPLACED' ? 'SUBSTITUIÇÃO INTERNA' : hardSet.has(source) || diagnostic?.status === 'PHYSICAL' ? 'FONTE FÍSICA' : diagnostic?.status === 'REVIEW_REQUIRED' || diagnostic?.status === 'COVERAGE_BROKEN' ? 'BLOQUEADO' : 'FONTE FÍSICA REQUERIDA';
+          const motorUse = diagnostic?.status === 'REPLACED' && effectiveInActiveBuild ? 'SUBSTITUIÇÃO INTERNA' : diagnostic?.status === 'REPLACED' ? 'PENDENTE NO BUILD' : hardSet.has(source) || diagnostic?.status === 'PHYSICAL' ? 'FONTE FÍSICA' : diagnostic?.status === 'REVIEW_REQUIRED' || diagnostic?.status === 'COVERAGE_BROKEN' ? 'BLOQUEADO' : 'FONTE FÍSICA REQUERIDA';
           return <tr key={source}>
             <td>{SOURCE_LABELS[source] ?? source}</td>
             <td>{statusLabel(manifest, file)}</td>
@@ -264,6 +280,7 @@ export function BasesPage({ onCanonicalActivated }: BasesPageProps) {
               <label className="panel-button" style={{ display: 'inline-block', cursor: globallyBusy ? 'not-allowed' : 'pointer' }} aria-disabled={globallyBusy}>Selecionar<input type="file" disabled={globallyBusy} accept=".xls,.xlsx,.txt" onChange={event => onSource(source, event)} style={{ display: 'none' }} /></label>
               {replaceableSet.has(source) ? <><br />
                 {!currentCertificate ? <button className="panel-button" disabled={globallyBusy || !ready || !manifest || !scope} onClick={() => void activateReplacement(source)}>ATIVAR SUBSTITUIÇÃO</button> : <>
+                  {diagnostic?.status === 'REPLACED' && !effectiveInActiveBuild ? <button className="panel-button" disabled={globallyBusy || !scope} onClick={() => void reconcileReplacement(source)}>APLICAR AO MOTOR</button> : null}{' '}
                   {diagnostic?.status === 'REVIEW_REQUIRED' ? <button className="panel-button" disabled={globallyBusy || !manifest || !scope} onClick={() => void recertifyReplacement(source)}>RECERTIFICAR SUBSTITUIÇÃO</button> : null}{' '}
                   <button className="panel-button" disabled={globallyBusy || !manifest} onClick={() => void revokeReplacement(source)}>REVOGAR SUBSTITUIÇÃO</button>
                 </>}

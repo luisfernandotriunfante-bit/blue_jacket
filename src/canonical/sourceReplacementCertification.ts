@@ -31,6 +31,12 @@ export function evaluateSourceReplacementReadinessV21(stages: ParsedSource[], re
     if (!physical || !registry?.rcas.length) return item;
     const currentDetail = item.details[0];
     if (!currentDetail || currentDetail.conflicts > 0) return item;
+    const resolver = createRcaResolver([], registry);
+    const coverageResolvable = rcaMasterEntries([physical]).every(entry => {
+      const resolutions = [resolver.resolveCurrent(entry.currentCode, entry.name), ...(entry.legacyCode ? [resolver.resolveLegacy(entry.legacyCode, entry.name)] : [])];
+      return resolutions.every(resolution => Boolean(resolution.canonicalId) || resolution.auditCode === 'ADMIN_REGISTRY_RCA_TOMBSTONE');
+    });
+    if (!coverageResolvable) return item;
     const proof = proveSourceReplacementEquivalence(RCA_SOURCE, stages, registry, targetState);
     if (!proof.equivalent) return item;
     const detail: ReplacementReadinessDetail = {
@@ -46,10 +52,18 @@ export function evaluateSourceReplacementReadinessV21(stages: ParsedSource[], re
 
 async function coverageKeysForV21(sourceId: string, scope: SourceReplacementScope, physical: ParsedSource, allStages: ParsedSource[], registry: AdminRegistryState | null) {
   if (sourceId === RCA_SOURCE) {
-    return rcaMasterEntries([physical]).flatMap(entry => [
-      `RCA|CURRENT|${entry.currentCode}|${entry.role}`,
-      ...(entry.legacyCode ? [`RCA|LEGACY|${entry.legacyCode}|${entry.role}`] : []),
-    ]).sort();
+    const resolver = createRcaResolver([], registry);
+    const keys = rcaMasterEntries([physical]).flatMap(entry => {
+      const current = resolver.resolveCurrent(entry.currentCode, entry.name);
+      const currentRole = current.canonicalId ? current.role : entry.role;
+      const legacy = entry.legacyCode ? resolver.resolveLegacy(entry.legacyCode, entry.name) : null;
+      const legacyRole = legacy?.canonicalId ? legacy.role : entry.role;
+      return [
+        `RCA|CURRENT|${entry.currentCode}|${currentRole}`,
+        ...(entry.legacyCode ? [`RCA|LEGACY|${entry.legacyCode}|${legacyRole}`] : []),
+      ];
+    });
+    return [...new Set(keys)].sort();
   }
   if (sourceId === LAUNCH_SOURCE) {
     return physical.rows.map(row => {

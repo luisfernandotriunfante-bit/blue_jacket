@@ -1,5 +1,17 @@
-import { MigrationPage } from '../ui/pattern/MigrationEmptyState';
+import { useEffect, useState } from 'react';
+import { loadCandidateList } from '../canonical/candidateLists';
+import type { CanonicalList } from '../canonical/types';
+import { useData } from '../store/DataContext';
+import { PanelAlert, PanelCard, PanelEmptyState, PanelPage, PanelSectionHeader, PanelStat } from '../ui/pattern/PanelVisual';
+
+const IDS:CanonicalList['id'][]=['M1_ITEM_ESTOQUE','M2_CLIENTE_RCA','M3_MOVIMENTO_VENDAS','M4_HISTORICO_TRANSICAO'];
+const csvCell=(value:unknown)=>`"${String(value??'').replace(/"/g,'""')}"`;
+const download=(name:string,content:string,type:string)=>{const href=URL.createObjectURL(new Blob([content],{type}));const anchor=document.createElement('a');anchor.href=href;anchor.download=name;document.body.appendChild(anchor);anchor.click();anchor.remove();window.setTimeout(()=>URL.revokeObjectURL(href),30000)};
 
 export function DocumentosPage() {
-  return <MigrationPage title="Documentos" heading="Exportações" columns={['Documento', 'Cobertura', 'Fonte', 'Situação']} kpis={['Painéis disponíveis', 'Relatórios de redes', 'Arquivos comerciais', 'Dossiês internos']} description="Nenhum Excel ou documento pode ser gerado a partir da arquitetura removida." />;
+  const {activeCanonical}=useData();const [lists,setLists]=useState<CanonicalList[]>([]);const [error,setError]=useState('');const [notice,setNotice]=useState('');
+  useEffect(()=>{if(!activeCanonical){setLists([]);return}let live=true;Promise.all(IDS.map(id=>loadCandidateList(id))).then(value=>{if(live){setLists(value);setError('')}}).catch(reason=>{if(live)setError(String(reason))});return()=>{live=false}},[activeCanonical?.motorBuildId]);
+  if(!activeCanonical)return <PanelPage title="Documentos"><PanelEmptyState variant="page" title="Sem build canônico ativo" description="Atualize as bases antes de exportar documentos."/></PanelPage>;
+  const exportList=(list:CanonicalList,kind:'json'|'csv')=>{const base=`blue-jacket-${list.id}-${activeCanonical.motorBuildId}`;if(kind==='json')download(`${base}.json`,JSON.stringify({active:activeCanonical,list},null,2),'application/json;charset=utf-8');else{const keys=[...new Set(list.records.flatMap(record=>Object.keys(record)))];download(`${base}.csv`,[keys.map(csvCell).join(';'),...list.records.map(record=>keys.map(key=>csvCell(record[key])).join(';'))].join('\n'),'text/csv;charset=utf-8')}setNotice(`DOWNLOAD SOLICITADO — ${list.id}.${kind}`)};
+  return <PanelPage title="Documentos" metricLabel="Build ativo" metricValue={activeCanonical.motorBuildId}><div className="panel-stack">{error?<PanelAlert tone="error">{error}</PanelAlert>:null}{notice?<PanelAlert tone="success">{notice}</PanelAlert>:null}<div className="panel-stat-grid"><PanelStat label="Listas disponíveis" value={lists.length}/><PanelStat label="Registros exportáveis" value={lists.reduce((sum,list)=>sum+list.records.length,0)}/><PanelStat label="Formatos" value="JSON + CSV"/><PanelStat label="Engine" value={activeCanonical.engineVersion}/></div><PanelCard><PanelSectionHeader eyebrow="EXPORTAÇÕES REPRODUZÍVEIS" title="Documentos do build canônico" description="Cada arquivo inclui somente a lista selecionada; o JSON preserva também a identidade completa do build."/><div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Documento</th><th>Registros</th><th>Competência</th><th>Fonte</th><th>Ações</th></tr></thead><tbody>{lists.map(list=><tr key={list.id}><td>{list.id}</td><td>{list.records.length.toLocaleString('pt-BR')}</td><td>{list.competence||'—'}</td><td>{list.sources.join(', ')}</td><td><button className="panel-button" onClick={()=>exportList(list,'json')}>BAIXAR JSON</button>{' '}<button className="panel-secondary-button" onClick={()=>exportList(list,'csv')}>BAIXAR CSV</button></td></tr>)}</tbody></table></div></PanelCard></div></PanelPage>;
 }
