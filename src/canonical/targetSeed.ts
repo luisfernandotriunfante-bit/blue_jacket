@@ -2,7 +2,7 @@ import { competenceFromParsedSource, isValidCompetenceId } from './competence';
 import { loadAdminRegistryState } from './adminRegistryIndexedDb';
 import { createRcaResolver } from './rcaResolver';
 import { loadSourceStaging } from './sourceImport';
-import { BUSSOLA_SOURCE_ID } from './targetAuthority';
+import { BUSSOLA_SOURCE_ID, resolveBussolaRca } from './targetAuthority';
 import { emptyTargetState, validateTargetState, type RcaTargetRecord, type TargetState } from './targetStore';
 import type { ParsedSource, RawTyped } from './types';
 
@@ -58,10 +58,10 @@ export async function previewBussolaTargetSeed(editedCompetence: string, state: 
       items.push({ status: 'COMPETENCE_MISMATCH', businessKey: `${sourceCompetence ?? 'UNRESOLVED'}|${String(code ?? '')}`, recordId: null, reason: `A Bússola pertence a ${sourceCompetence ?? 'competência não resolvida'} e não pode alimentar metas de ${editedCompetence}.` });
       continue;
     }
-    const resolution = resolver.resolveLegacy(code, typed(row, 'target_rca_name'), sourceCompetence);
+    const resolution = resolveBussolaRca(resolver, row, sourceCompetence);
     if (!resolution.canonicalId) {
       const ambiguous = resolution.status === 'AMBIGUOUS_RCA_CODE';
-      items.push({ status: ambiguous ? 'RCA_AMBIGUOUS' : 'RCA_UNRESOLVED', businessKey: `${sourceCompetence}|${String(code ?? '')}`, recordId: null, reason: `RCA legado ${String(code ?? '')} não foi resolvido de forma única pela autoridade RCA atual.` });
+      items.push({ status: ambiguous ? 'RCA_AMBIGUOUS' : 'RCA_UNRESOLVED', businessKey: `${sourceCompetence}|${String(code ?? '')}`, recordId: null, reason: `RCA ${String(code ?? '')} da Bússola não foi resolvido de forma única no contexto declarado pela fonte.` });
       continue;
     }
     const salesTarget = numberTarget(typed(row, 'sales_target_pna'));

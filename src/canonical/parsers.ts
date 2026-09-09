@@ -118,6 +118,8 @@ async function parseBussolaFile(file:File){
  for(let i=h+1;i<matrix.length;i++){
   const r=matrix[i];if(![0,1,4,7,8,10,15,16,21].some(n=>text(r[n])))continue;const out:Record<string,RawTyped>={};
   for(const f of fs.filter(f=>col(f.coordinate)>=0&&col(f.coordinate)<=28)){const index=september?(BUSSOLA_SEPTEMBER_COLUMNS[f.output_field]??-1):col(f.coordinate);if(index>=0)out[f.output_field]=typed(r[index],f.type)}
+  out.target_rca_code_context=typed(september?'CURRENT':'LEGACY','TEXT');
+  if(september)out.industry_winthor_code=typed(r[7],'TEXT');
   out.__source_row={raw:i+1,typed:i+1};out.__schema_version={raw:'v2',typed:'v2'};out.__processing_ms={raw:performance.now()-started,typed:performance.now()-started};rows.push(out)
  }
  return result(source,file,'Metas',rows,[])
