@@ -1,3 +1,6 @@
+import { useAdminNavigation } from '../ui/navigation/NavigationContext';
+import { rcaAttention } from '../ui/rcaAttention';
+import { InfoHint, InformationDrawer, InformationContext } from '../ui/pattern/InformationDrawer';
 import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
 import { compareOfficialCompetence, formatCompetenceId } from '../canonical/competence';
@@ -20,11 +23,22 @@ const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFracti
 const number = new Intl.NumberFormat('pt-BR');
 const percentValue = (input: number | null) => input === null ? '—' : percent.format(input);
 
-function Alerts({ model }: { model: SellOutViewModel }) { return <>{model.audits.map(audit => <PanelAlert key={audit.code} tone="warning"><strong>{audit.code}</strong> — {audit.message} {audit.code === 'UNRESOLVED_RCA_IN_VIEW' ? ' O código antigo pode estar vazio; esta pendência significa que existe venda do 8022 sem RCA atual resolvido em NOVOS RCAS. Veja Gerencial → Conciliação RCA.' : audit.action}</PanelAlert>)}</>; }
-
-function InfoHint({ text }: { text: string }) {
-  return <span className="sellout-info" tabIndex={0} aria-label={text}><span aria-hidden="true">i</span><span className="sellout-info-tooltip" role="tooltip">{text}</span></span>;
+export function Alerts({ model }: { model: SellOutViewModel }) {
+ const navigate = useAdminNavigation();
+ const { unresolvedCount, links, targets, label } = rcaAttention(model);
+ if (!label) return null;
+ const unresolved = unresolvedCount > 0 || links.length > 0;
+ return <div className="bj-attention-row"><InformationDrawer title={label} triggerLabel={label} attention>
+ <p>Confira as pendências do período. Os valores permanecem nos totais; nenhuma associação é criada automaticamente.</p>
+ {unresolved ? <section><h3>Vínculos de RCA · {unresolvedCount} código(s) sem associação nas vendas</h3><p>Confira código atual, código legado, vigência e situação em Cadastros → RCAs. Uma inativação manual pode impedir a associação mesmo quando existe um registro importado ativo.</p>{links.map((item,index) => <article className="bj-issue" key={item.code+':'+index}><h3>RCA {item.code}</h3><p>{item.reason}</p><p>{number.format(item.saleLines)} registros de venda</p><p>Sell Out envolvido: <strong>{currency.format(item.realized)}</strong></p></article>)}</section> : null}
+ {targets.length ? <section><h3>Metas · {targets.length} RCA(s) sem meta positiva</h3><p>Estes RCAs têm vínculo cadastral. A pendência é de meta na competência, não de identificação.</p>{targets.map((item,index) => <article className="bj-issue" key={item.code+':'+index}><h3>RCA {item.code}</h3><p>{item.reason}</p><p>Sell Out no período: <strong>{currency.format(item.realized)}</strong></p></article>)}<button type="button" className="panel-secondary-button" onClick={() => navigate('metas')}>Consultar metas</button></section> : null}
+ <h3>Caminho para revisão</h3>{unresolved ? <p>Acesse <strong>Administração → Cadastros → RCAs</strong> para conferir vínculos e situação dos códigos. Consulte também <strong>Administração → Auditoria</strong>. Confirme a competência e o impacto antes de aplicar alterações.</p> : <p>Consulte <strong>Administração → Auditoria</strong> para identificar a origem. As orientações específicas de cada ocorrência estão preservadas nos detalhes abaixo.</p>}
+ <div className="bj-drawer-actions">{unresolved ? <button type="button" className="panel-primary-button" onClick={() => navigate('cadastros')}>Abrir cadastro de RCAs</button> : null}<button type="button" className="panel-secondary-button" onClick={() => navigate('auditoria')}>Consultar auditoria</button></div>
+ <details><summary>Detalhes técnicos e evidências</summary>{model.audits.map(audit => <div key={audit.code}><h3>{audit.code}</h3><p>{audit.message}</p><p>{audit.action}</p></div>)}{model.rcaDiagnostics.map((item,index) => <p key={index}>RCA {item.code} · {item.kind}: {item.action}</p>)}<p>Identidade dos dados</p><code>{model.motorBuildId}</code></details>
+ </InformationDrawer></div>;
 }
+
+
 
 function MetricCard({ label, value, progress, progressLabel, info }: { label: string; value: string; progress: number | null; progressLabel: string; info: string }) {
   const safeProgress = progress === null ? null : Math.max(0, Math.min(1, progress));
@@ -38,7 +52,7 @@ function MetricCard({ label, value, progress, progressLabel, info }: { label: st
   </div>;
 }
 
-function Summary({ dashboard }: { dashboard: SellOutDashboardModel }) {
+export function Summary({ dashboard }: { dashboard: SellOutDashboardModel }) {
   const { operationalModel: model, totals } = dashboard;
   const latestLabel = dashboard.latestDate ? new Date(`${dashboard.latestDate}T12:00:00`).toLocaleDateString('pt-BR') : '—';
   const targetValue = (value: number | null, formatter: (value: number) => string) => value === null ? 'Definir em Metas' : formatter(value);
@@ -47,12 +61,12 @@ function Summary({ dashboard }: { dashboard: SellOutDashboardModel }) {
   return <>
     <div className="panel-badge">COMPETÊNCIA · {model.competence === 'MIXED' || model.competence === 'UNRESOLVED' ? model.competence : `${model.competence.slice(5, 7)}/${model.competence.slice(0, 4)}`}</div>
     <div className="sellout-metric-grid">
+      <MetricCard label="Sell Out realizado" value={currency.format(totals.realized)} progress={totals.salesAchievement} progressLabel={targetProgress(totals.salesAchievement)} info="Total realizado do Sell Out no período ativo, vindo do mesmo view-model usado nos gráficos e na exportação." />
       <MetricCard label="Meta T&C" value={targetValue(totals.sellOutTarget, value => currency.format(value))} progress={totals.salesAchievement} progressLabel={targetProgress(totals.salesAchievement, 'atingido')} info="Meta geral de T&C definida manualmente na aba Metas." />
-      <MetricCard label="Sell Out" value={currency.format(totals.realized)} progress={totals.salesAchievement} progressLabel={targetProgress(totals.salesAchievement)} info="Total realizado do Sell Out no período ativo, vindo do mesmo view-model usado nos gráficos e na exportação." />
       <MetricCard label="Faturado" value={currency.format(totals.invoiced)} progress={totals.invoicedShare} progressLabel={totals.invoicedShare === null ? 'Sem Sell Out realizado' : `${percent.format(totals.invoicedShare)} do Sell Out`} info="Parcela do Sell Out já faturada." />
-      <MetricCard label="Meta positivação" value={targetValue(totals.positivityTarget, value => number.format(value))} progress={totals.positivityAchievement} progressLabel={targetProgress(totals.positivityAchievement, 'atingido')} info="Meta geral de positivação definida manualmente na aba Metas." />
-      <MetricCard label="Positivado" value={number.format(totals.positiveCustomers)} progress={totals.positivityAchievement} progressLabel={targetProgress(totals.positivityAchievement)} info="Clientes distintos positivados no período ativo." />
-      <MetricCard label="Pos. faturada" value={number.format(totals.invoicedPositiveCustomers)} progress={totals.invoicedPositivityAchievement} progressLabel={targetProgress(totals.invoicedPositivityAchievement)} info="Clientes distintos com venda já faturada no período ativo." />
+      <MetricCard label="Clientes positivados" value={number.format(totals.positiveCustomers)} progress={totals.positivityAchievement} progressLabel={targetProgress(totals.positivityAchievement)} info="Clientes distintos positivados no período ativo." />
+      <MetricCard label="Meta de positivação" value={targetValue(totals.positivityTarget, value => number.format(value))} progress={totals.positivityAchievement} progressLabel={targetProgress(totals.positivityAchievement, 'atingido')} info="Meta geral de positivação definida manualmente na aba Metas." />
+      <MetricCard label="Positivação faturada" value={number.format(totals.invoicedPositiveCustomers)} progress={totals.invoicedPositivityAchievement} progressLabel={targetProgress(totals.invoicedPositivityAchievement)} info="Clientes distintos com venda já faturada no período ativo." />
     </div>
     <PanelCard><PanelSectionHeader eyebrow="MOVIMENTO" title="Fechamento diário" description="Gráficos e planilha usam a mesma janela móvel. A abertura sempre inicia no último dia válido do acompanhamento." action={<div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}><span className="panel-badge">ÚLTIMO MOVIMENTO · {latestLabel}</span><button className="panel-secondary-button" onClick={() => exportSellOutExcel(model)}>Exportar Excel</button><button className="panel-secondary-button" onClick={() => exportSellOutJson(model)}>Exportar JSON</button></div>} />{dashboard.dailyRows.length ? <DailyMovementWindow data={dashboard.dailyRows} totals={{ realized: totals.realized, positiveCustomers: totals.positiveCustomers, invoicedPositiveCustomers: totals.invoicedPositiveCustomers }} /> : <PanelEmptyState title="Sem movimento diário válido" description="As vendas permanecem no total do período, mas não existe data válida para montar a série diária." />}</PanelCard>
     <PanelCard><PanelSectionHeader eyebrow="SELL OUT POR LINHA" title="Resultado das cinco linhas comerciais" description="As mesmas cinco divisões de produtos usadas no Sell Out anterior, preparadas antes da tela pela classificação canônica de itens." />
@@ -115,5 +129,5 @@ export function SellOutPage({ view = 'resumo' }: { view?: SellOutView }) {
   const canonicalModel: SellOutViewModel = { ...baseModel, motorBuildId: activeCanonical.motorBuildId, stagingManifestHash: activeCanonical.stagingManifestHash };
   const dashboard = buildSellOutDashboardModel({ base: canonicalModel, m1: lists.m1, m3: lists.m3, targets: sellOutTargetsFor(officialCompetence!) });
   const model = dashboard.operationalModel;
-  return <PanelPage title="Sell Out"><div className="panel-stack sellout-page-stack"><Alerts model={model} />{view === 'gerencial' ? <Management model={model} /> : <Summary dashboard={dashboard} />}</div></PanelPage>;
+  return <InformationContext.Provider value={<><h3>Referência dos dados</h3><dl><dt>Competência</dt><dd>{formatCompetenceId(officialCompetence!)}</dd><dt>Último movimento</dt><dd>{dashboard.latestDate ? new Date(`${dashboard.latestDate}T12:00:00`).toLocaleDateString('pt-BR') : 'Não disponível'}</dd><dt>Dados processados em</dt><dd>{model.generatedAt ? new Date(model.generatedAt).toLocaleString('pt-BR') : 'Não disponível'}</dd></dl><details><summary>Detalhes técnicos</summary><code>{model.motorBuildId}</code><p>Manifesto de origem</p><code>{model.stagingManifestHash}</code></details></>}><PanelPage title="Sell Out"><div className="panel-stack sellout-page-stack"><Alerts model={model} />{view === 'gerencial' ? <Management model={model} /> : <Summary dashboard={dashboard} />}</div></PanelPage></InformationContext.Provider>;
 }

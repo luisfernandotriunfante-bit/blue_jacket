@@ -1,3 +1,4 @@
+import { InfoHint, InformationDrawer } from '../ui/pattern/InformationDrawer';
 import { useEffect, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
 import { compareOfficialCompetence, formatCompetenceId } from '../canonical/competence';
@@ -16,9 +17,7 @@ const number = new Intl.NumberFormat('pt-BR');
 const percentValue = (input: number | null) => input === null ? '—' : percent.format(input);
 const textValue = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
 
-function InfoHint({ text }: { text: string }) {
-  return <span className="sellout-info" tabIndex={0} aria-label={text}><span aria-hidden="true">i</span><span className="sellout-info-tooltip" role="tooltip">{text}</span></span>;
-}
+
 
 function MetricCard({ label, value, progress, progressLabel, info }: { label: string; value: string; progress: number | null; progressLabel: string; info: string }) {
   const safeProgress = progress === null ? null : Math.max(0, Math.min(1, progress));

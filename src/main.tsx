@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react'
+import { NavigationContext } from './ui/navigation/NavigationContext'
+import React, { useEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BlueJacketShell } from './ui/BlueJacketShell'
 import { HoverSidebar } from './ui/navigation/HoverSidebar'
@@ -18,6 +19,7 @@ import { ADMIN_TABS, MAIN_SECTIONS, initialNavigationState, type AdminTabId, typ
 import { deviceSyncHasNewerRemoteSnapshot, deviceSyncIdentity, incomingDeviceSyncCode, restoreCurrentDeviceSnapshot } from './canonical/cloudSync'
 import { systemDataOperationCoordinator } from './canonical/systemDataOperationCoordinator'
 import './ui/theme/foundation.css'
+import './ui/theme/redesign.css'
 
 /** Restores a newer paired snapshot on startup without replacing an unsynced local build. */
 function DeviceSyncBootstrap() {
@@ -51,11 +53,29 @@ function App() {
   const [activeAtividadesTopTab, setActiveAtividadesTopTab] = useState('combo')
   const [activeClientesTopTab, setActiveClientesTopTab] = useState<ClientesSortimentoView>('overview')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const sidebarTrigger = useRef<HTMLButtonElement>(null)
+  const closeSidebar = () => { setSidebarOpen(false); sidebarTrigger.current?.focus() }
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const first = document.querySelector<HTMLButtonElement>('.bj-sidebar-item'); first?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if(event.key === 'Escape') { event.preventDefault(); closeSidebar(); }
+      if(event.key === 'Tab') {
+        const controls = Array.from(document.querySelectorAll<HTMLButtonElement>('.bj-sidebar-item'));
+        if(event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
+        else if(!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
+      }
+    };
+    document.addEventListener('keydown',keydown);
+    return () => { document.body.style.overflow = previousOverflow; document.removeEventListener('keydown',keydown); };
+  }, [sidebarOpen])
 
   const selectSection = (id: MainSectionId) => {
     setActiveTab(id)
     if (id === 'administracao') setActiveAdminTopTab('bases')
-    setSidebarOpen(false)
+    closeSidebar()
   }
 
   const sidebarItems = MAIN_SECTIONS.map(section => ({
@@ -69,6 +89,8 @@ function App() {
     <>
       <button
         type="button"
+        ref={sidebarTrigger}
+        aria-controls="main-sidebar"
         className="bj-sidebar-trigger"
         data-open={sidebarOpen ? 'true' : 'false'}
         aria-label={sidebarOpen ? 'Fechar navegação principal' : 'Abrir navegação principal'}
@@ -83,11 +105,11 @@ function App() {
         data-open={sidebarOpen ? 'true' : 'false'}
         aria-label="Fechar navegação principal"
         tabIndex={sidebarOpen ? 0 : -1}
-        onClick={() => setSidebarOpen(false)}
+        onClick={closeSidebar}
       />
       <HoverSidebar
         forceOpen={sidebarOpen}
-        brand={<div className="bj-brand"><span className="bj-brand-mark" aria-hidden="true" /><span>BLUE JACKET</span></div>}
+        brand={<div className="bj-brand"><img className="bj-logo" src={`${import.meta.env.BASE_URL}blue-jacket-logo.png`} alt="" /><span>BLUE JACKET</span></div>}
         items={sidebarItems}
       />
     </>
@@ -126,7 +148,7 @@ function App() {
     : 'overview'
 
   return (
-    <BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
+    <NavigationContext.Provider value={tab => { setActiveTab('administracao'); setActiveAdminTopTab(tab); setSidebarOpen(false); }}><BlueJacketShell sidebar={sidebar} topNavigation={topNavigation}>
       {migrationError ? <PanelAlert tone="error">{migrationError}</PanelAlert> : null}
       {activeTab === 'estoque' ? (
         activeEstoqueTopTab === 'launches' ? <LancamentosPage /> : activeEstoqueTopTab === 'movements' ? <EntradasNotasPage /> : <EstoquePage view={estoqueView} />
@@ -142,7 +164,7 @@ function App() {
           <PanelEmptyState variant="page" title={`${currentLabel} em construção`} description="Este módulo faz parte do roadmap e ainda não está disponível para uso operacional." />
         </PanelPage>
       )}
-    </BlueJacketShell>
+    </BlueJacketShell></NavigationContext.Provider>
   )
 }
 

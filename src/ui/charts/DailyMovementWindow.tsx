@@ -22,6 +22,7 @@ export function DailyMovementWindow({data,totals}:{data:MovementDay[];totals:Mov
  const[selectedEndDate,setSelectedEndDate]=useState('');
  const selectedIndex=selectedEndDate?calendar.findIndex(day=>day.date===selectedEndDate):-1;
  const safeEnd=selectedIndex>=minEnd&&selectedIndex<=maxEnd?selectedIndex:maxEnd;
+ const [compact, setCompact] = useState(false);
  if(!calendar.length)return null;
  const startIndex=Math.max(0,safeEnd-(WINDOW_DAYS-1));
  const visible=calendar.slice(startIndex,safeEnd+1);
@@ -32,6 +33,7 @@ export function DailyMovementWindow({data,totals}:{data:MovementDay[];totals:Mov
  const selectEnd=(index:number)=>{const target=Math.min(maxEnd,Math.max(minEnd,index));setSelectedEndDate(calendar[target]?.date||latestDate)};
  const move=(direction:number)=>selectEnd(safeEnd+direction);
  const goCurrent=()=>setSelectedEndDate(latestDate);
+
 
  return <div className="chart-window">
   <div className="chart-window-toolbar">
@@ -48,8 +50,8 @@ export function DailyMovementWindow({data,totals}:{data:MovementDay[];totals:Mov
     <MovementPanel eyebrow="MOVIMENTO DE POSITIVAÇÃO" title="Clientes positivados por dia"><DailyPositivityChart data={visible}/></MovementPanel>
    </div>
    <div className="chart-daily-table">
-    <div className="chart-daily-header"><div className="panel-eyebrow">PLANILHA DIÁRIA</div><div className="panel-section-title">Financeiro + positivação</div><div className="panel-muted" style={{fontSize:'var(--panel-font-caption)',marginTop:3}}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div></div>
-    <div className="chart-daily-body"><table className="panel-table"><thead><tr><th>Data</th><th className="is-right">Sell Out</th><th className="is-right">Faturado</th><th className="is-right">A Faturar</th><th className="is-right">Pos. Fat.</th><th className="is-right">Pos. Total</th></tr></thead><tbody>{visible.map(day=><tr key={day.date}><td className="is-strong">{fmtShortDate(day.date)}</td><td className="is-right is-strong">{fmtBRL(day.total)}</td><td className="is-right is-blue">{fmtBRL(day.invoiced)}</td><td className="is-right is-green">{fmtBRL(day.toInvoice)}</td><td className="is-right is-blue">{fmtInt(day.invoicedPositivation)}</td><td className="is-right">{fmtInt(day.totalPositivation)}</td></tr>)}</tbody></table></div>
+    <div className="chart-daily-header"><div className="panel-eyebrow">PLANILHA DIÁRIA</div><div className="panel-section-title">Financeiro + positivação</div><div className="panel-muted" style={{fontSize:'var(--panel-font-caption)',marginTop:3}}>{fmtShortDate(periodStart)} — {fmtShortDate(periodEnd)}</div><button type="button" className="chart-density" aria-pressed={compact} onClick={() => setCompact(value => !value)}>{compact ? 'Confortável' : 'Compactar'}</button></div>
+    <div className={`chart-daily-body${compact ? ' is-compact' : ''}`}><table className="panel-table"><thead><tr><th>Data</th><th className="is-right">Sell Out</th><th className="is-right">Faturado</th><th className="is-right">A Faturar</th><th className="is-right">Pos. Fat.</th><th className="is-right">Pos. Total</th></tr></thead><tbody>{visible.map(day=><tr key={day.date}><td className="is-strong">{fmtShortDate(day.date)}</td><td className="is-right is-strong">{fmtBRL(day.total)}</td><td className="is-right is-blue">{fmtBRL(day.invoiced)}</td><td className="is-right is-green">{fmtBRL(day.toInvoice)}</td><td className="is-right is-blue">{fmtInt(day.invoicedPositivation)}</td><td className="is-right">{fmtInt(day.totalPositivation)}</td></tr>)}</tbody></table></div>
     <div className="chart-daily-footer chart-daily-footer-totals">
       <div><div className="panel-mini-label">Sell Out acumulado</div><div className="panel-mini-value">{fmtBRL(totals.realized)}</div></div>
       <div><div className="panel-mini-label">Positivados acumulados</div><div className="panel-mini-value">{fmtInt(totals.positiveCustomers)}</div></div>
@@ -63,3 +65,5 @@ export function DailyMovementWindow({data,totals}:{data:MovementDay[];totals:Mov
 function MovementPanel({eyebrow,title,children}:{eyebrow:string;title:string;children:React.ReactNode}){
  return <div className="chart-panel"><div className="chart-panel-copy"><div className="panel-eyebrow">{eyebrow}</div><div className="chart-panel-title">{title}</div></div>{children}</div>;
 }
+
+

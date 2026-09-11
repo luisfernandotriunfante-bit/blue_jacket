@@ -14,7 +14,7 @@ export function BlueJacketShell({
     <div className="blue-jacket-shell">
       {sidebar}
       <div className="bj-content">
-        {topNavigation}
+        <header className="bj-app-header"><div className="bj-app-brand"><img className="bj-logo" src={`${import.meta.env.BASE_URL}blue-jacket-logo.png`} alt="" /><strong>BLUE JACKET</strong></div><span>Acompanhamento comercial</span></header>{topNavigation}
         {children}
       </div>
     </div>

@@ -27,8 +27,8 @@ test('Sell Out não expõe identificador técnico do build no cabeçalho', () =>
   assert.equal(page.includes('PanelAlert tone="success"'), false);
 });
 
-test('Resumo usa cards modernos na ordem operacional definida', () => {
-  const labels = ['Meta T&C', 'Sell Out', 'Faturado', 'Meta positivação', 'Positivado', 'Pos. faturada'];
+test('Resumo mantém os seis indicadores na ordem visual aprovada', () => {
+  const labels = ['Sell Out realizado', 'Meta T&C', 'Faturado', 'Clientes positivados', 'Meta de positivação', 'Positivação faturada'];
   let previous = -1;
   for (const label of labels) {
     const index = page.indexOf(`label="${label}"`);
@@ -58,3 +58,4 @@ test('Sell Out por linha volta ao padrão das cinco divisões comerciais', () =>
   assert.ok(page.includes('do Sell Out'));
   assert.equal(page.includes('As linhas comerciais oficiais ainda não foram definidas'), false);
 });
+

@@ -25,7 +25,7 @@ export function HoverSidebar({
   ariaLabel = 'Navegação principal',
 }: HoverSidebarProps) {
   return (
-    <aside className="bj-sidebar" data-open={forceOpen ? 'true' : 'false'} aria-label={ariaLabel}>
+    <aside id="main-sidebar" inert={!forceOpen} aria-hidden={!forceOpen} className="bj-sidebar" data-open={forceOpen ? 'true' : 'false'} aria-label={ariaLabel}>
       {brand ? <div className="bj-sidebar-brand">{brand}</div> : null}
 
       <nav className="bj-sidebar-nav">
@@ -37,7 +37,7 @@ export function HoverSidebar({
             aria-current={item.active ? 'page' : undefined}
             onClick={(e) => {
               item.onSelect?.()
-              e.currentTarget.blur()
+
             }}
           >
             {item.icon ? <span aria-hidden="true">{item.icon}</span> : null}

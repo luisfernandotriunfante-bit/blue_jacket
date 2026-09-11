@@ -1,3 +1,4 @@
+import { signedChartDomain } from './signedChartDomain';
 type DailyMovementPoint = {
   date: string;
   invoiced: number;
@@ -24,17 +25,17 @@ export function DailyMovementChart({ data }: { data: DailyMovementPoint[] }) {
   const pad = { top: 24, right: 24, bottom: 48, left: 84 };
   const innerWidth = width - pad.left - pad.right;
   const innerHeight = height - pad.top - pad.bottom;
-  const maxValue = Math.max(...data.flatMap(item => [item.total, item.invoiced, item.toInvoice]), 1);
-  const ceiling = maxValue * 1.12;
+  const domain = signedChartDomain(data.flatMap(item => [item.total, item.invoiced, item.toInvoice]));
+  const ceiling = domain.max;
   const x = (index: number) => pad.left + (index / Math.max(data.length - 1, 1)) * innerWidth;
-  const y = (value: number) => pad.top + innerHeight - (value / ceiling) * innerHeight;
+  const y = (value: number) => pad.top + innerHeight - ((value - domain.min) / (ceiling - domain.min)) * innerHeight;
   const totalValues = data.map(item => item.total);
   const invoicedValues = data.map(item => item.invoiced);
   const toInvoiceValues = data.map(item => item.toInvoice);
   const totalPath = linePath(totalValues, x, y);
   const invoicedPath = linePath(invoicedValues, x, y);
   const toInvoicePath = linePath(toInvoiceValues, x, y);
-  const totalArea = `${totalPath} L ${x(data.length - 1).toFixed(2)} ${(pad.top + innerHeight).toFixed(2)} L ${x(0).toFixed(2)} ${(pad.top + innerHeight).toFixed(2)} Z`;
+  const totalArea = `${totalPath} L ${x(data.length - 1).toFixed(2)} ${y(0).toFixed(2)} L ${x(0).toFixed(2)} ${y(0).toFixed(2)} Z`;
   const grid = [0, 0.25, 0.5, 0.75, 1];
   const labelStep = data.length > 24 ? 5 : data.length > 15 ? 3 : data.length > 9 ? 2 : 1;
 
@@ -57,11 +58,11 @@ export function DailyMovementChart({ data }: { data: DailyMovementPoint[] }) {
             </linearGradient>
           </defs>
           {grid.map(level => {
-            const value = ceiling * level;
+            const value = domain.min + (ceiling - domain.min) * level;
             const gy = y(value);
             return <g key={level}><line x1={pad.left} y1={gy} x2={width - pad.right} y2={gy} stroke="rgba(255,255,255,0.075)" strokeWidth="1" /><text x={pad.left - 12} y={gy + 4} textAnchor="end" fill="var(--panel-muted)" fontSize="10">{compactBRL(value)}</text></g>;
           })}
-          <path d={totalArea} fill="url(#movement-total-area)" />
+          <line x1={pad.left} x2={width - pad.right} y1={y(0)} y2={y(0)} stroke="var(--panel-muted)" strokeOpacity="0.5" /><path d={totalArea} fill="url(#movement-total-area)" />
           <path d={totalPath} fill="none" stroke="var(--panel-red)" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
           <path d={invoicedPath} fill="none" stroke="var(--panel-blue)" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
           <path d={toInvoicePath} fill="none" stroke="var(--panel-green)" strokeWidth="2.2" strokeDasharray="7 5" strokeLinejoin="round" strokeLinecap="round" />
@@ -75,3 +76,4 @@ export function DailyMovementChart({ data }: { data: DailyMovementPoint[] }) {
 function Legend({ color, label, dashed = false }: { color: string; label: string; dashed?: boolean }) {
   return <span className="chart-legend"><span className="chart-legend-line" style={{ borderTopColor: color, borderTopStyle: dashed ? 'dashed' : 'solid' }} />{label}</span>;
 }
+

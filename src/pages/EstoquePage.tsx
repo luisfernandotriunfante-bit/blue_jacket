@@ -1,3 +1,4 @@
+import { InfoHint, InformationDrawer } from '../ui/pattern/InformationDrawer';
 import { useEffect, useMemo, useState } from 'react';
 import { loadCandidateList } from '../canonical/candidateLists';
 import { buildStockForecastBuckets, buildStockOverviewModel, stockOperationalCivilDate, stockTreemapLineValue, stockTreemapTileValue, type StockOverviewModel, type StockTreemapMode } from '../canonical/stockOverviewModel';
@@ -15,9 +16,7 @@ const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: '
 const number = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 });
 const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFractionDigits: 1 });
 
-function InfoHint({ text }: { text: string }) {
-  return <span className="stock-info" tabIndex={0} aria-label={text}><span aria-hidden="true">i</span><span className="stock-info-tooltip" role="tooltip">{text}</span></span>;
-}
+
 
 function MetricCard({ label, value, progress, progressLabel, info }: { label: string; value: string; progress: number | null; progressLabel: string; info: string }) {
   const safe = progress === null ? null : Math.max(0, Math.min(1, progress));

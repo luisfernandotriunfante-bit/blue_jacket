@@ -84,7 +84,10 @@ export function SincronizacaoPage() {
   };
 
   useEffect(() => systemDataOperationCoordinator.subscribe(setOperationState), []);
-  useEffect(() => { void refreshRemoteBackup(deviceSync); }, [deviceSync]);
+  useEffect(() => {
+    // Startup restoration finishes outside this page; refresh its status once idle.
+    if (!operationState.busy) void refreshRemoteBackup(deviceSync);
+  }, [deviceSync, operationState.busy]);
 
   useEffect(() => {
     const incoming = incomingDeviceSyncCode();
