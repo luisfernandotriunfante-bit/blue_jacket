@@ -109,7 +109,7 @@ function App() {
       />
       <HoverSidebar
         forceOpen={sidebarOpen}
-        brand={<div className="bj-brand"><img className="bj-logo" src={`${import.meta.env.BASE_URL}blue-jacket-logo.png`} alt="" /><span>BLUE JACKET</span></div>}
+        brand={<div className="bj-brand"><img className="bj-logo" src={`${import.meta.env.BASE_URL}blue-jacket-logo-black.png`} alt="" /><span>BLUE JACKET</span></div>}
         items={sidebarItems}
       />
     </>
@@ -171,3 +171,4 @@ function App() {
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode><DataProvider><DeviceSyncBootstrap /><App /></DataProvider></React.StrictMode>,
 )
+

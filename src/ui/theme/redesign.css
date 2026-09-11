@@ -12,3 +12,110 @@ button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
 .chart-panel,.chart-daily-table{background:var(--panel-card);border:1px solid var(--panel-red);border-radius:14px;box-shadow:none}.bj-information-drawer dt{margin-top:16px;color:var(--panel-muted);font-size:.875rem}.bj-information-drawer dd{margin:5px 0 0;font-size:.95rem}
 .panel-page-header{background:transparent;border:0;align-items:center}.panel-page-content{padding:0;width:100%}.panel-page-title{margin:0}.panel-eyebrow,.panel-mini-label{letter-spacing:.06em;font-weight:600}.panel-section-title{line-height:1.4}.chart-daily-body.is-compact td{padding-top:5px;padding-bottom:5px}.chart-density{margin-top:10px;border:1px solid var(--panel-separator);border-radius:8px;background:transparent;color:var(--panel-muted);padding:8px 12px;cursor:pointer;font:inherit;font-size:.8rem}
+
+/* Visual refinement: shared controls and neutral black surfaces. */
+:root {
+  color-scheme: dark;
+  --panel-bg: #000; --panel-bg-elevated: #000; --panel-card: #000;
+  --panel-card-hover: #111; --panel-card-border: #292929;
+  --panel-border: #292929; --panel-separator: #242424;
+  --panel-overlay: #000b; --panel-focus: 0 0 0 3px #ff174440;
+}
+body .blue-jacket-shell, body .bj-app-header, body .bj-sidebar,
+body .bj-top-tabs, body .bj-information-drawer { background: #000; }
+body .bj-logo { background: #000; border-radius: 0; }
+
+/* Actions include unclassed administrative buttons and file-picker labels. */
+body button:not(.bj-top-tab):not(.bj-sidebar-item):not(.bj-sidebar-trigger):not(.bj-sidebar-backdrop):not(.stock-subbrand-tile):not(.stock-subbrand-row):not(.product-row-main),
+body .panel-upload-button, body .panel-file-button,
+:root body .blue-jacket-shell input[type=file]::file-selector-button {
+  min-height: 36px; padding: 8px 16px; border: 1px solid #ff1744;
+  border-radius: 999px; background: #000; color: #d6d6d6;
+  font: 600 .8rem/1.35 Inter, system-ui, sans-serif; letter-spacing: normal;
+  box-shadow: none; text-decoration: none; cursor: pointer;
+  transition: background-color .15s, border-color .15s;
+}
+body button:not(.bj-top-tab):not(.bj-sidebar-item):not(.bj-sidebar-trigger):not(.bj-sidebar-backdrop):not(.stock-subbrand-tile):not(.stock-subbrand-row):not(.product-row-main):is(.is-active,[aria-pressed=true],[aria-selected=true]),
+body button:not(.bj-sidebar-backdrop):hover:not(:disabled) { background: #321018; color: #fff; }
+body button:disabled { opacity: .45; cursor: not-allowed; }
+body button:focus-visible, :root body .blue-jacket-shell select:focus-visible, :root body .blue-jacket-shell input:focus-visible, :root body .blue-jacket-shell textarea:focus-visible {
+  outline: 2px solid #fff; outline-offset: 3px; box-shadow: none;
+}
+body .bj-info-trigger { min-height: 26px !important; width: 26px; padding: 0 !important; }
+body .bj-drawer-heading button { padding: 0; width: 36px; }
+body .bj-sidebar-trigger { background: #000; border-color: #ff1744; }
+body .bj-top-tab[aria-selected=true] { background: #000; }
+body .panel-inline-actions, body .panel-section-action { gap: 8px; }
+body .inbound-view-tabs { border: 0; padding: 0; background: #000; flex-wrap: wrap; }
+body .inbound-view-tabs button { min-width: 0; text-align: center; padding: 8px 18px; }
+
+/* Native selects retain keyboard, labels and form events, including their popup. */
+:root body .blue-jacket-shell select, :root body .blue-jacket-shell input:not([type=checkbox]):not([type=radio]):not([type=file]), :root body .blue-jacket-shell textarea {
+  min-height: 44px; max-width: 100%; box-sizing: border-box; border: 1px solid #ff1744;
+  border-radius: 12px; background: #000; color: #eee; padding: 10px 14px;
+  font: 400 .9rem/1.4 Inter, system-ui, sans-serif; box-shadow: none;
+}
+:root body .blue-jacket-shell select { cursor: pointer; }
+body option, body optgroup { color: #eee; background: #000; }
+:root body .blue-jacket-shell input::placeholder, :root body .blue-jacket-shell textarea::placeholder { color: #939393; }
+:root body .blue-jacket-shell input:is([type=checkbox],[type=radio]) { accent-color: #ff1744; }
+@supports (appearance: base-select) {
+  :root body .blue-jacket-shell select, :root body .blue-jacket-shell select::picker(select) { appearance: base-select; }
+  :root body .blue-jacket-shell select::picker(select) {
+    background: #000; color: #eee; border: 1px solid #ff1744;
+    border-radius: 12px; padding: 6px; margin-top: 6px;
+    max-height: 320px; overflow: auto; box-shadow: 0 12px 30px #0009;
+  }
+  :root body .blue-jacket-shell select option { padding: 10px 14px; border-radius: 7px; cursor: pointer; }
+  :root body .blue-jacket-shell select option:is(:checked,:hover,:focus) { background: #321018; color: #fff; }
+  :root body .blue-jacket-shell select option::checkmark { color: #ff1744; }
+  :root body .blue-jacket-shell select::picker-icon { color: #bbb; }
+}
+
+/* Area boundaries are quiet; red belongs to KPIs, controls and notices. */
+body :is(.panel-card,.panel-surface,.panel-disclosure,.panel-empty-state,.panel-table-wrap,
+.chart-panel,.chart-daily-table,.chart-canvas-wrap,.chart-window-toolbar,
+.stock-line-composition,.stock-line-composition-head,.stock-forecast-card,
+.product-row,.product-row-main,.product-details,.product-assortment,.product-cell,
+.inbound-note-filters,.inbound-note-details,.panel-dropzone,.panel-file-row,
+.panel-section-nav,.panel-quick-metric) {
+  background: #000; background-image: none; border-color: transparent; box-shadow: none;
+}
+body .panel-card { border: 0; }
+body .panel-table thead, body .panel-table tbody tr, body .panel-table tbody tr:nth-child(even),
+body .panel-table tbody tr:hover, body .panel-table td, body .panel-table th { background: #000; }
+body :is(.panel-kpi,.panel-stat,.panel-mini-stat,.stock-metric-card,.sellout-metric-card) {
+  background: #000; background-image: none; border: 1px solid #ff1744; box-shadow: none;
+}
+body :is(.panel-alert,.panel-alert-info,.panel-alert-success,.panel-alert-warning,.panel-alert-error,
+.panel-success,.bj-issue,.bj-attention-trigger,.inbound-note-status,.panel-badge) {
+  background: #000; border: 1px solid #ff1744; color: #e6e6e6; box-shadow: none;
+}
+body :is(.panel-alert,.panel-success) :is(strong,code,span) { color: inherit; }
+body .stock-metric-value { font-size: clamp(1.15rem,1.5vw,1.7rem); white-space: nowrap; overflow-wrap: normal; }
+@media(max-width:700px) {
+  body .stock-metric-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  body .stock-metric-value { font-size: clamp(.85rem,3.5vw,1.3rem); }
+  body .panel-section-action { flex-wrap: wrap; max-width: 100%; }
+}
+:root { --panel-bg-soft: #000; --panel-text-dim: #c9c9c9; --panel-muted: #999; --panel-muted-light: #bcbcbc; }
+body .stock-line-composition[data-hue] .stock-line-composition-head,
+body .product-row[open], body .product-row[open] .product-row-main,
+body .product-details, body .product-assortment, body .panel-surface { background: #000; background-image: none; }
+body .inbound-note-status[class], body .inbound-note-source, body .product-launch-badge,
+body .panel-badge[class] { background: #000; color: #e6e6e6; border: 1px solid #ff1744; }
+body label.panel-button, body label:has(> input[type=file]) {
+  display: inline-block; box-sizing: border-box; min-height: 36px; padding: 8px 16px;
+  border: 1px solid #ff1744; border-radius: 999px; background: #000; color: #d6d6d6;
+  font: 600 .8rem/1.35 Inter, system-ui, sans-serif; cursor: pointer;
+}
+body label:has(> input[type=file]):hover { background: #321018; }
+body label[aria-disabled=true] { opacity: .45; cursor: not-allowed; }
+body .panel-primary-button:hover:not(:disabled) { transform: none; }
+
+
+body .product-row-main { min-height: 0; padding: 15px; border: 0; border-radius: 0; background: #000; font: inherit; }
+body .product-row-main:hover { background: #080808 !important; }
+body .product-chevron { display: inline-grid; place-items: center; width: 26px; height: 26px; border: 1px solid #ff1744; border-radius: 999px; color: #ddd; }
+body .product-assortment-chips>span { background: #000; }
+body .product-launch-badge { color: #e6e6e6 !important; }
