@@ -36,14 +36,14 @@ O redesign não pode alterar silenciosamente:
 - **08/2026 NÃO PODE SER REABERTA OU REESCRITA pelo redesign.**
 - **09/2026 deve permanecer como competência operacional aberta conforme o requisito da baseline.**
 
-Nesta execução, esses dois estados são tratados como guardrails obrigatórios do plano. O estado persistido real não foi reproduzido porque `CompetenceState` e `MonthlyClosingState` residem no armazenamento local da aplicação, não no Git.
+Nesta execução, esses dois estados são tratados como guardrails obrigatórios do plano. A sessão pública mostrou 08/2026 FECHADA e 09/2026 ABERTA, mas o estado persistido correspondente ainda não foi materializado no checkout histórico porque `CompetenceState` e `MonthlyClosingState` residem no armazenamento local da aplicação, não no Git.
 
 ## Evidência e simplificação visual
 
 - Simplificar a interface não autoriza apagar evidência.
 - Warnings não podem ser escondidos somente para deixar a tela mais limpa.
 - Problemas técnicos podem futuramente mudar de lugar na interface, mas sua evidência deve permanecer disponível.
-- A Auditoria Global deve continuar exibindo PASS/BLOCKER/WARNING/INFO e preservar detalhes técnicos necessários à rastreabilidade.
+- As classificações técnicas PASS/BLOCKER/WARNING/INFO e suas evidências devem ser preservadas e continuar acessíveis em Detalhes técnicos/artefatos de auditoria. A interface operacional não é obrigada a expor esses termos como linguagem principal.
 - Dados Canônicos devem continuar preservando identidade de build, hashes, row counts, exportações e histórico de fechamentos.
 
 ## Baseline histórica versus aparência atual
@@ -106,6 +106,10 @@ O commit histórico `a6a05a00738585cab2fdeb4596dfdad1e84d02d1` compilou e foi se
 As fontes recebidas em `C:\setembro` foram usadas somente no navegador local da baseline. A operação aceitou 12 stagings, rejeitou `8013.xls` e `8022.xls` por divergência de aba e não ativou build. As cinco fontes ausentes e as duas rejeitadas continuam bloqueios explícitos; nenhum dado operacional foi promovido para baseline pública.
 
 A branch `redesign/phase0-baseline-inventory` deve conter exclusivamente documentação e evidências em `docs/redesign/phase0/**`.
+
+### Preservação técnica versus linguagem operacional
+
+O requisito de preservar evidência técnica não obriga a interface operacional a usar os rótulos internos como texto principal. A Auditoria, exportações e detalhes técnicos devem manter severidade, código, amostras, origem e ação; as telas operacionais podem apresentar primeiro impacto, contexto e próximo passo em linguagem de negócio.
 
 Resultado esperado antes do PR:
 

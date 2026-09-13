@@ -8,6 +8,8 @@ A baseline histórica e a main aprovada foram verificadas no GitHub e a arquitet
 
 O usuário deixou aberta uma aba pública com um bundle operacional corrente. A leitura confirmou 19/19 fontes, build ativo, módulos M1–M4 válidos, competências 08/2026 fechada e 09/2026 aberta, além de números reais de Sell Out e da Auditoria Global. Essa evidência é registrada em [evidencia-bundle-ativo.md](./evidencia-bundle-ativo.md) como **sessão atual**; a URL pública não prova que o bundle corresponde ao checkout histórico `a6a05a0`.
 
+Na tentativa final, o checkout isolado da baseline `a6a05a0` passou novamente por `npm ci`, `npm run typecheck`, `npm run test:run` (937 aprovados, 0 falhas, 1 ignorado) e `npm run build`. A transferência somente leitura do bundle para esse checkout não se completou porque a aba deixou de responder durante a abertura de Dados Canônicos. O gate de identidade continua **NÃO APROVADO**.
+
 ## Identidade
 
 - Projeto: BLUE JACKET
@@ -52,7 +54,7 @@ O código da baseline não fixa esses estados no repositório: `CompetenciasPage
 
 ## Limitações que impedem CONCLUÍDA
 
-1. Não houve execução interativa da baseline com o armazenamento local original.
+1. Não houve execução interativa da baseline com o bundle operacional aceito pelo próprio sistema.
 2. Não foram produzidas capturas 1440×900 e 1024×768 da baseline.
 3. Não foram reproduzidos os números de Sell Out, Redes, Estoque, Metas e Auditoria.
 4. Não foram obtidos os status reais de cada uma das 19 fontes no estado operacional original.

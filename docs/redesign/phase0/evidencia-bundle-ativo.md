@@ -123,3 +123,16 @@ Na visão de Sell Out, os números observados foram: Sell Out realizado **R$ 623
 Esse conjunto constitui evidência operacional **da sessão atualmente aberta pelo usuário**. A query `v=5cea4a9` da URL pública não identifica, por si só, o checkout Git exato `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`; por isso os valores acima não são promovidos a baseline histórica. Nenhuma fonte foi reenviada, nenhum build foi reprocessado e nenhum estado local foi alterado durante a leitura.
 
 As capturas PNG do manifesto continuam pendentes como artefatos versionados: a aba foi inspecionada por árvore de acessibilidade/DOM e os dados foram registrados acima, mas não foi produzido um arquivo de captura com hash para anexar ao Git.
+
+## 10. GATE DE IDENTIDADE — RESULTADO DA TENTATIVA FINAL
+
+Foi criado um worktree isolado em `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`, sem reset ou alteração da branch documental. Nesse checkout, em 2026-09-13, os gates técnicos passaram:
+
+- `npm ci --cache C:\Users\McdAssistenteCP\AppData\Local\Temp\blue-jacket-npm-cache`: concluído;
+- `npm run typecheck`: concluído;
+- `npm run test:run`: **937 aprovados**, **0 falhas**, **1 ignorado**;
+- `npm run build`: concluído.
+
+Em seguida foi tentada a prioridade prevista no plano: usar a aba pública já aberta e uma exportação canônica somente leitura para transportar o estado ao worktree. A navegação até **Administração → Dados Canônicos** fez a aba deixar de responder ao protocolo do navegador antes que o arquivo exportado pudesse ser obtido. Nenhum clique de processamento, salvamento, sincronização, restauração, reabertura ou alteração de cadastro foi executado nessa tentativa; nenhum arquivo operacional foi copiado para o repositório.
+
+Resultado do gate: **NÃO APROVADO**. O código do worktree é comprovadamente `a6a05a0` e está íntegro, mas o bundle da sessão não foi aceito nesse checkout. Portanto, o plano continua proibindo chamar a sessão pública de “baseline histórica reproduzida”; ela permanece “sessão operacional observada”.

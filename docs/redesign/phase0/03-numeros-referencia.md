@@ -13,6 +13,12 @@ Nenhum valor operacional foi inventado ou recalculado manualmente. Esta execuç�
 - Resultado: 12/19 stagings persistidos; 8013 e 8022 rejeitados por `PARSER_SCHEMA_CHANGED`; cinco fontes contratadas ausentes; nenhum build ativo.
 - Consequência: nenhum KPI, total, competência, fonte, target ou relatório de auditoria foi gerado nesta execução. Não há artefato de números nem SHA-256 para registrar; todos permanecem **NÃO REPRODUZIDO**.
 
+## Sessão operacional observada (não promovida a baseline)
+
+A aba pública aberta pelo usuário foi consultada em modo somente leitura em 2026-09-13. Ela exibiu o build `motor-browser-1789270216060-0636a1cfb8`, Sell Out realizado de `R$ 623.741,95`, faturado de `R$ 532.473,23`, Meta T&C de `R$ 5.500.000,00`, 151 positivados, meta de positivação 883, 136 positivados faturados e último movimento em `06/09/2026`. As linhas exibidas foram Creme Dental `R$ 347.169,00`, Esc + Enx + Fio `R$ 39.083,76`, Sabonetes `R$ 177.985,68`, Hair `R$ 15.291,45` e Limpeza `R$ 44.212,06`.
+
+Esses valores são uma observação real da sessão do usuário, já registrada em [evidencia-bundle-ativo.md](./evidencia-bundle-ativo.md), mas não são números de referência da baseline `a6a05a0`: a exportação do estado não foi materializada no checkout histórico e a URL pública não prova a versão do código. Redes, Estoque e Metas continuam sem números de baseline reproduzidos.
+
 ## Sell Out
 
 | Número exigido | Valor | Estado | Origem/procedimento de reprodução |
@@ -79,10 +85,10 @@ A especificação da Fase 0 exige registrar separadamente:
 
 | Competência requerida | Estado requerido pelo plano | Estado comprovado nesta execução |
 |---|---|---|
-| 08/2026 | FECHADA | **NÃO REPRODUZIDO** |
-| 09/2026 | ABERTA | **NÃO REPRODUZIDO** |
+| 08/2026 | FECHADA | **OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE** |
+| 09/2026 | ABERTA | **OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE** |
 
-Motivo: a baseline lê `CompetenceState` e `MonthlyClosingState` de persistência local. O Git prova a lógica e os estados possíveis, mas não contém o snapshot operacional do navegador utilizado para o fechamento mensal.
+Motivo: a baseline lê `CompetenceState` e `MonthlyClosingState` de persistência local. O Git prova a lógica e os estados possíveis, e a aba pública mostrou os estados reais, mas o snapshot operacional ainda não foi aceito pelo checkout histórico.
 
 ## Fontes
 
@@ -122,10 +128,10 @@ Código de prova: `src/canonical/sourceContract.ts`.
 | Estado operacional da fonte | Valor | Estado |
 |---|---:|---|
 | Quantidade esperada | 19 | COMPROVADO PELO CÓDIGO |
-| Quantidade disponível na sessão histórica | — | NÃO REPRODUZIDO |
-| Fontes efetivamente substituídas | — | NÃO REPRODUZIDO |
-| Status real de cada fonte | — | NÃO REPRODUZIDO |
-| Competência associada às fontes mensais | — | NÃO REPRODUZIDO |
+| Quantidade disponível na sessão do usuário | 19/19 | OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE |
+| Fontes efetivamente substituídas | 2 | OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE |
+| Status real de cada fonte | 19 fontes disponíveis | OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE |
+| Competência associada às fontes mensais | Roteiro Top 09/2026; Bússola 09/2026 | OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE |
 
 Os status reais dependem de `loadSourceStagingSnapshot`, `SourceReplacementState`, Admin Registry e TargetState locais.
 
@@ -133,12 +139,12 @@ Os status reais dependem de `loadSourceStagingSnapshot`, `SourceReplacementState
 
 | Número exigido | Valor | Estado | Origem/procedimento de reprodução |
 |---|---:|---|---|
-| Total de verificações | — | NÃO REPRODUZIDO | Administração → Auditoria; `loadGlobalAuditReport`. |
-| Blockers | — | NÃO REPRODUZIDO | `report.summary.blockers`. |
-| Warnings/atenções | — | NÃO REPRODUZIDO | `report.summary.warnings`. |
-| Informações | — | NÃO REPRODUZIDO | `report.summary.info`. |
-| Verificações aprovadas | — | NÃO REPRODUZIDO | `report.summary.pass`. |
-| Status geral | — | NÃO REPRODUZIDO | HEALTHY / ATTENTION / BLOCKED segundo relatório local. |
+| Total de verificações | 135 findings | OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE | Administração → Auditoria; `loadGlobalAuditReport`. |
+| Blockers | 0 | OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE | `report.summary.blockers`. |
+| Warnings/atenções | 51 | OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE | `report.summary.warnings`. |
+| Informações | 9 | OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE | `report.summary.info`. |
+| Verificações aprovadas | 75 | OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE | `report.summary.pass`. |
+| Status geral | ATTENTION | OBSERVADO NA SESSÃO; NÃO MATERIALIZADO NA BASELINE | HEALTHY / ATTENTION / BLOCKED segundo relatório local. |
 
 Código principal: `src/pages/AuditoriaPage.tsx`, `src/canonical/globalAudit.ts`, `src/canonical/globalAuditInputs.ts`.
 

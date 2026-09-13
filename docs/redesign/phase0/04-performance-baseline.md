@@ -16,6 +16,8 @@ Baseline: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`
 
 O ambiente desta execução permitiu compilar e abrir a baseline, mas não disponibilizou o bundle canônico nem o estado operacional/IndexedDB original. Consequentemente, não existe base confiável para atribuir tempos de abertura, contagem DOM, quantidade visual de linhas, comportamento de scroll ou travamentos. Valores artificiais não foram preenchidos.
 
+Na tentativa final, o checkout isolado passou por typecheck, 937 testes aprovados (1 ignorado) e build. As seis medições continuam **NÃO REPRODUZIDAS** porque o gate de identidade não aceitou o estado operacional; a aba pública deixou de responder durante a tentativa de exportação canônica somente leitura. Medir outra sessão ou outro código produziria uma performance sem vínculo com a baseline exigida.
+
 ## Metodologia exigida para completar a medição
 
 Para cada tela pesada, executar a baseline histórica em navegador identificado e com o conjunto de dados correspondente ao estado congelado. Fazer pelo menos três aberturas completas por tela, registrar as três durações e a mediana. Para DOM usar uma métrica reproduzível como `document.querySelectorAll('*').length`. Registrar também quantidade de linhas/cards/list items relevantes, tamanho real do dataset, observações de scroll, travamentos percebidos e custo de expansão/detalhe.

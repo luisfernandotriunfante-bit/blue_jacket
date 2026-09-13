@@ -18,6 +18,10 @@ Nenhuma captura foi produzida porque a execução não materializou o bundle can
 
 Status de todas as capturas: **NÃO REPRODUZIDO**.
 
+### Tentativa final de materialização
+
+O worktree isolado do SHA `a6a05a00738585cab2fdeb4596dfdad1e84d02d1` passou por `npm ci`, typecheck, `npm run test:run` (937 aprovados, 0 falhas, 1 ignorado) e build. A aba pública com o bundle ativo foi mantida somente em leitura. Ao abrir Administração → Dados Canônicos para iniciar uma exportação canônica, a aba deixou de responder ao protocolo do navegador antes de fornecer um arquivo. O gate de identidade não foi aprovado e nenhuma captura da sessão pública foi promovida a “antes”.
+
 | Arquivo esperado | Área | Aba | Viewport | Competência exibida | Estado | Dados presentes | Observações / limitação |
 |---|---|---|---|---|---|---|---|
 | `sellout-resumo-desktop.png` | Sell Out | Resumo | 1440×900 | NÃO REPRODUZIDO | NÃO REPRODUZIDO | NÃO REPRODUZIDO | Baseline não executada em browser com estado local original |

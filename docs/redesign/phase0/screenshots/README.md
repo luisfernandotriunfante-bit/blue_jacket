@@ -12,7 +12,7 @@ As 42 capturas mínimas esperadas (21 visões × desktop 1440×900 e largura red
 
 ## Motivo
 
-O ambiente disponível nesta execução não fornece um navegador/worktree da baseline com o armazenamento local/IndexedDB original necessário para reproduzir as telas e os dados históricos de forma fiel.
+O worktree da baseline foi criado e passou nos gates técnicos, mas o estado operacional da aba pública não foi aceito nem exportado para esse checkout. A aba deixou de responder durante a tentativa de leitura/exportação canônica; por isso não há navegador com dataset histórico materializado para capturar as telas de forma fiel.
 
 A versão pública atual deriva da main posterior à baseline. Ela não deve ser capturada e gravada aqui como se representasse o estado “antes”.
 
