@@ -16,7 +16,7 @@ origin  https://github.com/luisfernandotriunfante-bit/blue_jacket.git (push)
 ## 2. NOVO ESTADO DO PR
 
 - Link do PR: https://github.com/luisfernandotriunfante-bit/blue_jacket/pull/179
-- Novo número de commits no PR: **2** após o push da correção; a branch partia de um único commit (`d5c0da…`).
+- Novo número de commits no PR: **4** após os registros desta resolução (2 commits documentais de conteúdo e 2 commits de atualização deste relatório); a branch partia de um único commit (`d5c0da…`).
 - Novo SHA do commit (o do push, não o local): `cc8323ac88636e5b5a14f82c39f3bca4d471bc9d`.
 
 ## 3. PROVENIÊNCIA DE CADA ARQUIVO DE EVIDÊNCIA
