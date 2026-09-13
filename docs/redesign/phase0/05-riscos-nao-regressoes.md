@@ -101,6 +101,10 @@ Não alterar silenciosamente:
 
 O commit histórico `a6a05a00738585cab2fdeb4596dfdad1e84d02d1` compilou e foi servido em `http://127.0.0.1:4180/` com `npm run dev -- --host 127.0.0.1 --port 4180`. Em `2026-09-12T23:31:42.5873878-04:00`, a interface informou que não havia bundle canônico ativo. Portanto, não houve promoção de números, estados mensais, fontes ou auditoria de outra sessão. A limitação permanece documentada como **NÃO REPRODUZIDO**.
 
+### Verificação da tentativa de materialização
+
+As fontes recebidas em `C:\setembro` foram usadas somente no navegador local da baseline. A operação aceitou 12 stagings, rejeitou `8013.xls` e `8022.xls` por divergência de aba e não ativou build. As cinco fontes ausentes e as duas rejeitadas continuam bloqueios explícitos; nenhum dado operacional foi promovido para baseline pública.
+
 A branch `redesign/phase0-baseline-inventory` deve conter exclusivamente documentação e evidências em `docs/redesign/phase0/**`.
 
 Resultado esperado antes do PR:

@@ -66,6 +66,7 @@ O código da baseline não fixa esses estados no repositório: `CompetenciasPage
 - [05-riscos-nao-regressoes.md](./05-riscos-nao-regressoes.md)
 - [resolucao-bloqueio.md](./resolucao-bloqueio.md)
 - [geracao-evidencia.md](./geracao-evidencia.md)
+- [evidencia-bundle-ativo.md](./evidencia-bundle-ativo.md)
 - [screenshots/README.md](./screenshots/README.md)
 
 ## Regra de integridade

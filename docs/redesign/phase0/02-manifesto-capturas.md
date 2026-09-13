@@ -2,14 +2,17 @@
 
 Baseline obrigatória: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`
 
-## Execução oficial desta rodada
+## Execução oficial de materialização
 
-- Checkout confirmado antes da execução: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`.
-- Processo exato: `npm run build`; depois `npm run dev -- --host 127.0.0.1 --port 4180`.
-- URL acessada: `http://127.0.0.1:4180/`.
-- Observação realizada em: `2026-09-12T23:31:42.5873878-04:00`.
-- Resultado observável: a interface exibiu **“Sem bundle canônico ativo”** e **“Esta tela usa exclusivamente o bundle canônico ativo. Atualize as bases para materializar a lista.”**
-- O build foi concluído (`vite build`, 115 módulos transformados). A saída ignorada `dist/index.html` teve SHA-256 `54A789A7A373D7DFF48098D2E48738C406A9C94A6388A56888D1551819AC40A4`; esse arquivo é diagnóstico do build e não é evidência visual da baseline.
+- Branch de trabalho confirmada antes da alteração: `2a71487748e467dabee6107c551d400a6acb1489`.
+- Checkout executado para a coleta: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`.
+- Processo exato: `npm ci --cache C:\Users\McdAssistenteCP\AppData\Local\Temp\blue-jacket-npm-cache`; `npm run build`; `npm run dev -- --host 127.0.0.1 --port 4180`.
+- Ação exata: abrir `http://127.0.0.1:4180/?run=baseline#sync`, selecionar a aba **Bases**, escolher os arquivos disponíveis em `C:\setembro` e clicar em **PROCESSAR E ATUALIZAR SISTEMA**.
+- URL acessada: `http://127.0.0.1:4180/?run=baseline#sync`.
+- Resultado do build: sucesso, 115 módulos transformados. A primeira tentativa de `npm ci` falhou com `EPERM` no cache/arquivo nativo; a repetição com cache temporário concluiu com 25 pacotes instalados e 0 vulnerabilidades.
+- Resultado do processamento: **12/19** fontes ficaram em staging; `Estoque / logística 8013` foi rejeitada com `PARSER_SCHEMA_CHANGED: Aba esperada: estoque-8013; recebidas: 8013.` e `Vendas 8022` com `PARSER_SCHEMA_CHANGED: Aba esperada: vendas-8022; recebidas: 8022.`
+- Fontes ausentes exigidas pelo contrato: `Lista_de_Preco (8).xlsx`, `lançamentos.xlsx`, `Sortimento Recomendado - Q3'26.xlsx`, `Nova Base de Premissas - Q3.xlsx` e `NOVOS RCAS.xlsx`.
+- Estado após a operação: **Sem build ativo**; o bundle canônico não foi materializado. A interface não passou a mostrar dados operacionais.
 
 Nenhuma captura foi produzida porque a execução não materializou o bundle canônico nem o estado local/IndexedDB histórico exigido pelas telas. A versão pública atual corresponde à main posterior e **não pode** ser usada como substituta da baseline histórica. Como nenhum PNG foi gerado, não há SHA-256 de captura a registrar.
 
