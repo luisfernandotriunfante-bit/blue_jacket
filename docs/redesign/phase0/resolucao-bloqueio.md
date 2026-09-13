@@ -11,13 +11,13 @@ origin  https://github.com/luisfernandotriunfante-bit/blue_jacket.git (push)
 
 - Commit de partida confirmado (`git log -1`): `d5c0da972cb9958cae40d1502f11d8ef0057dae4`.
 - Branch de partida: `redesign/phase0-baseline-inventory`, rastreando `origin/redesign/phase0-baseline-inventory`.
-- Confirmação de que o push foi feito para `origin redesign/phase0-baseline-inventory`: será registrada após o push deste commit.
+- Confirmação de que o push foi feito para `origin redesign/phase0-baseline-inventory`: **confirmado**. O remoto avançou de `d5c0da972cb9958cae40d1502f11d8ef0057dae4` para `cc8323ac88636e5b5a14f82c39f3bca4d471bc9d`.
 
 ## 2. NOVO ESTADO DO PR
 
 - Link do PR: https://github.com/luisfernandotriunfante-bit/blue_jacket/pull/179
-- Novo número de commits no PR: será confirmado após o push; a branch partia de um único commit (`d5c0da…`).
-- Novo SHA do commit (o do push, não o local): será preenchido com o SHA do primeiro commit publicado desta correção.
+- Novo número de commits no PR: **2** após o push da correção; a branch partia de um único commit (`d5c0da…`).
+- Novo SHA do commit (o do push, não o local): `cc8323ac88636e5b5a14f82c39f3bca4d471bc9d`.
 
 ## 3. PROVENIÊNCIA DE CADA ARQUIVO DE EVIDÊNCIA
 
