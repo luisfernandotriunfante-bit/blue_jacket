@@ -6,6 +6,14 @@ Baseline: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`
 
 Nenhum valor operacional foi inventado ou recalculado manualmente. Esta execução consegue provar estruturas, fórmulas/rotas de origem e contratos pelo código da baseline, mas não possui o armazenamento local original que contém build canônico ativo, CompetenceState, TargetState, staging das fontes, forecasts, histórico de fechamento e outros estados persistidos. Por isso, valores dependentes desse estado estão marcados como **NÃO REPRODUZIDO**.
 
+## Resultado da tentativa no checkout oficial
+
+- Commit executado: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`.
+- Processo: `npm run build` (concluído) e `npm run dev -- --host 127.0.0.1 --port 4180`.
+- URL e leitura: `http://127.0.0.1:4180/`, observada em `2026-09-12T23:31:42.5873878-04:00`.
+- Estado exibido: **“Sem bundle canônico ativo”**; a própria tela informa que é necessário atualizar as bases para materializar a lista.
+- Consequência: nenhum KPI, total, competência, fonte, target ou relatório de auditoria foi gerado nesta execução. Não há artefato de números nem SHA-256 para registrar; todos permanecem **NÃO REPRODUZIDO**.
+
 ## Sell Out
 
 | Número exigido | Valor | Estado | Origem/procedimento de reprodução |

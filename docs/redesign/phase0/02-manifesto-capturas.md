@@ -2,7 +2,16 @@
 
 Baseline obrigatória: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`
 
-Nesta execução, nenhuma captura foi produzida porque o ambiente disponível não executa interativamente a baseline com o estado local/IndexedDB original. A versão pública atual corresponde à main posterior e **não pode** ser usada como substituta da baseline histórica.
+## Execução oficial desta rodada
+
+- Checkout confirmado antes da execução: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`.
+- Processo exato: `npm run build`; depois `npm run dev -- --host 127.0.0.1 --port 4180`.
+- URL acessada: `http://127.0.0.1:4180/`.
+- Observação realizada em: `2026-09-12T23:31:42.5873878-04:00`.
+- Resultado observável: a interface exibiu **“Sem bundle canônico ativo”** e **“Esta tela usa exclusivamente o bundle canônico ativo. Atualize as bases para materializar a lista.”**
+- O build foi concluído (`vite build`, 115 módulos transformados). A saída ignorada `dist/index.html` teve SHA-256 `54A789A7A373D7DFF48098D2E48738C406A9C94A6388A56888D1551819AC40A4`; esse arquivo é diagnóstico do build e não é evidência visual da baseline.
+
+Nenhuma captura foi produzida porque a execução não materializou o bundle canônico nem o estado local/IndexedDB histórico exigido pelas telas. A versão pública atual corresponde à main posterior e **não pode** ser usada como substituta da baseline histórica. Como nenhum PNG foi gerado, não há SHA-256 de captura a registrar.
 
 Status de todas as capturas: **NÃO REPRODUZIDO**.
 

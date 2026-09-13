@@ -6,7 +6,15 @@ Baseline: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`
 
 **NÃO REPRODUZIDO EM RUNTIME**.
 
-O ambiente desta execução permite inspeção do repositório e evidência histórica de CI, mas não disponibiliza um navegador executando a baseline com o estado operacional/IndexedDB original. Consequentemente, não existe base confiável para atribuir tempos de abertura, contagem DOM, quantidade visual de linhas, comportamento de scroll ou travamentos. Valores artificiais não foram preenchidos.
+## Tentativa registrada no checkout oficial
+
+- Commit: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`.
+- Processo exato: `npm run build` (sucesso) e `npm run dev -- --host 127.0.0.1 --port 4180`.
+- URL: `http://127.0.0.1:4180/`.
+- Estado observado em `2026-09-12T23:31:42.5873878-04:00`: **“Sem bundle canônico ativo”**.
+- Não foram realizadas as três aberturas por tela nem gerados arquivos de medição. Sem dataset materializado não há tempos, mediana, DOM ou hash de artefato de performance a registrar.
+
+O ambiente desta execução permitiu compilar e abrir a baseline, mas não disponibilizou o bundle canônico nem o estado operacional/IndexedDB original. Consequentemente, não existe base confiável para atribuir tempos de abertura, contagem DOM, quantidade visual de linhas, comportamento de scroll ou travamentos. Valores artificiais não foram preenchidos.
 
 ## Metodologia exigida para completar a medição
 

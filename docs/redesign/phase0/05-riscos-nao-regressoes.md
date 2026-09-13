@@ -97,6 +97,10 @@ Não alterar silenciosamente:
 
 ## Integridade desta branch
 
+### Verificação da tentativa de reprodução
+
+O commit histórico `a6a05a00738585cab2fdeb4596dfdad1e84d02d1` compilou e foi servido em `http://127.0.0.1:4180/` com `npm run dev -- --host 127.0.0.1 --port 4180`. Em `2026-09-12T23:31:42.5873878-04:00`, a interface informou que não havia bundle canônico ativo. Portanto, não houve promoção de números, estados mensais, fontes ou auditoria de outra sessão. A limitação permanece documentada como **NÃO REPRODUZIDO**.
+
 A branch `redesign/phase0-baseline-inventory` deve conter exclusivamente documentação e evidências em `docs/redesign/phase0/**`.
 
 Resultado esperado antes do PR:
