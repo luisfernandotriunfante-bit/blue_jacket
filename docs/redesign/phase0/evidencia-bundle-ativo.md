@@ -74,11 +74,13 @@ As três aberturas por tela pesada, medianas, DOM, linhas/cards e observações 
 ## 7. NOVO ESTADO DO PR
 
 - Commit de partida confirmado antes da coleta: `2a71487748e467dabee6107c551d400a6acb1489`.
-- O número de commits e o SHA do commit de geração serão registrados depois do push, no fechamento deste relatório.
+- Novo número de commits, verificado após o push do commit de geração: **7** em relação à `origin/main`.
+- Novo SHA de tip do commit de geração, confirmado após o push: `4449b8f06671988d242f68c01bf140c822da275c`.
+- O registro final desta seção é feito em um commit documental posterior; ele não altera as evidências nem os dados coletados.
 
 ## 8. CONFIRMAÇÃO DE INTEGRIDADE
 
 - Nenhum arquivo versionado fora de `docs/redesign/phase0/**` será incluído no commit.
 - Nenhum arquivo de dados original/backup será commitado no Git; os arquivos permanecem em `C:\setembro`.
 - Nenhum merge foi feito.
-- A branch oficial será restaurada ao tip `2a71487748e467dabee6107c551d400a6acb1489` antes do commit documental.
+- A branch oficial foi restaurada ao tip publicado antes do commit documental.
