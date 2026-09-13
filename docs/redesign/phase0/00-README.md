@@ -64,6 +64,7 @@ O código da baseline não fixa esses estados no repositório: `CompetenciasPage
 - [03-numeros-referencia.md](./03-numeros-referencia.md)
 - [04-performance-baseline.md](./04-performance-baseline.md)
 - [05-riscos-nao-regressoes.md](./05-riscos-nao-regressoes.md)
+- [resolucao-bloqueio.md](./resolucao-bloqueio.md)
 - [screenshots/README.md](./screenshots/README.md)
 
 ## Regra de integridade
