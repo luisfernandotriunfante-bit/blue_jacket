@@ -27,12 +27,12 @@ As três aberturas por tela pesada e as medianas permanecem **NÃO REPRODUZIDAS*
 
 ## 6. NOVO ESTADO DO PR
 
-- Novo número de commits: será atualizado após o push desta geração.
-- Novo SHA de tip: será atualizado após o push desta geração.
+- Novo número de commits: **5** em relação à `origin/main`, confirmado após o push.
+- Novo SHA de tip: `6dec2c5f0d049194868d404a5bcf2a204c242696`.
 
 ## 7. CONFIRMAÇÃO DE INTEGRIDADE
 
 - Nenhum arquivo versionado fora de `docs/redesign/phase0/**` foi alterado ou incluído no commit.
 - Nenhum dado de pasta local antiga foi incorporado.
 - Nenhum merge foi feito.
-- A branch oficial será restaurada ao tip publicado antes do commit desta documentação.
+- A branch oficial foi restaurada ao tip publicado após o commit desta documentação.
