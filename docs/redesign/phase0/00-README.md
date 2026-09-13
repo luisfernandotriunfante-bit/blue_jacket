@@ -2,9 +2,11 @@
 
 ## Estado desta execução
 
-**PARCIAL**
+**PARCIAL — evidência operacional adicional disponível**
 
 A baseline histórica e a main aprovada foram verificadas no GitHub e a arquitetura principal foi inventariada diretamente no código da baseline. Há também evidência histórica de CI concluído com sucesso no SHA da baseline. Entretanto, este ambiente não dispõe de execução interativa da baseline com o armazenamento local/IndexedDB original do usuário, portanto não foi possível produzir capturas visuais da baseline, reproduzir os números operacionais locais, confirmar materialmente os estados 08/2026 FECHADA e 09/2026 ABERTA, nem medir DOM/tempos de abertura. Esses pontos permanecem marcados como **NÃO REPRODUZIDO** e impedem declarar a Fase 0 CONCLUÍDA.
+
+O usuário deixou aberta uma aba pública com um bundle operacional corrente. A leitura confirmou 19/19 fontes, build ativo, módulos M1–M4 válidos, competências 08/2026 fechada e 09/2026 aberta, além de números reais de Sell Out e da Auditoria Global. Essa evidência é registrada em [evidencia-bundle-ativo.md](./evidencia-bundle-ativo.md) como **sessão atual**; a URL pública não prova que o bundle corresponde ao checkout histórico `a6a05a0`.
 
 ## Identidade
 

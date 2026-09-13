@@ -84,3 +84,42 @@ As três aberturas por tela pesada, medianas, DOM, linhas/cards e observações 
 - Nenhum arquivo de dados original/backup será commitado no Git; os arquivos permanecem em `C:\setembro`.
 - Nenhum merge foi feito.
 - A branch oficial foi restaurada ao tip publicado antes do commit documental.
+
+## 9. BUNDLE ATIVO OBSERVADO NA ABA DO USUÁRIO
+
+Em 2026-09-13, a aba pública que o usuário deixou aberta foi lida em modo somente leitura:
+
+- URL: `https://luisfernandotriunfante-bit.github.io/blue_jacket/?v=5cea4a9`.
+- Fontes físicas disponíveis: **19/19**.
+- Build ativo: `motor-browser-1789270216060-0636a1cfb8`.
+- Geração do build: `2026-09-13T03:30:16.061Z`.
+- `stagingManifestHash`: `e69c5eeb3a5f2bfef5dff72395d8c437d43faa069bb80f0c0872dc04369e9e7b`.
+- `adminRegistryHash`: `a6596224e973431f731135da543270e0a198f28fd1e1098ea98ff847175372ff`.
+- `rcaTargetRegistryHash`: `713768f966903e4751334f45e8d4143409c2938d0fc6f042329bfabea7d80c96`.
+- `sourceContractVersion`: `v2`.
+- `sourceReplacementProofHash`: `cf03b7de122d9f86abb603e490d089d221b2da9157e4b7c18e581f87c5ddfe14`.
+- `canonicalInputHash`: `0636a1cfb8b4f8b484ba6b9d3d4710313c4af1f5251bbdcfaa5ddbafc125dce6`.
+- Substituições certificadas em uso: **2** — `Roteiro Top` no escopo `2026-09` e `Novos RCAs` no escopo `GLOBAL`.
+
+O bundle ativo exibiu os seguintes módulos canônicos:
+
+| Módulo | Registros | Status | Warnings | Observação |
+|---|---:|---|---:|---|
+| M1 — Item / Estoque | 742 | VALID | 0 | — |
+| M2 — Cliente / RCA | 8.749 | VALID | 0 | — |
+| M3 — Movimentação / Vendas | 3.371 | VALID | 1 | SALE 2.291 · INBOUND_ORDER 658 · RECEIPT 394 · TARGET 28 |
+| M4 — Histórico / Transição | 316.310 | VALID | 31 | — |
+
+O estado administrativo lido na mesma aba foi:
+
+- competência corrente `09/2026`, **ABERTA**;
+- competência `08/2026`, **FECHADA**, revisão `r1`, fechamento em `2026-09-08T20:18:47.599Z`;
+- evidências de Sell Out/M3 e Roteiro Top para `09/2026`: **COMPATÍVEL**;
+- metas cadastradas para `08/2026`: **REFERÊNCIA**;
+- auditoria: **0 blockers**, **51 warnings**, **9 informações**, **75 verificações aprovadas** e **135 findings**.
+
+Na visão de Sell Out, os números observados foram: Sell Out realizado **R$ 623.741,95**, Meta T&C **R$ 5.500.000,00**, Faturado **R$ 532.473,23**, 151 clientes positivados, meta de positivação 883, positivação faturada 136 e último movimento em `06/09/2026`. As cinco linhas totalizaram: Creme Dental `R$ 347.169,00`; Esc + Enx + Fio `R$ 39.083,76`; Sabonetes `R$ 177.985,68`; Hair `R$ 15.291,45`; Limpeza `R$ 44.212,06`.
+
+Esse conjunto constitui evidência operacional **da sessão atualmente aberta pelo usuário**. A query `v=5cea4a9` da URL pública não identifica, por si só, o checkout Git exato `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`; por isso os valores acima não são promovidos a baseline histórica. Nenhuma fonte foi reenviada, nenhum build foi reprocessado e nenhum estado local foi alterado durante a leitura.
+
+As capturas PNG do manifesto continuam pendentes como artefatos versionados: a aba foi inspecionada por árvore de acessibilidade/DOM e os dados foram registrados acima, mas não foi produzido um arquivo de captura com hash para anexar ao Git.
