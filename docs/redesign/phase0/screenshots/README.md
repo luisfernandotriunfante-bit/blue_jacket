@@ -1,29 +1,7 @@
-# Screenshots — Fase 0
+# Capturas públicas sanitizadas — Fase 0
 
-Diretório reservado às capturas históricas da baseline:
+Este diretório é reservado às 42 cópias públicas sanitizadas da baseline `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`.
 
-`a6a05a00738585cab2fdeb4596dfdad1e84d02d1`
+Capturas presentes: **0**.
 
-## Estado desta execução
-
-Capturas produzidas: **0**.
-
-As 42 capturas mínimas esperadas (21 visões × desktop 1440×900 e largura reduzida 1024×768) estão enumeradas em `../02-manifesto-capturas.md` e marcadas como **NÃO REPRODUZIDO**.
-
-## Motivo
-
-O worktree da baseline foi criado e passou nos gates técnicos, mas o estado operacional da aba pública não foi aceito nem exportado para esse checkout. A aba deixou de responder durante a tentativa de leitura/exportação canônica; por isso não há navegador com dataset histórico materializado para capturar as telas de forma fiel.
-
-A versão pública atual deriva da main posterior à baseline. Ela não deve ser capturada e gravada aqui como se representasse o estado “antes”.
-
-## Regra de preenchimento
-
-Ao completar esta evidência posteriormente:
-
-1. executar exatamente o SHA `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`;
-2. restaurar somente o estado operacional historicamente correspondente, quando disponível;
-3. capturar 1440×900 e 1024×768;
-4. usar os nomes definidos em `02-manifesto-capturas.md`;
-5. registrar viewport real, competência, estado, dados presentes e limitações;
-6. não editar visualmente a aplicação para “melhorar” a captura;
-7. não substituir a baseline pela main atual.
+A baseline foi restaurada e inspecionada, mas a sessão de automação não forneceu arquivos PNG verificáveis para persistência. As versões públicas somente poderão ser criadas a partir das capturas brutas privadas correspondentes. A matriz, a regra de correspondência e a limitação estão em `../02-manifesto-capturas.md`.

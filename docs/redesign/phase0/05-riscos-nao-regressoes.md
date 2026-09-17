@@ -103,7 +103,7 @@ O commit histórico `a6a05a00738585cab2fdeb4596dfdad1e84d02d1` compilou e foi se
 
 ### Verificação da tentativa de materialização
 
-As fontes recebidas em `C:\setembro` foram usadas somente no navegador local da baseline. A operação aceitou 12 stagings, rejeitou `8013.xls` e `8022.xls` por divergência de aba e não ativou build. As cinco fontes ausentes e as duas rejeitadas continuam bloqueios explícitos; nenhum dado operacional foi promovido para baseline pública.
+Uma tentativa inicial com um conjunto incompleto de fontes foi usada somente no navegador local da baseline e não ativou build. Esse bloqueio foi posteriormente resolvido pela restauração oficial do snapshot sincronizado; nenhum arquivo-fonte operacional foi publicado.
 
 A branch `redesign/phase0-baseline-inventory` deve conter exclusivamente documentação e evidências em `docs/redesign/phase0/**`.
 

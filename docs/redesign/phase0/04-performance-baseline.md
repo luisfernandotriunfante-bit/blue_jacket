@@ -1,54 +1,24 @@
-# 04 — Performance baseline
+# 04 — Performance da baseline
 
 Baseline: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`
 
-## Estado
+Estado: **PARCIALMENTE REPRODUZIDO EM RUNTIME** no build histórico restaurado pelo fluxo oficial de sincronização.
 
-**NÃO REPRODUZIDO EM RUNTIME**.
+Os tempos foram medidos do clique na aba até o conteúdo de referência ficar visível. A contagem DOM usa `document.querySelectorAll('*').length`. O pacote privado `performance-completa-privada.md`, protegido pelo manifesto SHA-256 registrado em `00-README.md`, preserva o relatório completo.
 
-## Tentativa registrada com as fontes recebidas
+| Tela | Execução 1 | Execução 2 | Execução 3 | Mediana | DOM | Volume técnico | Scroll | Travamento | Estado |
+|---|---:|---:|---:|---:|---:|---:|---|---|---|
+| Estoque → Produtos | 3.198 ms | 4.686 ms | 4.769 ms | 4.686 ms | 23.281 | 748 itens | sim | não | REPRODUZIDO |
+| Estoque → Entradas e Saídas | 1.890 ms | 4.001 ms | 4.588 ms | 4.001 ms | 4.496 | 441 linhas | sim | não | REPRODUZIDO |
+| Sell Out → Gerencial | 287 ms | 283 ms | 282 ms | 283 ms | 540 | 28 linhas | sim | não | REPRODUZIDO |
+| Clientes e Sortimento → Visão Geral | 1.415 ms | 1.302 ms | 1.555 ms | 1.415 ms | 61.342 | 8.749 linhas | sim | não | REPRODUZIDO |
+| Administração → Bases | — | — | — | — | — | 19 fontes | sim | sim, na repetição | PENDENTE |
+| Administração → Auditoria | — | — | — | — | — | conjunto completo de findings | sim | sim, durante a carga | PENDENTE |
 
-- Commit: `a6a05a00738585cab2fdeb4596dfdad1e84d02d1`.
-- Processo exato: `npm ci --cache C:\Users\McdAssistenteCP\AppData\Local\Temp\blue-jacket-npm-cache`; `npm run build`; `npm run dev -- --host 127.0.0.1 --port 4180`; seleção em Administração → Bases; clique em **PROCESSAR E ATUALIZAR SISTEMA**.
-- URL: `http://127.0.0.1:4180/?run=baseline#sync`.
-- Resultado: 12/19 stagings salvos, sem bundle ativo após rejeição de 8013/8022 e ausência de cinco fontes.
-- Não foram realizadas as três aberturas por tela nem gerados arquivos de medição. Sem dataset materializado não há tempos, mediana, DOM ou hash de artefato de performance a registrar.
+## Tentativas administrativas
 
-O ambiente desta execução permitiu compilar e abrir a baseline, mas não disponibilizou o bundle canônico nem o estado operacional/IndexedDB original. Consequentemente, não existe base confiável para atribuir tempos de abertura, contagem DOM, quantidade visual de linhas, comportamento de scroll ou travamentos. Valores artificiais não foram preenchidos.
+Bases e Auditoria foram tentadas novamente em sessão limpa da baseline. Bases abriu e exibiu o inventário completo, mas a alternância repetida deixou de responder. Auditoria permaneceu em `Carregando os inputs atuais sem reprocessar M1–M4…` e não atingiu o conteúdo de referência dentro do limite operacional. Nenhum tempo foi estimado.
 
-Na tentativa final, o checkout isolado passou por typecheck, 937 testes aprovados (1 ignorado) e build. As seis medições continuam **NÃO REPRODUZIDAS** porque o gate de identidade não aceitou o estado operacional; a aba pública deixou de responder durante a tentativa de exportação canônica somente leitura. Medir outra sessão ou outro código produziria uma performance sem vínculo com a baseline exigida.
+## Cobertura
 
-## Metodologia exigida para completar a medição
-
-Para cada tela pesada, executar a baseline histórica em navegador identificado e com o conjunto de dados correspondente ao estado congelado. Fazer pelo menos três aberturas completas por tela, registrar as três durações e a mediana. Para DOM usar uma métrica reproduzível como `document.querySelectorAll('*').length`. Registrar também quantidade de linhas/cards/list items relevantes, tamanho real do dataset, observações de scroll, travamentos percebidos e custo de expansão/detalhe.
-
-## Matriz de performance
-
-| Tela | Execução 1 | Execução 2 | Execução 3 | Mediana | Elementos DOM | Linhas/cards principais | Tamanho da lista de dados | Rolagem | Travamentos percebidos | Expansão/detalhe | Estado |
-|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|
-| Estoque → Produtos | — | — | — | — | — | — | — | — | — | — | NÃO REPRODUZIDO |
-| Estoque → Entradas e Saídas | — | — | — | — | — | — | — | — | — | — | NÃO REPRODUZIDO |
-| Sell Out → Gerencial | — | — | — | — | — | — | — | — | — | — | NÃO REPRODUZIDO |
-| Clientes e Sortimento → tela com maior lista | — | — | — | — | — | — | — | — | — | — | NÃO REPRODUZIDO |
-| Administração → Bases | — | — | — | — | — | — | — | — | — | — | NÃO REPRODUZIDO |
-| Administração → Auditoria | — | — | — | — | — | — | — | — | — | — | NÃO REPRODUZIDO |
-
-## Evidência estrutural relevante
-
-Mesmo sem medição, o código permite identificar por que essas telas merecem ser medidas:
-
-- **Estoque → Produtos:** catálogo derivado das listas canônicas e potencialmente com muitos SKUs.
-- **Entradas e Saídas:** múltiplas coleções, filtros, notas expansíveis e documentos de venda.
-- **Sell Out → Gerencial:** agrupamento por supervisor, tabelas de vendedores e conciliação RCA.
-- **Clientes e Sortimento:** tabelas de clientes/produtos materializadas de M1/M2/M3.
-- **Administração → Bases:** inventário das 19 fontes, diagnósticos, readiness e estados de substituição.
-- **Administração → Auditoria:** renderização de todos os findings, filtros e detalhes expansíveis.
-
-## Ambiente
-
-- Inspeção desta Fase 0: GitHub conectado, sem browser/worktree interativo da baseline.
-- Navegador da medição: **NÃO DISPONÍVEL**.
-- Viewport da medição: **NÃO DISPONÍVEL**.
-- Dataset operacional congelado: **NÃO DISPONÍVEL**.
-
-Não apresentar precisão falsa até que essas condições estejam disponíveis.
+Quatro das seis telas têm três execuções válidas. As duas telas administrativas exigem nova sessão estável para completar três execuções, mediana, DOM e teste de expansão. Essa pendência mantém o requisito de performance da Fase 0 parcialmente atendido.

@@ -1,5 +1,7 @@
 # GERAÇÃO DE EVIDÊNCIA — FASE 0
 
+> Registro histórico da tentativa anterior à restauração oficial. O estado corrente e sanitizado está consolidado em `00-README.md`, `03-numeros-referencia.md` e `04-performance-baseline.md`.
+
 ## 1. AMBIENTE
 
 - Commit de partida confirmado: `8f76cf8ac2e619a4e839e3dc7c069e3c8a570259` na branch `redesign/phase0-baseline-inventory`.

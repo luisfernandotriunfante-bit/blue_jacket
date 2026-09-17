@@ -1,5 +1,7 @@
 # RESOLUÇÃO DE BLOQUEIO — FASE 0
 
+> Registro histórico das tentativas anteriores. O bloqueio de materialização foi posteriormente resolvido pelo restore oficial descrito em `00-README.md`; as pendências atuais são capturas e duas medições administrativas.
+
 ## 1. CONFIRMAÇÃO DE AMBIENTE
 
 - Saída de `git remote -v`:
