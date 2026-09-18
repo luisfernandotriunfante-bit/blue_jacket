@@ -53,3 +53,25 @@ Os arquivos oficiais de inventário, manifesto, números, desempenho e riscos qu
 - Nenhum merge foi feito.
 - Nenhuma branch nova de trabalho foi criada; foi usada a branch oficial já existente `redesign/phase0-baseline-inventory`.
 - Nenhum número, fórmula, competência, fonte ou valor homologado foi promovido de uma coleta não verificável para evidência pública.
+
+## 7. HISTÓRICO — RESOLVIDO: BLQ-01 (git.exe inacessível)
+
+Sessão anterior declarou o bloqueio BLQ-01: `git.exe inacessível no shell Antigravity`. Esse bloqueio está **SUPERADO**.
+
+Em 2026-09-17, o binary git foi localizado e validado em:
+
+```
+C:\Users\McdAssistenteCP\AppData\Local\github-copilot-git-2.53.0-3\cmd
+git version 2.53.0.windows.3
+```
+
+- `git status`: funcionando;
+- `git push --dry-run`: funcionando;
+- `gh auth status`: autenticado como `luisfernandotriunfante-bit`;
+- Branch local sincronizada com `origin/redesign/phase0-baseline-inventory`.
+
+O bloqueio BLQ-01 não deve ser referenciado como impedimento atual. Para sessões futuras: se o processo não enxergar git, adicionar ao PATH da sessão:
+
+```powershell
+$env:Path += ";C:\Users\McdAssistenteCP\AppData\Local\github-copilot-git-2.53.0-3\cmd"
+```

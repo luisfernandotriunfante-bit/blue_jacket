@@ -38,10 +38,11 @@ Os documentos públicos registram somente nomes de artefatos, hashes e procedime
 - 12 visões observadas diretamente na baseline restaurada;
 - 9 visões comprovadas por código, com inspeção visual individual ainda pendente;
 - números de referência reproduzidos;
-- 4 de 6 telas de performance concluídas;
-- 0 de 42 capturas brutas privadas;
-- 0 de 42 cópias públicas sanitizadas;
+- 4 de 6 telas de performance concluídas com bundle ativo;
+- 42 de 42 capturas brutas privadas (geradas em 2026-09-17; bundle inativo nesta sessão — estados vazios e de loading);
+- 42 de 42 cópias públicas sanitizadas (versionadas neste commit);
 - nenhuma alteração funcional nesta branch.
+
 
 ## Arquivos
 
