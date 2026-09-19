@@ -16,4 +16,4 @@ O snapshot oficial foi restaurado pelo Sync/Backup v2 na baseline histórica. Os
 
 Contagens técnicas não comerciais: M1 742, M2 8.749, M3 3.371 e M4 316.310, todos VALID; contrato 19 fontes, todas disponíveis; 08/2026 FECHADA e 09/2026 ABERTA.
 
-Pacote privado criado em 2026-09-17 e mantido fora do repositório. Hash SHA-256 de `MANIFEST.sha256`: `626d8ee5f4640a497e3c62f825778a86549840684a334498be60b6589657045c`.
+Pacote privado criado em 2026-09-17 e mantido fora do repositório. Hash SHA-256 de `MANIFEST.sha256`: `47a1712b8450f9a8d2f4d076c504a44c78b9b253b6695a688d9700cdce1554b5`.

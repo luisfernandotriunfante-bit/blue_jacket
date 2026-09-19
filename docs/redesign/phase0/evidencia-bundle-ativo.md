@@ -17,7 +17,7 @@
 - 09/2026: ABERTA.
 - Auditoria: sem blockers e com as validações de identidade, fontes, cadastros, metas, input canônico e proof aprovadas.
 
-As contagens técnicas e os hashes de identidade estão preservados em `identidade-baseline.md`, integrante do pacote privado. SHA-256 do artefato: `15da58d41b616fd31bfd3e4a51ebfc5161c05fe5fe17308964598ba6f466f4cf`. SHA-256 de `MANIFEST.sha256`: `626d8ee5f4640a497e3c62f825778a86549840684a334498be60b6589657045c`.
+As contagens técnicas e os hashes de identidade estão preservados em `identidade-baseline.md`, integrante do pacote privado. SHA-256 do artefato: `15da58d41b616fd31bfd3e4a51ebfc5161c05fe5fe17308964598ba6f466f4cf`. SHA-256 de `MANIFEST.sha256`: `47a1712b8450f9a8d2f4d076c504a44c78b9b253b6695a688d9700cdce1554b5`.
 
 ## Privacidade
 
@@ -25,7 +25,7 @@ Valores comerciais, clientes, identificadores fiscais, responsáveis individuali
 
 ## Pendências
 
-- 42 capturas brutas privadas e 42 versões públicas sanitizadas.
+- 42 capturas dos estados normais com bundle ativo, cada uma com bruto privado e versão pública sanitizada.
 - Três medições reproduzíveis de Administração → Bases.
 - Três medições reproduzíveis de Administração → Auditoria.
 - Reconciliação final das 21 visões no inventário.

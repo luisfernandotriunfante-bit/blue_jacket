@@ -13,17 +13,19 @@ Cada uma das 21 visões do inventário exige duas capturas correspondentes:
 - desktop: 1440×900;
 - reduzida: 1024×768.
 
-Total esperado: 42 capturas brutas privadas e 42 cópias públicas sanitizadas. Total produzido: **42 de 42**.
+Total esperado para cada estado documentado: 42 capturas brutas privadas e 42 cópias públicas sanitizadas. Total produzido sem bundle ativo: **42 de 42**. Total produzido com bundle ativo: **0 de 42**.
 
 ## Proveniência
 
 - Baseline: `git worktree add --detach C:\bj-baseline-wt a6a05a0`
 - Servidor: `npm run dev -- --host 127.0.0.1 --port 4180`
 - Automação: Puppeteer 25.11.0, headless
-- Capturas brutas privadas: `C:\bj-phase0-private-evidence\screenshots\raw\` (fora do Git)
+- Capturas brutas privadas: pacote `phase0-private-evidence/screenshots/raw/` fora do Git
 - Cópias públicas sanitizadas: `docs/redesign/phase0/screenshots/` (versionadas)
-- SHA-256 das públicas: listados em `screenshots/README.md`
-- Sanitização CSS: aplicada; sem efeito visual pois não havia dados sensíveis com bundle inativo
+- SHA-256 dos brutos: `MANIFEST.sha256` no pacote privado; SHA-256 das públicas: `screenshots/README.md`
+- Sanitização CSS: aplicada; sem efeito visual relevante pois não havia dados sensíveis com bundle inativo
+
+As 42 cópias públicas têm nome e viewport correspondentes aos brutos privados. Em 33 pares os bytes também são idênticos; nove pares diferem e exigem inspeção visual, sem alegação de identidade binária.
 
 ## Regra de conclusão
 
