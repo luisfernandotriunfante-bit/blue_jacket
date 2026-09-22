@@ -360,3 +360,16 @@ export async function upsertManualTopRetail(repository: AdminRegistryRepository,
 export async function setRegistryRecordActive(repository: AdminRegistryRepository, kind: AdminRegistryKind, id: string, active: boolean, at = nowIso()) {
   return repository.mutate(state => { const records = recordsOf(state, kind); const index = records.findIndex(r => r.id === id); if (index < 0) throw new Error('ADMIN_REGISTRY_RECORD_NOT_FOUND'); records[index] = { ...records[index], active, origin: 'MANUAL', updatedAt: at } as AdminRegistryRecord; if (kind === 'rcas') state.rcas = records as RcaRegistryRecord[]; else if (kind === 'launches') state.launches = records as LaunchRegistryRecord[]; else state.topRetailers = records as TopRetailRegistryRecord[]; }, at);
 }
+
+export async function deleteRegistryRecords(repository: AdminRegistryRepository, kind: AdminRegistryKind, ids: string[], at = nowIso()) {
+  const idSet = new Set(ids);
+  if (idSet.size === 0) throw new Error('ADMIN_REGISTRY_DELETE_IDS_REQUIRED');
+  return repository.mutate(state => {
+    const records = recordsOf(state, kind);
+    const remaining = records.filter(r => !idSet.has(r.id));
+    if (remaining.length === records.length) throw new Error('ADMIN_REGISTRY_RECORD_NOT_FOUND');
+    if (kind === 'rcas') state.rcas = remaining as RcaRegistryRecord[];
+    else if (kind === 'launches') state.launches = remaining as LaunchRegistryRecord[];
+    else state.topRetailers = remaining as TopRetailRegistryRecord[];
+  }, at);
+}
