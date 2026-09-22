@@ -1,5 +1,6 @@
 import {
   applyRegistrySeed,
+  deleteRegistryRecords,
   setRegistryRecordActive,
   upsertManualLaunch,
   upsertManualRca,
@@ -112,5 +113,6 @@ export function canonicalRegistryActions(runtime: RegistryUpdateRuntime) {
     upsertTopRetail: (input: TopManualInput, id?: string) => runCanonicalRegistryMutation(() => upsertManualTopRetail(adminRegistryRepository, input, id), runtime),
     setActive: (kind: AdminRegistryKind, id: string, active: boolean) => runCanonicalRegistryMutation(() => setRegistryRecordActive(adminRegistryRepository, kind, id, active), runtime),
     applySeed: (kind: AdminRegistryKind) => runCanonicalRegistryMutation(async () => applyRegistrySeed(adminRegistryRepository, kind, await loadAdminRegistrySeedParsedSource(kind)), runtime),
+    deleteRecords: (kind: AdminRegistryKind, ids: string[]) => runCanonicalRegistryMutation(() => deleteRegistryRecords(adminRegistryRepository, kind, ids), runtime),
   };
 }
