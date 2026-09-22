@@ -26,6 +26,7 @@ export function RcasRegistryPanel() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [mutationError, setMutationError] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -78,6 +79,23 @@ export function RcasRegistryPanel() {
     catch (reason) { setMutationError(String(reason)); }
   };
 
+  const toggleSelected = (id: string) => {
+    setSelectedIds(current => current.includes(id) ? current.filter(value => value !== id) : [...current, id]);
+  };
+
+  const deleteRecords = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const confirmed = window.confirm(ids.length === 1
+      ? 'Excluir definitivamente este RCA? Esta ação não pode ser desfeita.'
+      : `Excluir definitivamente ${ids.length} RCAs selecionados? Esta ação não pode ser desfeita.`);
+    if (!confirmed) return;
+    setMutationError('');
+    try {
+      const ok = await panel.execute(() => panel.actions.deleteRecords('rcas', ids));
+      if (ok) setSelectedIds(current => current.filter(id => !ids.includes(id)));
+    } catch (reason) { setMutationError(String(reason)); }
+  };
+
   return <>
     <RegistryStatus kind="rcas" records={records} lastSeed={panel.lastSeed} conflicts={panel.diagnostics.length} />
     <RegistryMessages notice={panel.notice} error={panel.error || mutationError} />
@@ -108,8 +126,9 @@ export function RcasRegistryPanel() {
         <select className="panel-input" value={roleFilter} onChange={event => setRoleFilter(event.target.value as typeof roleFilter)}><option value="ALL">Principal + Auxiliar</option><option value="PRINCIPAL">Principal</option><option value="AUXILIAR">Auxiliar</option></select>
       </div>
       {panel.diagnostics.length ? <PanelAlert tone="warning">{panel.diagnostics.map(item => item.message).join(' • ')}</PanelAlert> : null}
-      <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th>Atual</th><th>Legado</th><th>Nome</th><th>Coord.</th><th>Papel</th><th>Origem</th><th>Status</th><th>Ações</th></tr></thead><tbody>
-        {filtered.map(record => <tr key={record.id}><td>{record.currentCode}</td><td>{record.legacyCode ?? '—'}</td><td>{record.name ?? '—'}</td><td>{record.coordinatorCode ?? '—'} {record.coordinatorName ?? ''}</td><td>{record.role}</td><td>{record.origin}</td><td>{record.active ? 'ATIVO' : 'INATIVO'}</td><td><button className="panel-button" disabled={panel.mutationBusy} onClick={() => edit(record)}>Editar</button>{' '}<button className="panel-button" disabled={panel.mutationBusy} onClick={() => void toggleActive(record)}>{record.active ? 'Inativar' : 'Reativar'}</button></td></tr>)}
+      {selectedIds.length ? <div className="panel-form-grid"><button className="panel-button" disabled={panel.mutationBusy} onClick={() => void deleteRecords(selectedIds)}>{`Excluir definitivamente (${selectedIds.length})`}</button></div> : null}
+      <div className="panel-table-wrap"><table className="panel-table"><thead><tr><th /><th>Atual</th><th>Legado</th><th>Nome</th><th>Coord.</th><th>Papel</th><th>Origem</th><th>Status</th><th>Ações</th></tr></thead><tbody>
+        {filtered.map(record => <tr key={record.id}><td><input type="checkbox" checked={selectedIds.includes(record.id)} onChange={() => toggleSelected(record.id)} /></td><td>{record.currentCode}</td><td>{record.legacyCode ?? '—'}</td><td>{record.name ?? '—'}</td><td>{record.coordinatorCode ?? '—'} {record.coordinatorName ?? ''}</td><td>{record.role}</td><td>{record.origin}</td><td>{record.active ? 'ATIVO' : 'INATIVO'}</td><td><button className="panel-button" disabled={panel.mutationBusy} onClick={() => edit(record)}>Editar</button>{' '}<button className="panel-button" disabled={panel.mutationBusy} onClick={() => void toggleActive(record)}>{record.active ? 'Inativar' : 'Reativar'}</button>{' '}<button className="panel-button" disabled={panel.mutationBusy} onClick={() => void deleteRecords([record.id])}>Excluir</button></td></tr>)}
       </tbody></table></div>
     </PanelCard>
   </>;
