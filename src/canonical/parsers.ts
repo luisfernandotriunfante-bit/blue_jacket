@@ -40,11 +40,28 @@ async function tabular(source:string,file:File, options:{sheet?:string; filter?:
 async function mergedReport(source:string,file:File){
  const fs=sourceContract(source),wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true,raw:true}),sheet=wb.Sheets[wb.SheetNames[0]];
  if(!sheet)return result(source,file,'Report',[],[audit(source,file.name,'PARSER_SCHEMA_CHANGED','Aba Report ausente.','Gerar o relatório oficial 286/105 novamente.')]);
- const matrix=XLSX.utils.sheet_to_json<unknown[]>(sheet,{header:1,defval:'',raw:true});const headers=fs.filter(f=>col(f.coordinate)>=0).map(f=>f.header);
- const h=matrix.findIndex(r=>headers.filter(x=>r.map(key).includes(key(x))).length>=Math.ceil(headers.length*.65));
+ const matrix=XLSX.utils.sheet_to_json<unknown[]>(sheet,{header:1,defval:'',raw:true});
+ const columns=fs.filter(f=>col(f.coordinate)>=0);
+ const uniqueHeaders=[...new Set(columns.map(f=>f.header))];
+ const h=matrix.findIndex(r=>uniqueHeaders.filter(x=>r.map(key).includes(key(x))).length>=Math.ceil(uniqueHeaders.length*.65));
  if(h<0)return result(source,file,'Report',[],[audit(source,file.name,'PARSER_REQUIRED_COLUMN_MISSING','Cabeçalhos do relatório oficial não encontrados.','Validar layout 286/105 antes de processar.')]);
- const indexes=new Map<string,number>();for(const header of headers){const i=matrix[h].map(key).indexOf(key(header));if(i>=0&&!indexes.has(header))indexes.set(header,i)}
- const rows=matrix.slice(h+1).filter(r=>r.some(v=>text(v))).map((r,i)=>{const out:Record<string,RawTyped>={};for(const f of fs.filter(x=>col(x.coordinate)>=0)){const index=indexes.get(f.header);out[f.output_field]=typed(index===undefined?'':r[index],f.type)}out.__source_row={raw:h+2+i,typed:h+2+i};out.__schema_version={raw:'v1',typed:'v1'};return out});return result(source,file,'Report',rows,[]);
+ // Alguns relatórios (ex.: NOVOS RCAS.xlsx) repetem o mesmo texto de cabeçalho em
+ // blocos distintos (PRINCIPAL x AUXILIAR). Indexar só pelo texto faz os dois
+ // blocos apontarem pra mesma coluna quando o bloco extra some do arquivo real,
+ // duplicando o registro. Aqui cada campo do contrato recebe sua PRÓPRIA
+ // ocorrência do cabeçalho no arquivo (casadas em ordem de posição de coluna);
+ // se não sobrar ocorrência suficiente pro bloco extra, o campo fica vazio em
+ // vez de reaproveitar a coluna de outro campo.
+ const headerRow=matrix[h].map(key);
+ const byHeader=new Map<string,Field[]>();
+ for(const f of columns){const list=byHeader.get(f.header)??[];list.push(f);byHeader.set(f.header,list)}
+ const indexes=new Map<Field,number>();
+ for(const [header,fieldsForHeader] of byHeader){
+  const occurrences:number[]=[];headerRow.forEach((v,i)=>{if(v===key(header))occurrences.push(i)});
+  const orderedFields=[...fieldsForHeader].sort((a,b)=>col(a.coordinate)-col(b.coordinate));
+  orderedFields.forEach((f,i)=>{if(occurrences[i]!==undefined)indexes.set(f,occurrences[i])});
+ }
+ const rows=matrix.slice(h+1).filter(r=>r.some(v=>text(v))).map((r,i)=>{const out:Record<string,RawTyped>={};for(const f of columns){const index=indexes.get(f);out[f.output_field]=typed(index===undefined?'':r[index],f.type)}out.__source_row={raw:h+2+i,typed:h+2+i};out.__schema_version={raw:'v1',typed:'v1'};return out});return result(source,file,'Report',rows,[]);
 }
 /**
  * O 286 exportado pelo Winthor traz cabeçalhos mesclados: os títulos visuais
